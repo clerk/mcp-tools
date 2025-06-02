@@ -34,7 +34,7 @@ export async function completeAuthWithCode({
   state: string;
   /**
    * A persistent store for auth data
-   * @see TODO - link to github readme section for stores
+   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
    */
   store: McpClientStore;
 }) {
@@ -68,7 +68,7 @@ export function getClientBySessionId({
   sessionId: string;
   /**
    * A persistent store for auth data
-   * @see TODO - link to github readme section for stores
+   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
    */
   store: McpClientStore;
   /**
@@ -205,7 +205,7 @@ interface CreateKnownCredentialsMcpClientParams {
   redirect: (url: string) => void;
   /**
    * A persistent store for auth data
-   * @see TODO - link to github readme section for stores
+   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
    */
   store: McpClientStore;
 }
@@ -316,7 +316,7 @@ interface CreateDynamicallyRegisteredMcpClientParams {
   redirect: (url: string) => void;
   /**
    * A persistent store for auth data
-   * @see TODO - link to github readme section for stores
+   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
    */
   store: McpClientStore;
 }

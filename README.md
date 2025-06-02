@@ -23,6 +23,12 @@ This library has tools for both of these parties, so step one is to be clear on 
 
 > _**NOTE:** In web development, the terms "client" and "server" are often used to refer to the frontend (browser) and backend (web server). This is not the case in this situation, so try not to confuse them!_
 
+### Table of Contents
+
+- [Guide: building a server](https://github.com/clerk/mcp-tools?tab=readme-ov-file#guide-building-a-server)
+- [Guide: building a client](https://github.com/clerk/mcp-tools?tab=readme-ov-file#guide-building-a-client)
+- [Reference docs](https://github.com/clerk/mcp-tools?tab=readme-ov-file#reference-docs)
+
 ### Guide: building a server
 
 If you are building a server that you'd like to introduce MCP support for, you will want to use the `@clerk/mcp-tools/server` import path.
@@ -389,7 +395,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       redirect: (url: string) => void;
       /**
        * A persistent store for auth data
-       * @see TODO - link to github readme section for stores
+       * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
        */
       store: McpClientStore;
     }
@@ -474,7 +480,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       redirect: (url: string) => void;
       /**
        * A persistent store for auth data
-       * @see TODO - link to github readme section for stores
+       * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
        */
       store: McpClientStore;
     }
@@ -523,7 +529,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     sessionId: string;
     /**
      * A persistent store for auth data
-     * @see TODO - link to github readme section for stores
+     * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
      */
     store: McpClientStore;
     /**
@@ -583,7 +589,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       state: string;
       /**
        * A persistent store for auth data
-       * @see TODO - link to github readme section for stores
+       * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
        */
       store: McpClientStore;
     }
