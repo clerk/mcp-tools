@@ -1,0 +1,35 @@
+{
+  "name": "@clerk/mcp-tools",
+  "version": "0.0.0",
+  "description": "Tools for writing MCP clients and servers without pain",
+  "keywords": [
+    "mcp",
+    "model",
+    "context",
+    "protocol",
+    "clerk",
+    "auth"
+  ],
+  "homepage": "https://github.com/clerk/mcp-tools#readme",
+  "bugs": {
+    "url": "https://github.com/clerk/mcp-tools/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clerk/mcp-tools.git"
+  },
+  "license": "MIT",
+  "author": "Jeff Escalante",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm t"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "next": "^15.3.2"
+  }
+}
