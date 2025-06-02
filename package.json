@@ -1,6 +1,6 @@
 {
   "name": "@clerk/mcp-tools",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Tools for writing MCP clients and servers without pain",
   "keywords": [
     "mcp",
@@ -21,15 +21,28 @@
   "license": "MIT",
   "author": "Jeff Escalante",
   "type": "module",
-  "main": "index.js",
+  "main": "dist/",
   "scripts": {
-    "test": "npm t"
+    "build": "tsup"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",
-    "next": "^15.3.2"
+    "next": "^15.3.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  },
+  "tsup": {
+    "entry": [
+      "client.ts",
+      "server.ts",
+      "next/index.ts",
+      "stores/fs.ts"
+    ],
+    "format": ["esm"],
+    "dts": true,
+    "clean": true
   }
 }

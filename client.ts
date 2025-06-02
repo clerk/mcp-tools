@@ -141,7 +141,7 @@ export function getClientBySessionId({
 }
 
 // Return type for known credentials and dynamically registered clients
-interface McpClientReturnType {
+export interface McpClientReturnType {
   /**
    * Represents a session associated with the connected MCP service endpoint.
    */
