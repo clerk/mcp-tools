@@ -328,7 +328,13 @@ You may have noticed references to a `fsStore` in the above examples. In order t
 
 As such, each of the client functions require that you pass in a store adapter. Examples show the `fsStore`, which uses a tempfile that it writes json to. This is fast, easy, and adequate for local development and testing. However, if you are moving to a production environment, relying on a tempfile is also a very bad idea ™️, since it could be deleted at any time, and much like a memory store, is guaranteed deleted on a system restart.
 
-There are a couple additional adapters that are built in here that are more production ready, the `redisStore`, and the `postgresStore`. If you wished to use a different kind of store, you are welcome to implement one on your own, and it will work just fine so long as it complies with the following very simple spec:
+There are a couple additional adapters that are built in here that are more production ready:
+
+- Redis store (`import { createRedisStore } from '@clerk/mcp-tools/stores/redis'`)
+- Postgres store (`import { createPostgresStore } from '@clerk/mcp-tools/stores/postgres'`)
+- Sqlite store (`import { createSqliteStore } from '@clerk/mcp-tools/stores/sqlite'`)
+
+If you wish to use a different kind of store, you are welcome to implement one on your own, and it will work just fine so long as it complies with the following very simple spec:
 
 ```ts
 type JsonSerializable =
@@ -340,10 +346,12 @@ type JsonSerializable =
   | { [key: string]: JsonSerializable };
 
 interface McpClientStore {
-  write: (key: string, data: JsonSerializable) => void;
-  read: (key: string) => JsonSerializable;
+  write: (key: string, data: JsonSerializable) => Promise<void>;
+  read: (key: string) => Promise<JsonSerializable>;
 }
 ```
+
+The built in stores have a few extra methods built in that may be useful, but only read and write are required for this to work.
 
 ### Reference docs
 

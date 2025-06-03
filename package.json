@@ -22,27 +22,93 @@
   "author": "Jeff Escalante",
   "type": "module",
   "main": "dist/",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./client": {
+      "import": "./dist/client.js",
+      "types": "./dist/client.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts"
+    },
+    "./next": {
+      "import": "./dist/next/index.js",
+      "types": "./dist/next/index.d.ts"
+    },
+    "./stores": "./dist/stores",
+    "./stores/fs": {
+      "import": "./dist/stores/fs.js",
+      "types": "./dist/stores/fs.d.ts"
+    },
+    "./stores/redis": {
+      "import": "./dist/stores/redis.js",
+      "types": "./dist/stores/redis.d.ts"
+    },
+    "./stores/postgres": {
+      "import": "./dist/stores/postgres.js",
+      "types": "./dist/stores/postgres.d.ts"
+    },
+    "./stores/sqlite": {
+      "import": "./dist/stores/sqlite.js",
+      "types": "./dist/stores/sqlite.d.ts"
+    }
+  },
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepublishOnly": "npm run build",
+    "watch": "tsup --watch"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.15.21",
+    "@types/pg": "^8.10.0",
+    "better-sqlite3": "^8.7.0",
     "next": "^15.3.2",
+    "pg": "^8.11.0",
+    "redis": "^4.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "redis": "^4.0.0",
+    "pg": "^8.11.0",
+    "better-sqlite3": "^8.7.0"
+  },
+  "peerDependenciesMeta": {
+    "redis": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "better-sqlite3": {
+      "optional": true
+    }
   },
   "tsup": {
     "entry": [
       "client.ts",
       "server.ts",
       "next/index.ts",
-      "stores/fs.ts"
+      "stores/fs.ts",
+      "stores/redis.ts",
+      "stores/postgres.ts",
+      "stores/sqlite.ts"
     ],
     "format": ["esm"],
     "dts": true,
-    "clean": true
+    "clean": true,
+    "external": ["redis", "pg", "better-sqlite3"]
   }
 }
