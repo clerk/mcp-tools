@@ -43,8 +43,8 @@ This library exposes a tool that can quickly generate such a metadata file for y
 import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server'
 
 const result = generateProtectedResourceMetadata({
-    authServerUrl: 'https://auth.example.com'
-    resourceServerUrl: 'https://myapp.com'
+  resourceUrl: 'https://myapp.com/current-route'
+  authServerUrl: 'https://auth.example.com'
 });
 ```
 
@@ -57,7 +57,7 @@ import { generateClerkProtectedResourceMetadata } from "@clerk/mcp-tools/server"
 
 const result = generateClerkProtectedResourceMetadata({
   publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
-  resourceServerUrl: "https://myapp.com",
+  resourceUrl: "https://myapp.com/current-route",
 });
 ```
 
@@ -88,6 +88,8 @@ export { handler as GET };
 ```
 
 #### Authorization server metadata
+
+> **NOTE:** This is not yet fully implemented
 
 There is [an older version of the MCP spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#2-5-authorization-flow-steps) that specified that the MCP server should be responsible for authentication on its own and instead it should implement a different static metadata file called "authorization server metadata", defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). While it should not be necessary as long as you have implemented protected resource metadata and are using an authorization service that has properly implemented a authorization server metadata route, there are some scenarios where this might be necessary if you are building your own authorization server, if your authorization server is part of your app directly, or if you are interfacing with a client that has an outdated implementation. This library also provides utilities for this use case.
 
@@ -124,7 +126,7 @@ const result = generateAuthorizationServerMetadata({
 });
 ```
 
-As with protected resource metadata, if you are using [Clerk](https://clerk.com) for authentication in your app, we have a helper that makes this easier:
+If you are using [Clerk](https://clerk.com) for authentication in your app, you can use the following helper to fetch Clerk's metadata from your Clerk frontend API and return it.
 
 ```ts
 import { generateClerkAuthorizationServerMetadata } from "@clerk/mcp-tools/server";

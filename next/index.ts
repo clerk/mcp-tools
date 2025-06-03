@@ -1,6 +1,10 @@
 import { type NextRequest } from "next/server";
 import { completeAuthWithCode, type McpClientStore } from "../client";
-import { generateProtectedResourceMetadata } from "../server";
+import {
+  fetchClerkAuthorizationServerMetadata,
+  generateClerkProtectedResourceMetadata,
+  generateProtectedResourceMetadata,
+} from "../server";
 
 export function completeOAuthHandler({
   store,
@@ -28,8 +32,6 @@ export function completeOAuthHandler({
     // this function will run the state param check internally
     const res = await completeAuthWithCode({ state, code, store });
 
-    // TODO: set some sort of "completed auth" flag in the store here
-
     return callback(res);
   };
 }
@@ -38,11 +40,14 @@ export function completeOAuthHandler({
  * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  */
-export function protectedResourceHandler(publishableKey: string) {
+export function protectedResourceHandlerClerk(publishableKey: string) {
   return (req: Request) => {
     const origin = new URL(req.url).origin;
 
-    const metadata = generateProtectedResourceMetadata(publishableKey, origin);
+    const metadata = generateClerkProtectedResourceMetadata({
+      publishableKey,
+      resourceUrl: origin,
+    });
 
     return Response.json(metadata, {
       headers: {
@@ -53,6 +58,53 @@ export function protectedResourceHandler(publishableKey: string) {
   };
 }
 
+/**
+ * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
+ * @see https://datatracker.ietf.org/doc/html/rfc9728
+ */
+export function protectedResourceHandler({
+  authServerUrl,
+}: {
+  authServerUrl: string;
+}) {
+  return (req: Request) => {
+    const origin = new URL(req.url).origin;
+
+    const metadata = generateProtectedResourceMetadata({
+      authServerUrl: authServerUrl,
+      resourceUrl: origin,
+    });
+
+    return Response.json(metadata, {
+      headers: {
+        "Cache-Control": "max-age=3600",
+        "Content-Type": "application/json",
+      },
+    });
+  };
+}
+
+export function authServerMetadataHandlerClerk(publishableKey: string) {
+  return async () => {
+    const metadata = await fetchClerkAuthorizationServerMetadata({
+      publishableKey,
+    });
+
+    return Response.json(metadata, {
+      headers: {
+        "Cache-Control": "max-age=3600",
+        "Content-Type": "application/json",
+      },
+    });
+  };
+}
+
+/**
+ * This is likely going to be moved into vercel's MCP adapter library soon
+ * @param handler - vercel mcp adapter handler function
+ * @param verifyToken - function called with token and request, expects to get back a boolean indicating if the token is valid
+ * @returns a vercel mcp adapter handler function
+ */
 export function createMcpAuthHandler(
   handler: (req: Request) => Promise<Response>,
   verifyToken: (token: string, req: Request) => Promise<boolean>
