@@ -1,6 +1,6 @@
 {
   "name": "@clerk/mcp-tools",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Tools for writing MCP clients and servers without pain",
   "keywords": [
     "mcp",
@@ -106,9 +106,15 @@
       "stores/postgres.ts",
       "stores/sqlite.ts"
     ],
-    "format": ["esm"],
+    "format": [
+      "esm"
+    ],
     "dts": true,
     "clean": true,
-    "external": ["redis", "pg", "better-sqlite3"]
+    "external": [
+      "redis",
+      "pg",
+      "better-sqlite3"
+    ]
   }
 }
