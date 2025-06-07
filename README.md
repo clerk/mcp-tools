@@ -6,17 +6,17 @@ A libary built on top of the [MCP Typescript SDK](https://github.com/modelcontex
 
 It's a protocol that enables AI applications like Claude, ChatGPT, Cursor, etc to ask you for permission to access some of your private information that normally you'd need to sign in with your account to access. For example, your emails, or your private github repositories, etc.
 
-This allows you to provide AI applications with context and abilities that it would normally not have access to. You could, for example, have an AI application use some code in a private repo as context to answer your questions, or have it send write and an email on your behalf, after you review it. It's kind of like this:
+This allows you to provide AI applications with context and abilities that it would normally not have access to. You could, for example, have an AI application use some code in a private repo as context to answer your questions, or have it write and send an email on your behalf, after you review it. It's kind of like this:
 
 ![A diagram of how MCP works in 3 steps: 1) AI app asks for permission to connect to gmail, 2) user grants permission, 3) AI app can now access gmail data](https://p176.p0.n0.cdn.zight.com/items/p9uyYBQL/5743e744-1c37-462c-92a6-2cf30c40d6be.png?v=eeadf50900b2781e996c0f4752dd8949)
 
-We think this is really cool because it enables people to use AI to access a bunch of extra information that it wasn't able to access before, and does so in a safe way where you as the user are in control over what it has access to and what it can do. We are excited to see how many new use cases as possibilities open up for AI use as MCP becomes more popular, and we built this library to try to help make it easier for people to integrate MCP into their applications.
+We think this is valuable because it enables people to use AI to access a bunch of extra information that it wasn't able to access before, and does so in a safe way where you as the user are in control over what it has access to and what it can do. We're excited to see what new AI use cases become possible as MCP adoption grows, and we built this library to try to help make it easier for people to integrate MCP into their applications.
 
 ### Client vs Server usage
 
 There are two parties involved in MCP:
 
-- The **client**, which is the one that wants to get access to another sevice. In the above example would be Claude, which wants to get access to Gmail.
+- The **client**, which is the one that wants to get access to another service. In the above example would be Claude, which wants to get access to Gmail.
 - The **server**, which is the one that has something that a client wants access to. In the above example, this would be Gmail. This is sometimes referred to as the "resource server" or "MCP server".
 
 This library has tools for both of these parties, so step one is to be clear on whether you are building a client or server. We'll address each of these use cases separately.
@@ -80,9 +80,7 @@ Or if you're using Next.js and Clerk:
 // app/.well-known/oauth-protected-resource/route.ts
 import { protectedResourceHandlerClerk } from "@clerk-mcp-tools/next/server";
 
-const handler = protectedResourceHandlerClerk(
-  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-);
+const handler = protectedResourceHandlerClerk();
 
 export { handler as GET };
 ```
@@ -131,9 +129,7 @@ If you are using [Clerk](https://clerk.com) for authentication in your app, you 
 ```ts
 import { generateClerkAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
 
-const result = generateClerkAuthorizationServerMetadata({
-  publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
-});
+const result = generateClerkAuthorizationServerMetadata();
 ```
 
 And also as with protected resource metadata, if you are using Next.js, we have a framework-specific utility that makes it easier still:

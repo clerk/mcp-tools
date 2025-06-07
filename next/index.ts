@@ -40,12 +40,12 @@ export function completeOAuthHandler({
  * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  */
-export function protectedResourceHandlerClerk(publishableKey: string) {
+export function protectedResourceHandlerClerk() {
   return (req: Request) => {
     const origin = new URL(req.url).origin;
 
     const metadata = generateClerkProtectedResourceMetadata({
-      publishableKey,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY!,
       resourceUrl: origin,
     });
 
@@ -84,10 +84,10 @@ export function protectedResourceHandler({
   };
 }
 
-export function authServerMetadataHandlerClerk(publishableKey: string) {
+export function authServerMetadataHandlerClerk() {
   return async () => {
     const metadata = await fetchClerkAuthorizationServerMetadata({
-      publishableKey,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY!,
     });
 
     return Response.json(metadata, {
@@ -96,46 +96,5 @@ export function authServerMetadataHandlerClerk(publishableKey: string) {
         "Content-Type": "application/json",
       },
     });
-  };
-}
-
-/**
- * This is likely going to be moved into vercel's MCP adapter library soon
- * @param handler - vercel mcp adapter handler function
- * @param verifyToken - function called with token and request, expects to get back a boolean indicating if the token is valid
- * @returns a vercel mcp adapter handler function
- */
-export function createMcpAuthHandler(
-  handler: (req: Request) => Promise<Response>,
-  verifyToken: (token: string, req: Request) => Promise<boolean>
-) {
-  return async (req: Request) => {
-    const origin = new URL(req.url).origin;
-
-    if (!req.headers.get("Authorization")) {
-      return new Response(null, {
-        status: 401,
-        headers: {
-          "WWW-Authenticate": `Bearer resource_metadata=${origin}/.well-known/oauth-protected-resource`,
-        },
-      });
-    } else {
-      const authHeader = req.headers.get("Authorization");
-      const token = authHeader?.split(" ")[1];
-
-      if (!token) {
-        throw new Error(
-          `Invalid authorization header value, expected Bearer <token>, received ${authHeader}`
-        );
-      }
-
-      const isAuthenticated = await verifyToken(token, req);
-
-      if (!isAuthenticated) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-      }
-    }
-
-    return handler(req);
   };
 }
