@@ -1,6 +1,6 @@
 # MCP Tools
 
-A libary built on top of the [MCP Typescript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that makes it easier to implement MCP with auth into your MCP client and/or server.
+A library built on top of the [MCP Typescript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that makes it easier to implement MCP with auth into your MCP client and/or server.
 
 ### What is MCP?
 
@@ -23,11 +23,19 @@ This library has tools for both of these parties, so step one is to be clear on 
 
 > _**NOTE:** In web development, the terms "client" and "server" are often used to refer to the frontend (browser) and backend (web server). This is not the case in this situation, so try not to confuse them!_
 
+### Framework-Specific Documentation
+
+For detailed implementation guides and examples specific to your framework, see:
+
+- **[Express.js Integration](./express/README.md)** - Complete guide for building MCP servers with Express.js
+- **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
+
 ### Table of Contents
 
-- [Guide: building a server](https://github.com/clerk/mcp-tools?tab=readme-ov-file#guide-building-a-server)
-- [Guide: building a client](https://github.com/clerk/mcp-tools?tab=readme-ov-file#guide-building-a-client)
-- [Reference docs](https://github.com/clerk/mcp-tools?tab=readme-ov-file#reference-docs)
+- [Guide: building a server](#guide-building-a-server)
+- [Guide: building a client](#guide-building-a-client)
+- [Stores](#stores)
+- [Reference docs](#reference-docs)
 
 ### Guide: building a server
 
@@ -43,7 +51,7 @@ This library exposes a tool that can quickly generate such a metadata file for y
 import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server'
 
 const result = generateProtectedResourceMetadata({
-  resourceUrl: 'https://myapp.com/current-route'
+  resourceUrl: 'https://myapp.com/current-route',
   authServerUrl: 'https://auth.example.com'
 });
 ```
@@ -61,29 +69,9 @@ const result = generateClerkProtectedResourceMetadata({
 });
 ```
 
-And finally, if you are using Next.js, we have a framework-specific utility that makes it easier still:
-
-```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandler } from "@clerk-mcp-tools/next/server";
-
-const handler = protectedResourceHandler({
-  authServerUrl: "https://auth.example.com",
-});
-
-export { handler as GET };
-```
-
-Or if you're using Next.js and Clerk:
-
-```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandlerClerk } from "@clerk-mcp-tools/next/server";
-
-const handler = protectedResourceHandlerClerk();
-
-export { handler as GET };
-```
+For framework-specific implementations of protected resource metadata handlers, see:
+- [Express.js implementation](./express/README.md#protected-resource-metadata)
+- [Next.js implementation](./next/README.md#protected-resource-metadata-handlers)
 
 #### Authorization server metadata
 
@@ -132,207 +120,159 @@ import { generateClerkAuthorizationServerMetadata } from "@clerk/mcp-tools/serve
 const result = generateClerkAuthorizationServerMetadata();
 ```
 
-And also as with protected resource metadata, if you are using Next.js, we have a framework-specific utility that makes it easier still:
-
-```ts
-// app/.well-known/oauth-authorization-server/route.ts
-import { authServerMetadataHandler } from "@clerk-mcp-tools/next/server";
-
-const handler = authServerMetadataHandler({
-  authServerUrl: "https://auth.example.com",
-});
-
-export { handler as GET };
-```
-
-Or if you're using Next.js and Clerk:
-
-```ts
-// app/.well-known/oauth-authorization-server/route.ts
-import { authServerMetadataHandlerClerk } from "@clerk-mcp-tools/next/server";
-
-const handler = authServerMetadataHandlerClerk(
-  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-);
-
-export { handler as GET };
-```
+For framework-specific implementations, see:
+- [Express.js implementation](./express/README.md)
+- [Next.js implementation](./next/README.md#server-components)
 
 #### Creating an MCP endpoint
 
-- If you're using nextjs, you can use vercel's adapter
-- If not, we have an adapter for express
-- Can we make a generalized one?!
-- We'd be happy to build more adapters, they are dependent on the structure of the request object though
-- I need to look into how the session id handling thing is working in my current code, it may well be broken
-  - Their entire design assumed that you can hold on to the mcp client/transport in memory which is foolish
+To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters:
+
+- **Express.js**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/express` - see [Express.js guide](./express/README.md#mcp-request-handler)
+- **Next.js**: Use the Next.js route handlers - see [Next.js guide](./next/README.md#server-components)
+
+These adapters handle the MCP protocol details and integrate with your authentication system.
 
 ### Guide: building a client
 
 The first step to building MCP compatibility into your AI application is allowing your users to connect with an MCP service. This can be kicked off simply with the URL of an MCP-compatible server, like `https://example.com/mcp`. Normally, your app would implement a text field where the user can enter an MCP endpoint, or have a pre-built integration where clicking a button would trigger an MCP connection flow with a baked-in endpoint URL.
 
-The process of actually making the MCP connection using the SDK, however, is fairly arduous, so we expose some tools that can help make this easier. Here's how it might look if it was being implemented as a next.js server action:
+The process of actually making the MCP connection using the SDK, however, is fairly arduous, so we expose some tools that can help make this easier.
 
-> _**NOTE:** If you are not using nextjs, the code here should be similar and easily adaptable, you may just need to change how the data is received from the request, how cookies are set, and how the response is delivered._
+#### Framework-agnostic client creation
+
+Here's how you can create an MCP client using the core utilities:
 
 ```ts
-// app/actions/mcp-register.ts
-'use server';
-
 import { createDynamicallyRegisteredMcpClient } from "@clerk/mcp-tools/client";
-import fsStore from "@clerk/mcp-tools/stores/fs";
-import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { createRedisStore } from "@clerk/mcp-tools/stores/redis";
 
-export async function submitIntegration(formData: FormData) {
-  const mcpEndpoint = formData.get("url")?.toString();
+// Create a persistent store (use appropriate store for your environment)
+const store = createRedisStore({ url: process.env.REDIS_URL });
 
-  if (!mcpEndpoint) return { error: "MCP server url not passed" };
-
+export async function initializeMCPConnection(mcpEndpoint: string) {
   const { connect, sessionId } = createDynamicallyRegisteredMcpClient({
-      mcpEndpoint,
-      oauthScopes: "openid profile email",
-      oauthRedirectUrl: "http://localhost:3000/oauth_callback",
-      oauthClientUri: "http://example.com",
-      mcpClientName: "My App MCP Client",
-      mcpClientVersion: "0.0.1",
-      redirect: (url: string) => redirect(url);
-      store: fsStore
-    });
+    mcpEndpoint,
+    oauthScopes: "openid profile email",
+    oauthRedirectUrl: "https://yourapp.com/oauth_callback",
+    oauthClientUri: "https://yourapp.com",
+    mcpClientName: "My App MCP Client",
+    mcpClientVersion: "0.0.1",
+    redirect: (url: string) => {
+      // Implement redirect logic for your framework
+      window.location.href = url;
+    },
+    store
+  });
 
-  // connect to the mcp endpoint
+  // Connect to the MCP endpoint
   await connect();
 
-  // set mcp session id in a cookie so we can use it in tool calls later
-  cookies().set('mcp-session', sessionId, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 7,
-  })
-
-  return { success: true }
+  return { sessionId };
 }
 ```
 
-Running this code will kick off an OAuth flow in the user's browser where the user will need to accept the requested scopes, then when complete, will redirect back to the `oauthRedirectUrl`. Let's implement the oauth redirect url route now:
+#### OAuth callback handling
+
+After the user completes the OAuth flow, you'll need to handle the callback:
 
 ```ts
-// app/oauth_callback/route.ts
-import { completeOAuthHandler } from "@clerk/mcp-tools/next/client";
-import fsStore from "@clerk/mcp-tools/stores/fs";
-
-const handler = completeOAuthHandler({
-  store: fsStore,
-  callback: () => redirect("/"),
-});
-
-export { handler as GET };
-```
-
-This is extra simple, since we're using the nextjs-specific utility, and we know exactly what we expect to get back in the OAuth callback. Here's what it would look like were we to implement this using non-nextjs-specific utilities as well:
-
-```ts
-// app/oauth_callback/route.ts
 import { completeAuthWithCode } from "@clerk/mcp-tools/client";
-import fsStore from "@clerk/mcp-tools/stores/fs";
-import { type NextRequest } from "next/server";
-import { redirect } from "next/navigation";
 
-export function GET(req: NextRequest) {
-  const qs = req.nextUrl.searchParams;
-  const code = qs.get("code");
-  const state = qs.get("state");
+export async function handleOAuthCallback(code: string, state: string) {
+  const result = await completeAuthWithCode({ 
+    state, 
+    code, 
+    store 
+  });
 
-  if (!state) {
-    return Response.json({ error: "State missing" }, { status: 400 });
-  }
-
-  if (!code) {
-    return Response.json(
-      { error: "Authorization code missing" },
-      { status: 400 }
-    );
-  }
-
-  // this function will run the state param equality check for you
-  // if anything doesn't line up, it will error
-  const res = await completeAuthWithCode({ state, code, store });
-
-  return redirect("/");
+  // OAuth flow is now complete
+  return result;
 }
 ```
 
-Still fairly simple, and again this pattern could easily be implemented in any other framework just by modifying the methods that get the querystring values and how the redirect happens.
+#### Making MCP tool calls
 
-With this done, the auth process is complete, and you have a `mcp-session` cookie which you can use send with any tool calls in order to authenticate them. Now let's look at how you'd make an MCP request, since auth is complete:
+Once authentication is complete, you can call MCP tools:
 
 ```ts
-import { mcpClientHandler } from "@clerk/mcp-tools/next/client";
-import fsStore from "@clerk/mcp-tools/stores/fs";
+import { getClientBySessionId } from "@clerk/mcp-tools/client";
 
-const handler = mcpClientHandler(async ({ client, request }) => {
-  // this assumes the "sides" argument was submitted in a POST request, as an example
-  // in reality this would likely be an entire message from a user and a LLM SDK would
-  // parse the tool and arguments out of it
-  const body = await request.json();
+export async function callMCPTool(sessionId: string, toolName: string, args: any) {
+  const { client, connect } = getClientBySessionId({
+    sessionId,
+    store,
+  });
+
+  await connect();
 
   const toolResponse = await client.callTool({
-    name: "roll_dice",
-    arguments: { sides: body.sides },
+    name: toolName,
+    arguments: args,
   });
 
-  return Response.json(toolResponse);
-});
-
-export { handler as POST };
-```
-
-Again, this is the streamlined nextjs-specific function, but here's how it could be written with framework-agnostic tooling:
-
-```ts
-import { getClientBySessionId } from "@clerk/mcp-tools/next/client";
-import { cookies } from 'next/headers'
-import fsStore from "@clerk/mcp-tools/stores/fs";
-
-export async function POST(request: Request) {
-  const cookieStore = await cookies();
-  const body = await request.json();
-
-  const { connect } = getClientBySessionId({
-    sessionId: cookieStore.get('mcp-session')
-    store: fsStore,
-  });
-
-  await connect();
-
-  const toolRes = await client.callTool({
-    name: "roll_dice",
-    arguments: { sides: body.sides },
-  });
-
-  return Response.json(toolRes);
+  return toolResponse;
 }
 ```
 
-That's all it takes to wire up a fully functional MCP integration with authentication, built on the most recent version of the MCP spec! Pretty cool.
+For complete framework-specific implementations with working examples, see:
+- [Express.js client guide](./express/README.md)
+- [Next.js client guide](./next/README.md#building-an-mcp-client)
 
-#### Stores
+### Stores
 
-You may have noticed references to a `fsStore` in the above examples. In order to implement MCP functionality in a client persistent storage is required. This is because:
+In order to implement MCP functionality in a client, persistent storage is required. This is because:
 
-- The MCP flow operates across a minumum of three distinct server endpoints (initialization of mcp client, oauth callback, mcp request), and these server endpoints could be deployed to distinct serverless/edge functions without a shared memory pool.
+- The MCP flow operates across a minimum of three distinct server endpoints (initialization of MCP client, OAuth callback, MCP request), and these server endpoints could be deployed to distinct serverless/edge functions without a shared memory pool.
 - Since the MCP connection is intended to be long-running, it must maintain a "session". Relying on in-memory storage for long-running sessions is generally a very bad idea ™️, since it would bloat memory requirements indefinitely as the app scales, and any sort of clearing of memory like a server restart would immediately invalidate all sessions.
 
-As such, each of the client functions require that you pass in a store adapter. Examples show the `fsStore`, which uses a tempfile that it writes json to. This is fast, easy, and adequate for local development and testing. However, if you are moving to a production environment, relying on a tempfile is also a very bad idea ™️, since it could be deleted at any time, and much like a memory store, is guaranteed deleted on a system restart.
+As such, each of the client functions require that you pass in a store adapter. There are several built-in store adapters available:
 
-There are a couple additional adapters that are built in here that are more production ready:
+#### File System Store (Development)
 
-- Redis store (`import { createRedisStore } from '@clerk/mcp-tools/stores/redis'`)
-- Postgres store (`import { createPostgresStore } from '@clerk/mcp-tools/stores/postgres'`)
-- Sqlite store (`import { createSqliteStore } from '@clerk/mcp-tools/stores/sqlite'`)
+```ts
+import fsStore from "@clerk/mcp-tools/stores/fs";
+```
 
-If you wish to use a different kind of store, you are welcome to implement one on your own, and it will work just fine so long as it complies with the following very simple spec:
+This uses a temporary file and is fast, easy, and adequate for local development and testing. However, it's not suitable for production since the file could be deleted at any time.
+
+#### Production Stores
+
+For production environments, use one of these persistent stores:
+
+##### Redis Store
+
+```ts
+import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
+
+const store = createRedisStore({ 
+  url: process.env.REDIS_URL 
+});
+```
+
+##### Postgres Store
+
+```ts
+import { createPostgresStore } from '@clerk/mcp-tools/stores/postgres';
+
+const store = createPostgresStore({ 
+  connectionString: process.env.DATABASE_URL 
+});
+```
+
+##### SQLite Store
+
+```ts
+import { createSqliteStore } from '@clerk/mcp-tools/stores/sqlite';
+
+const store = createSqliteStore({ 
+  filename: './mcp-sessions.db' 
+});
+```
+
+#### Custom Store Implementation
+
+If you wish to use a different kind of store, you can implement your own by complying with this simple interface:
 
 ```ts
 type JsonSerializable =
@@ -349,7 +289,7 @@ interface McpClientStore {
 }
 ```
 
-The built in stores have a few extra methods built in that may be useful, but only read and write are required for this to work.
+The built-in stores have a few extra methods that may be useful, but only `read` and `write` are required for this to work.
 
 ### Reference docs
 
@@ -617,28 +557,19 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     }
     ```
 
-> The docs below are not yet complete, but are coming soon!
-
 #### Scope: `@clerk/mcp-tools/server`
 
-`generateProtectedResourceMetadata`
+- `generateProtectedResourceMetadata` - Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728)
+- `generateClerkProtectedResourceMetadata` - Generates protected resource metadata specifically for Clerk authentication
+- `generateAuthorizationServerMetadata` - Generates OAuth 2.0 Authorization Server Metadata as defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414)
+- `generateClerkAuthorizationServerMetadata` - Generates authorization server metadata specifically for Clerk
 
-`generateProtectedResourceMetadataClerk`
+For detailed documentation on server utilities, see the framework-specific guides:
+- [Express.js server guide](./express/README.md)
+- [Next.js server guide](./next/README.md#server-components)
 
-`generateAuthServerMetadata`
+#### Framework-Specific Utilities
 
-`generateAuthServerMetadataClerk`
-
-#### Scope: `@clerk/mcp-tools/next`
-
-`completeOAuthHandler`
-
-`protectedResourceMetadataHandler`
-
-`protectedResourceMetadataHandlerClerk`
-
-`authServerMetadataHandler`
-
-`authServerMetadataHandlerClerk`
-
-`mcpClientHandler`
+For framework-specific utilities and handlers, see:
+- **Express.js**: See [Express.js reference documentation](./express/README.md)
+- **Next.js**: See [Next.js reference documentation](./next/README.md)
