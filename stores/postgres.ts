@@ -192,7 +192,7 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       const query = `DELETE FROM ${tableName} WHERE key = $1`;
       const result = await client.query(query, [k]);
 
-      return result.rowCount > 0;
+      return (result.rowCount ?? 0) > 0;
     },
 
     /**
@@ -231,7 +231,7 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       `;
       const result = await client.query(query);
 
-      return result.rowCount;
+      return result.rowCount ?? 0;
     },
 
     /**
