@@ -1,10 +1,10 @@
-import { type NextRequest } from "next/server";
-import { completeAuthWithCode, type McpClientStore } from "../client";
+import type { NextRequest } from "next/server";
+import { type McpClientStore, completeAuthWithCode } from "../client";
 import {
+  corsHeaders,
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
-  corsHeaders,
 } from "../server";
 
 /**
@@ -79,13 +79,16 @@ export function protectedResourceHandler({
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  *
  */
-export function protectedResourceHandlerClerk() {
+export function protectedResourceHandlerClerk(
+  properties?: Record<string, unknown>
+) {
   return (req: Request) => {
     const origin = new URL(req.url).origin;
 
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY!,
       resourceUrl: origin,
+      properties,
     });
 
     return Response.json(metadata, {

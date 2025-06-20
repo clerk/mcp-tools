@@ -14,7 +14,7 @@ export function generateProtectedResourceMetadata({
 }: {
   authServerUrl: string;
   resourceUrl: string;
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
 }) {
   return Object.assign(
     {
@@ -52,9 +52,11 @@ export function generateProtectedResourceMetadata({
 export function generateClerkProtectedResourceMetadata({
   publishableKey,
   resourceUrl,
+  properties,
 }: {
   publishableKey: string;
   resourceUrl: string;
+  properties?: Record<string, unknown>;
 }) {
   const fapiUrl = deriveFapiUrl(publishableKey);
 
@@ -63,6 +65,7 @@ export function generateClerkProtectedResourceMetadata({
     resourceUrl,
     properties: {
       service_documentation: "https://clerk.com/docs",
+      ...properties,
     },
   });
 }
@@ -70,7 +73,7 @@ export function generateClerkProtectedResourceMetadata({
 function deriveFapiUrl(publishableKey: string) {
   const key = publishableKey.replace(/^pk_(test|live)_/, "");
   const decoded = Buffer.from(key, "base64").toString("utf8");
-  return "https://" + decoded.replace(/\$/, "");
+  return `https://${decoded.replace(/\$/, "")}`;
 }
 
 export function fetchClerkAuthorizationServerMetadata({

@@ -1,11 +1,11 @@
+import { getAuth } from "@clerk/express";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type express from "express";
 import {
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
 } from "../server";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getAuth } from "@clerk/express";
 
 /**
  * Express middleware that enforces authentication for MCP requests.
