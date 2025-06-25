@@ -1,3 +1,4 @@
+import { auth } from "@clerk/nextjs/server";
 import type { NextRequest } from "next/server";
 import { type McpClientStore, completeAuthWithCode } from "../client";
 import {
@@ -135,5 +136,64 @@ export function metadataCorsOptionsRequestHandler() {
       status: 200,
       headers: corsHeaders,
     });
+  };
+}
+
+/**
+ * Passed as the "verifyToken" argument to the withMcpAuth() handler from
+ * @vercel/mcp-adapter.
+ * @param _ - request object, not needed for Clerk
+ * @param token - the oauth access token
+ * @example
+ * ```ts
+ * import { experimental_withMcpAuth as withMcpAuth, } from "@vercel/mcp-adapter";
+ * import { verifyClerkToken } from "@clerk/mcp-tools/next";
+ *
+ * const handler = createMcpHandler((server) => {
+ *   // define your tools, resources, etc
+ * });
+ *
+ * const authHandler = withMcpAuth(
+ *   handler,
+ *   verifyClerkToken,
+ *   { required: true }
+ * );
+ *
+ * export { authHandler as GET, authHandler as POST };
+ * ```
+ */
+export async function verifyClerkToken(_: Request, token: string | undefined) {
+  if (!token) return undefined;
+
+  const { scopes, clientId, userId, isAuthenticated } = await auth({
+    acceptsToken: "oauth_token",
+  });
+
+  if (!isAuthenticated) {
+    console.error("Invalid OAuth access token");
+    return undefined;
+  }
+
+  // None of these _should_ ever happen
+  if (!clientId) {
+    console.error("Clerk error: No clientId returned from auth()");
+    return undefined;
+  }
+
+  if (!scopes) {
+    console.error("Clerk error: No scopes returned from auth()");
+    return undefined;
+  }
+
+  if (!userId) {
+    console.error("Clerk error: No userId returned from auth()");
+    return undefined;
+  }
+
+  return {
+    token,
+    scopes,
+    clientId,
+    extra: { userId },
   };
 }
