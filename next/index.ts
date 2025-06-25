@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import type { MachineAuthObject } from "@clerk/backend";
 import type { NextRequest } from "next/server";
 import { type McpClientStore, completeAuthWithCode } from "../client";
 import {
@@ -140,10 +140,10 @@ export function metadataCorsOptionsRequestHandler() {
 }
 
 /**
- * Passed as the "verifyToken" argument to the withMcpAuth() handler from
- * @vercel/mcp-adapter.
- * @param _ - request object, not needed for Clerk
- * @param token - the oauth access token
+ * Helper to be used within the "verifyToken" function in the withMcpAuth()
+ * handler from @vercel/mcp-adapter.
+ * @param auth - result of the auth() function from @clerk/nextjs/server, called with acceptsToken: 'oauth_token'
+ * @param token - the oauth access token, passed through withMcpAuth()
  * @example
  * ```ts
  * import { experimental_withMcpAuth as withMcpAuth, } from "@vercel/mcp-adapter";
@@ -155,45 +155,53 @@ export function metadataCorsOptionsRequestHandler() {
  *
  * const authHandler = withMcpAuth(
  *   handler,
- *   verifyClerkToken,
+ *   async (_, token) => {
+ *     const clerkAuth = await auth({ acceptsToken: "oauth_token" });
+ *     return verifyClerkToken(clerkAuth, token);
+ *   },
  *   { required: true }
  * );
  *
  * export { authHandler as GET, authHandler as POST };
  * ```
  */
-export async function verifyClerkToken(_: Request, token: string | undefined) {
+export async function verifyClerkToken(
+  auth: MachineAuthObject<"oauth_token">,
+  token: string | undefined
+) {
   if (!token) return undefined;
 
-  const { scopes, clientId, userId, isAuthenticated } = await auth({
-    acceptsToken: "oauth_token",
-  });
-
-  if (!isAuthenticated) {
+  if (!auth.isAuthenticated) {
     console.error("Invalid OAuth access token");
     return undefined;
   }
 
+  if (auth.tokenType !== "oauth_token") {
+    throw new Error(
+      "the auth() function must be called with acceptsToken: 'oauth_token'"
+    );
+  }
+
   // None of these _should_ ever happen
-  if (!clientId) {
+  if (!auth.clientId) {
     console.error("Clerk error: No clientId returned from auth()");
     return undefined;
   }
 
-  if (!scopes) {
+  if (!auth.scopes) {
     console.error("Clerk error: No scopes returned from auth()");
     return undefined;
   }
 
-  if (!userId) {
+  if (!auth.userId) {
     console.error("Clerk error: No userId returned from auth()");
     return undefined;
   }
 
   return {
     token,
-    scopes,
-    clientId,
-    extra: { userId },
+    scopes: auth.scopes,
+    clientId: auth.clientId,
+    extra: { userId: auth.userId },
   };
 }
