@@ -41,7 +41,7 @@ export function generateProtectedResourceMetadata({
 }
 
 /**
- * Generates protected resource metadata for the given a Clerkpublishable key
+ * Generates protected resource metadata for the given Clerkpublishable key
  * and resource origin.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc9728
