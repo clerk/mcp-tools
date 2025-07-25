@@ -241,7 +241,10 @@ Express handler that returns OAuth protected resource metadata for Clerk integra
 ```ts
 import { protectedResourceHandlerClerk } from "@clerk/mcp-tools/express";
 
-app.get("/.well-known/oauth-protected-resource", protectedResourceHandlerClerk);
+app.get(
+  "/.well-known/oauth-protected-resource",
+  protectedResourceHandlerClerk({ scopes_supported: ["email"] })
+);
 ```
 
 ## Authorization Server Metadata
