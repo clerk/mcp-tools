@@ -1,6 +1,6 @@
 {
   "name": "@clerk/mcp-tools",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Tools for writing MCP clients and servers without pain",
   "keywords": [
     "mcp",
