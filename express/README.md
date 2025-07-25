@@ -34,6 +34,7 @@ import {
 import {
   mcpAuthClerk,
   protectedResourceHandlerClerk,
+  authServerMetadataHandlerClerk,
   streamableHttpHandler,
 } from "@clerk/mcp-tools/express";
 
@@ -70,6 +71,10 @@ server.tool(
 );
 
 app.get("/.well-known/oauth-protected-resource", protectedResourceHandlerClerk);
+app.get(
+  "/.well-known/oauth-authorization-server",
+  authServerMetadataHandlerClerk
+);
 app.post("/mcp", mcpAuthClerk, streamableHttpHandler(server));
 
 app.listen(3000);
@@ -238,6 +243,26 @@ import { protectedResourceHandlerClerk } from "@clerk/mcp-tools/express";
 
 app.get("/.well-known/oauth-protected-resource", protectedResourceHandlerClerk);
 ```
+
+## Authorization Server Metadata
+
+### `authServerMetadataHandlerClerk`
+
+Express handler that returns OAuth authorization server metadata for Clerk integration, as defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). This endpoint provides clients with information about Clerk's OAuth authorization server capabilities and endpoints.
+
+**Example:**
+
+```ts
+import { authServerMetadataHandlerClerk } from "@clerk/mcp-tools/express";
+
+// Serve authorization server metadata at the standard well-known location
+app.get(
+  "/.well-known/oauth-authorization-server",
+  authServerMetadataHandlerClerk
+);
+```
+
+**Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata.
 
 ## MCP Request Handler
 
