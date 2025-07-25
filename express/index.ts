@@ -50,7 +50,9 @@ export async function mcpAuth(
         .set({
           "WWW-Authenticate": `Bearer resource_metadata=${prmUrl}`,
         })
-        .send();
+        .send({
+          error: "Unauthorized",
+        });
     }
 
     const authHeader = req.headers.authorization;
@@ -168,21 +170,23 @@ export async function authServerMetadataHandlerClerk(
  * );
  * ```
  */
-export async function protectedResourceHandlerClerk(
-  req: express.Request,
-  res: express.Response
+export function protectedResourceHandlerClerk(
+  properties?: Record<string, unknown>
 ) {
-  const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
-  if (!publishableKey) {
-    throw new Error("CLERK_PUBLISHABLE_KEY environment variable is required");
-  }
+  return (req: express.Request, res: express.Response) => {
+    const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
+    if (!publishableKey) {
+      throw new Error("CLERK_PUBLISHABLE_KEY environment variable is required");
+    }
 
-  const metadata = generateClerkProtectedResourceMetadata({
-    publishableKey,
-    resourceUrl: getResourceUrl(req),
-  });
+    const metadata = generateClerkProtectedResourceMetadata({
+      publishableKey,
+      resourceUrl: getResourceUrl(req),
+      properties,
+    });
 
-  res.json(metadata);
+    res.json(metadata);
+  };
 }
 
 // Given a protected resource metadata url generate the url of the original

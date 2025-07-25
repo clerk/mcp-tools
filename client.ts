@@ -1,8 +1,8 @@
+import { randomUUID } from "node:crypto";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { randomUUID } from "node:crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 const CODE_VERIFIER_PREFIX = "pkce_verifier_";
 const STATE_PREFIX = "state_";
@@ -121,23 +121,13 @@ export async function getClientBySessionId({
       return { access_token: client.accessToken, token_type: "Bearer" };
     },
     saveTokens: async ({ access_token, refresh_token }) => {
-      console.log("saveTokens", sessionId, {
-        ...client,
-        accessToken: access_token,
-        refreshToken: refresh_token,
-      });
-
       await store.write(`${SESSION_PREFIX}${sessionId}`, {
         ...client,
         accessToken: access_token,
         refreshToken: refresh_token,
       });
 
-      console.log("finished saving tokens");
-
-      const res = await store.read(`${SESSION_PREFIX}${sessionId}`);
-
-      console.log("we wrote this", res);
+      await store.read(`${SESSION_PREFIX}${sessionId}`);
 
       return void 0;
     },
