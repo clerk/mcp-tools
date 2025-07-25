@@ -1,4 +1,3 @@
-import type { MachineAuthObject } from "@clerk/backend";
 import type { NextRequest } from "next/server";
 import { type McpClientStore, completeAuthWithCode } from "../client";
 import {
@@ -6,6 +5,7 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
+  verifyClerkToken,
 } from "../server";
 
 /**
@@ -86,8 +86,15 @@ export function protectedResourceHandlerClerk(
   return (req: Request) => {
     const origin = new URL(req.url).origin;
 
+    const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+    if (!publishableKey) {
+      throw new Error(
+        "Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable"
+      );
+    }
+
     const metadata = generateClerkProtectedResourceMetadata({
-      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY!,
+      publishableKey,
       resourceUrl: origin,
       properties,
     });
@@ -110,8 +117,15 @@ export function protectedResourceHandlerClerk(
  */
 export function authServerMetadataHandlerClerk() {
   return async () => {
+    const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+    if (!publishableKey) {
+      throw new Error(
+        "Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable"
+      );
+    }
+
     const metadata = await fetchClerkAuthorizationServerMetadata({
-      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY!,
+      publishableKey,
     });
 
     return Response.json(metadata, {
@@ -139,69 +153,5 @@ export function metadataCorsOptionsRequestHandler() {
   };
 }
 
-/**
- * Helper to be used within the "verifyToken" function in the withMcpAuth()
- * handler from @vercel/mcp-adapter.
- * @param auth - result of the auth() function from @clerk/nextjs/server, called with acceptsToken: 'oauth_token'
- * @param token - the oauth access token, passed through withMcpAuth()
- * @example
- * ```ts
- * import { experimental_withMcpAuth as withMcpAuth, } from "@vercel/mcp-adapter";
- * import { verifyClerkToken } from "@clerk/mcp-tools/next";
- *
- * const handler = createMcpHandler((server) => {
- *   // define your tools, resources, etc
- * });
- *
- * const authHandler = withMcpAuth(
- *   handler,
- *   async (_, token) => {
- *     const clerkAuth = await auth({ acceptsToken: "oauth_token" });
- *     return verifyClerkToken(clerkAuth, token);
- *   },
- *   { required: true }
- * );
- *
- * export { authHandler as GET, authHandler as POST };
- * ```
- */
-export async function verifyClerkToken(
-  auth: MachineAuthObject<"oauth_token">,
-  token: string | undefined
-) {
-  if (!token) return undefined;
-
-  if (!auth.isAuthenticated) {
-    console.error("Invalid OAuth access token");
-    return undefined;
-  }
-
-  if (auth.tokenType !== "oauth_token") {
-    throw new Error(
-      "the auth() function must be called with acceptsToken: 'oauth_token'"
-    );
-  }
-
-  // None of these _should_ ever happen
-  if (!auth.clientId) {
-    console.error("Clerk error: No clientId returned from auth()");
-    return undefined;
-  }
-
-  if (!auth.scopes) {
-    console.error("Clerk error: No scopes returned from auth()");
-    return undefined;
-  }
-
-  if (!auth.userId) {
-    console.error("Clerk error: No userId returned from auth()");
-    return undefined;
-  }
-
-  return {
-    token,
-    scopes: auth.scopes,
-    clientId: auth.clientId,
-    extra: { userId: auth.userId },
-  };
-}
+// re-export the verifyClerkToken function for convenience
+export { verifyClerkToken };
