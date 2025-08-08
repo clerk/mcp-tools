@@ -70,7 +70,13 @@ server.tool(
   }
 );
 
-app.get("/.well-known/oauth-protected-resource", protectedResourceHandlerClerk);
+app.get("/.well-known/oauth-protected-resource", protectedResourceHandlerClerk());
+app.get(
+  "/.well-known/oauth-protected-resource/mcp",
+  protectedResourceHandlerClerk({
+    scopes_supported: ["profile", "email"],
+  })
+);
 app.get(
   "/.well-known/oauth-authorization-server",
   authServerMetadataHandlerClerk
