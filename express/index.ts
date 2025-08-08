@@ -194,7 +194,7 @@ export function protectedResourceHandlerClerk(
 function getResourceUrl(req: express.Request) {
   const url = new URL(`${req.protocol}://${req.get("host")}${req.originalUrl}`);
   url.pathname = url.pathname.replace(
-    /\.well-known\/oauth-protected-resource\//,
+    /\.well-known\/oauth-protected-resource\/?/,
     ""
   );
   return url.toString();
