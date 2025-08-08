@@ -1,6 +1,6 @@
 # MCP Tools
 
-A library built on top of the [MCP Typescript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that makes it easier to implement MCP with auth into your MCP client and/or server.
+A library built on top of the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that makes it easier to implement MCP with auth into your MCP client and/or server.
 
 ### What is MCP?
 

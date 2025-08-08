@@ -142,7 +142,7 @@ export async function getClientBySessionId({
     codeVerifier: async (): Promise<string> => {
       if (!state) {
         throw new Error(
-          "The state argument is required to retrieve a code verifier for an already intitialized client"
+          "The state argument is required to retrieve a code verifier for an already initialized client"
         );
       }
 
