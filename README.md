@@ -80,45 +80,16 @@ For framework-specific implementations of protected resource metadata handlers, 
 
 There is [an older version of the MCP spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#2-5-authorization-flow-steps) that specified that the MCP server should be responsible for authentication on its own and instead it should implement a different static metadata file called "authorization server metadata", defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). While it should not be necessary as long as you have implemented protected resource metadata and are using an authorization service that has properly implemented a authorization server metadata route, there are some scenarios where this might be necessary if you are building your own authorization server, if your authorization server is part of your app directly, or if you are interfacing with a client that has an outdated implementation. This library also provides utilities for this use case.
 
-```ts
-// return this result from <your-app>/.well-known/oauth-authorization-server
-import { generateAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
-
-const result = generateAuthorizationServerMetadata({
-  authServerUrl: "https://auth.example.com",
-  scopes: ["email", "profile", "openid"],
-});
-```
-
-In the most standard case, the above example will work, but it does make some assumptions about the authorization server, namely that:
-
-- The authorization endpoint is: `<authServerUrl>/authorize`
-- The registration endpoint is: `<authServerUrl>/register`
-- The token endpoint is: `<authServerUrl>/token`
-- The userInfo endpoint is: `<authServerUrl>/userinfo`
-- The jwks endpoint is: `<authServerUrl>/.well-known/jwks.json`
-
-If this isn't the case, you can pass in overrides for any of these values. Passing in false will omit the value, which can be useful in some cases, like if your authorization server does not support dynamic client registration:
-
-```ts
-// return this result from <your-app>/.well-known/oauth-authorization-server
-import { generateAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
-
-const result = generateAuthorizationServerMetadata({
-  authServerUrl: "https://auth.example.com",
-  authorizationEndpoint: "foo/bar/authorize",
-  registrationEndpoint: false,
-  tokenEndpoint: "tokens",
-  scopes: ["email", "profile", "openid", "foobar"],
-});
-```
 
 If you are using [Clerk](https://clerk.com) for authentication in your app, you can use the following helper to fetch Clerk's metadata from your Clerk frontend API and return it.
 
 ```ts
-import { generateClerkAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
+import { fetchClerkAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
 
-const result = generateClerkAuthorizationServerMetadata();
+// return this result from <your-app>/.well-known/oauth-authorization-server
+const result = await fetchClerkAuthorizationServerMetadata({
+  publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+});
 ```
 
 For framework-specific implementations, see:
