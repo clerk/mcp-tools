@@ -87,7 +87,6 @@
     "@types/pg": "^8.15.4",
     "better-sqlite3": "^11.10.0",
     "hono": "^4.9.7",
-    "mcp-lite": "^0.2.1",
     "next": "^15.4.4",
     "pg": "^8.16.3",
     "redis": "^5.5.6",
@@ -97,15 +96,11 @@
   "peerDependencies": {
     "better-sqlite3": "^8.7.0",
     "hono": "^4.0",
-    "mcp-lite": "^0.2.1",
     "pg": "^8.11.0",
     "redis": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "hono": {
-      "optional": true
-    },
-    "mcp-lite": {
       "optional": true
     },
     "redis": {
@@ -137,7 +132,6 @@
     "clean": true,
     "external": [
       "hono",
-      "mcp-lite",
       "redis",
       "pg",
       "better-sqlite3"
