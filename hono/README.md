@@ -30,6 +30,7 @@ import { McpServer } from "mcp-lite";
 import { createClerkClient } from "@clerk/backend";
 import {
   mcpAuthClerk,
+  oauthCorsMiddleware,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
 } from "@clerk/mcp-tools/hono";
@@ -55,6 +56,7 @@ server.tool(
     handler: async (_, { authInfo, ...mcpContext }) => {
       const clerkAuthInfo = authInfo;
 
+      // FIXME - This code won't work yet, still need to work out how to pass in the secret key to the MCP server
       const clerk = createClerkClient({ secretKey: mcpContext.state.CLERK_SECRET_KEY! });
 
       if (!clerkAuthInfo?.userId) {
