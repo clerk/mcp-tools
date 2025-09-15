@@ -29,6 +29,7 @@ For detailed implementation guides and examples specific to your framework, see:
 
 - **[Express.js Integration](./express/README.md)** - Complete guide for building MCP servers with Express.js
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
+- **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono
 
 ### Table of Contents
 
