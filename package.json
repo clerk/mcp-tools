@@ -44,6 +44,10 @@
       "import": "./dist/express/index.js",
       "types": "./dist/express/index.d.ts"
     },
+    "./hono": {
+      "import": "./dist/hono/index.js",
+      "types": "./dist/hono/index.d.ts"
+    },
     "./stores": "./dist/stores",
     "./stores/fs": {
       "import": "./dist/stores/fs.js",
@@ -71,9 +75,11 @@
     "access": "public"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0"
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "mcp-lite": "^0.2.1"
   },
   "devDependencies": {
+    "@clerk/backend": "^2.14.0",
     "@clerk/express": "^1.7.12",
     "@clerk/nextjs": "^6.26.0",
     "@types/better-sqlite3": "^7.6.13",
@@ -81,6 +87,7 @@
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.4",
     "better-sqlite3": "^11.10.0",
+    "hono": "^4.9.7",
     "next": "^15.4.4",
     "pg": "^8.16.3",
     "redis": "^5.5.6",
@@ -109,6 +116,7 @@
       "server.ts",
       "next/index.ts",
       "express/index.ts",
+      "hono/index.ts",
       "stores/fs.ts",
       "stores/redis.ts",
       "stores/postgres.ts",
