@@ -55,10 +55,14 @@ export function generateProtectedResourceMetadata({
 export function generateClerkProtectedResourceMetadata({
   publishableKey,
   resourceUrl,
+  scopesSupported,
   properties,
 }: {
   publishableKey: string;
   resourceUrl: string;
+  scopesSupported?: Array<
+    "profile" | "email" | "public_metadata" | "private_metadata" | "openid"
+  >;
   properties?: Record<string, unknown>;
 }) {
   const fapiUrl = deriveFapiUrl(publishableKey);
@@ -68,6 +72,7 @@ export function generateClerkProtectedResourceMetadata({
     resourceUrl,
     properties: {
       service_documentation: "https://clerk.com/docs",
+      scopes_supported: scopesSupported,
       ...properties,
     },
   });
