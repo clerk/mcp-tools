@@ -23,10 +23,10 @@ npm install @clerk/backend
 Here's a complete example using Clerk for authentication:
 
 ```ts
-import Hono from "hono";
+import { Hono } from "hono";
 import { logger } from "hono/logger";
 // Hono with auth does not play nicely with @modelcontextprotocol/sdk yet, so we use the mcp-lite package
-import { McpServer } from "mcp-lite";
+import { McpServer, StreamableHttpTransport } from "mcp-lite";
 import { createClerkClient } from "@clerk/backend";
 import {
   mcpAuthClerk,
@@ -52,20 +52,18 @@ const server = new McpServer({
 server.tool(
   "get_clerk_user_data",
   {
-    description: "Gets data about the Clerk user that authorized this request"
+    description: "Gets data about the Clerk user that authorized this request",
     handler: async (_, { authInfo, ...mcpContext }) => {
-      const clerkAuthInfo = authInfo;
-
       // FIXME - This code won't work yet, still need to work out how to pass in the secret key to the MCP server
       const clerk = createClerkClient({ secretKey: mcpContext.state.CLERK_SECRET_KEY! });
 
-      if (!clerkAuthInfo?.userId) {
+      if (!authInfo?.extra?.userId) {
         return {
           content: [{ type: "text", text: "Error: user not authenticated" }],
         };
       }
 
-      const user = await clerk.users.getUser(clerkAuthInfo.userId);
+      const user = await clerk.users.getUser(authInfo?.extra?.userId);
       return {
         content: [{ type: "text", text: JSON.stringify(user) }],
       };
