@@ -63,7 +63,7 @@ server.tool(
         };
       }
 
-      const user = await clerk.users.getUser(authInfo?.extra?.userId);
+      const user = await clerk.users.getUser(authInfo?.extra?.userId as string);
       return {
         content: [{ type: "text", text: JSON.stringify(user) }],
       };
@@ -104,8 +104,6 @@ app.post("/mcp", mcpAuthClerk, async (c) => {
 
 export default app;
 ```
-
-
 
 ## Authentication Middleware
 
@@ -165,6 +163,29 @@ app.get(
 
 **Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata.
 
+## OAuth Metadata CORS Middleware
+
+### `oauthCorsMiddleware`
+
+Pre-configured CORS middleware specifically designed for OAuth protected resource metadata endpoints. This middleware is useful when testing authentication from browser-based MCP clients or the MCP inspector, for example with `npx @modelcontextprotocol/inspector`.
+
+**Example:**
+
+```ts
+import { oauthCorsMiddleware } from "@clerk/mcp-tools/hono";
+
+app.on(
+  ["GET", "OPTIONS"],
+  "/.well-known/oauth-protected-resource",
+  oauthCorsMiddleware, // <-- Apply CORS before your handler
+  protectedResourceHandlerClerk()
+);
+```
+
+This middleware uses `hono/cors` under the hood to automatically:
+
+- Handle preflight OPTIONS requests
+- Set appropriate CORS headers for OAuth metadata endpoints
 
 ## Accessing Authentication Data in Tools
 

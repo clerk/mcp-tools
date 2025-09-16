@@ -12,10 +12,10 @@ import { getResourceUrl } from "./utils.js";
 /**
  * Create middleware to handle CORS for the OAuth endpoints,
  * this is useful for testing auth from a browser-based MCP client,
- * or the MCP inspector (`bunx @modelcontextprotocol/inspector`)
+ * or the MCP inspector (`npx @modelcontextprotocol/inspector`)
  *
- * @note We convert the CORS headers that we get from the @clerk/mcp-tools library
- *       into a format that Hono middleware can understand
+ * @note Converts the CORS headers object from the @clerk/mcp-tools library
+ *       into a format that Hono's CORS middleware can understand
  *
  * @see https://github.com/clerk/mcp-tools/blob/main/server.ts
  */
@@ -28,7 +28,12 @@ export const oauthCorsMiddleware = cors({
 });
 
 /**
- * An Hono handler that will return OAuth protected resource metadata if you're using Clerk.
+ * A Hono handler that will return OAuth protected resource metadata if you're using Clerk.
+ *
+ * Typically mounted at the routes:
+ * - `/.well-known/oauth-protected-resource`
+ * - `/.well-known/oauth-protected-resource/mcp`
+ *
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-4.1
  * @example
  * ```ts
@@ -37,6 +42,13 @@ export const oauthCorsMiddleware = cors({
  *   "/.well-known/oauth-protected-resource",
  *   oauthCorsMiddleware,
  *   protectedResourceHandlerClerk()
+ * );
+ *
+ * app.on(
+ *   ["GET", "OPTIONS"],
+ *   "/.well-known/oauth-protected-resource/mcp",
+ *   oauthCorsMiddleware,
+ *   protectedResourceHandlerClerk({  scopes_supported: ["profile", "email"] })
  * );
  * ```
  */
@@ -87,8 +99,10 @@ const authServerHandlers = authServerFactory.createHandlers(async (c) => {
 /**
  * Implement the OAuth Authorization Server endpoint
  *
- * @note - In this case, Clerk is the authorization server, so we shouldn't *need* to implement this;
+ * Typically mounted at the route `/.well-known/oauth-authorization-server`
+ *
+ * @note - In this case, Clerk is the authorization server, so you shouldn't *need* to implement this;
  *         however, in earlier versions of the MCP spec (prior to 2025-06-18), this route was expected/required,
- *         so we implement it for backwards compatibility with clients.
+ *         so you can implement it for backwards compatibility with clients.
  */
 export const authServerMetadataHandlerClerk = authServerHandlers[0];
