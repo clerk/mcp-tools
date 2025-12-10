@@ -30,35 +30,43 @@
   "exports": {
     "./client": {
       "import": "./dist/client.js",
+      "require": "./dist/client.cjs",
       "types": "./dist/client.d.ts"
     },
     "./server": {
       "import": "./dist/server.js",
+      "require": "./dist/server.cjs",
       "types": "./dist/server.d.ts"
     },
     "./next": {
       "import": "./dist/next/index.js",
+      "require": "./dist/next/index.cjs",
       "types": "./dist/next/index.d.ts"
     },
     "./express": {
       "import": "./dist/express/index.js",
+      "require": "./dist/express/index.cjs",
       "types": "./dist/express/index.d.ts"
     },
     "./stores": "./dist/stores",
     "./stores/fs": {
       "import": "./dist/stores/fs.js",
+      "require": "./dist/stores/fs.cjs",
       "types": "./dist/stores/fs.d.ts"
     },
     "./stores/redis": {
       "import": "./dist/stores/redis.js",
+      "require": "./dist/stores/redis.cjs",
       "types": "./dist/stores/redis.d.ts"
     },
     "./stores/postgres": {
       "import": "./dist/stores/postgres.js",
+      "require": "./dist/stores/postgres.cjs",
       "types": "./dist/stores/postgres.d.ts"
     },
     "./stores/sqlite": {
       "import": "./dist/stores/sqlite.js",
+      "require": "./dist/stores/sqlite.cjs",
       "types": "./dist/stores/sqlite.d.ts"
     }
   },
@@ -76,6 +84,7 @@
   "devDependencies": {
     "@clerk/express": "^1.7.12",
     "@clerk/nextjs": "^6.26.0",
+    "@clerk/backend": "^2.25.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
@@ -88,6 +97,7 @@
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
+    "@clerk/backend": "^2.25.1",
     "better-sqlite3": "^8.7.0",
     "pg": "^8.11.0",
     "redis": "^4.0.0"
@@ -115,7 +125,8 @@
       "stores/sqlite.ts"
     ],
     "format": [
-      "esm"
+      "esm",
+      "cjs"
     ],
     "dts": true,
     "clean": true,
