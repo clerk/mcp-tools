@@ -21,8 +21,8 @@ export function completeOAuthHandler({
 }: {
   store: McpClientStore;
   callback: (params: Awaited<ReturnType<typeof completeAuthWithCode>>) => void;
-}) {
-  return async (req: NextRequest) => {
+}): (req: NextRequest) => Promise<Response | ReturnType<typeof callback>> {
+  return async (req: NextRequest): Promise<Response | ReturnType<typeof callback>> => {
     const qs = req.nextUrl.searchParams;
     const code = qs.get("code");
     const state = qs.get("state");
@@ -54,8 +54,8 @@ export function protectedResourceHandler({
   authServerUrl,
 }: {
   authServerUrl: string;
-}) {
-  return (req: Request) => {
+}): (req: Request) => Response {
+  return (req: Request): Response => {
     const origin = new URL(req.url).origin;
 
     const metadata = generateProtectedResourceMetadata({
@@ -82,8 +82,8 @@ export function protectedResourceHandler({
  */
 export function protectedResourceHandlerClerk(
   properties?: Record<string, unknown>
-) {
-  return (req: Request) => {
+): (req: Request) => Response {
+  return (req: Request): Response => {
     const origin = new URL(req.url).origin;
 
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -115,8 +115,8 @@ export function protectedResourceHandlerClerk(
  * OAuth 2.0 Authorization Server Metadata endpoint based on RFC 8414
  * @see https://datatracker.ietf.org/doc/html/rfc8414
  */
-export function authServerMetadataHandlerClerk() {
-  return async () => {
+export function authServerMetadataHandlerClerk(): () => Promise<Response> {
+  return async (): Promise<Response> => {
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
       throw new Error(
@@ -144,8 +144,8 @@ export function authServerMetadataHandlerClerk() {
  * CORS options request handler for OAuth metadata endpoints. Necessary for MCP
  * clients that operate in web browsers.
  */
-export function metadataCorsOptionsRequestHandler() {
-  return () => {
+export function metadataCorsOptionsRequestHandler(): () => Response {
+  return (): Response => {
     return new Response(null, {
       status: 200,
       headers: corsHeaders,

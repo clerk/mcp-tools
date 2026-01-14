@@ -105,6 +105,8 @@ export async function getClientBySessionId({
     redirectUrl: client.oauthRedirectUrl,
     clientMetadata: {
       redirect_uris: [client.oauthRedirectUrl],
+      logo_uri: undefined,
+      tos_uri: undefined,
     },
     clientInformation: () => ({
       client_id: client.clientId!,
@@ -264,6 +266,8 @@ export async function createKnownCredentialsMcpClient({
     clientMetadata: {
       redirect_uris: [client.oauthRedirectUrl],
       scope: client.oauthScopes,
+      logo_uri: undefined,
+      tos_uri: undefined,
     },
     state: () => state,
     clientInformation: () => ({
@@ -395,6 +399,8 @@ export async function createDynamicallyRegisteredMcpClient({
       client_uri: client.oauthClientUri,
       scope: client.oauthScopes,
       token_endpoint_auth_method: client.oauthPublicClient ? "none" : undefined,
+      logo_uri: undefined,
+      tos_uri: undefined,
     },
     state: () => state,
     // this is called initially to see if there's an existing oauth client. if
