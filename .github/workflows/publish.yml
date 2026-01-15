@@ -51,7 +51,7 @@ jobs:
 
       - name: Bump version
         if: ${{ inputs.version != 'none' }}
-        run: npm version ${{ inputs.version }} -m "chore(release): %s"
+        run: 'npm version ${{ inputs.version }} -m "chore(release): v%s"'
 
       - name: Push version commit and tag
         if: ${{ inputs.version != 'none' && !inputs.dry_run }}
