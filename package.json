@@ -74,6 +74,7 @@
     "@modelcontextprotocol/sdk": "^1.17.0"
   },
   "devDependencies": {
+    "@clerk/backend": "^2.29.2",
     "@clerk/express": "^1.7.12",
     "@clerk/nextjs": "^6.26.0",
     "@types/better-sqlite3": "^7.6.13",
