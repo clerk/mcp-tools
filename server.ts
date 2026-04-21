@@ -1,4 +1,4 @@
-import type { MachineAuthObject } from "@clerk/backend";
+import { MachineAuthObject } from "@clerk/backend";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
 /**
@@ -79,7 +79,7 @@ function deriveFapiUrl(publishableKey: string) {
   return `https://${decoded.replace(/\$/, "")}`;
 }
 
-export function fetchClerkAuthorizationServerMetadata({
+export async function fetchClerkAuthorizationServerMetadata({
   publishableKey,
 }: {
   publishableKey: string;

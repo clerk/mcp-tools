@@ -29,71 +29,87 @@
   ],
   "exports": {
     "./client": {
-      "import": "./dist/client.js",
-      "types": "./dist/client.d.ts"
+      "import": "./dist/client.mjs",
+      "types": "./dist/client.d.mts"
     },
     "./server": {
-      "import": "./dist/server.js",
-      "types": "./dist/server.d.ts"
+      "import": "./dist/server.mjs",
+      "types": "./dist/server.d.mts"
     },
     "./next": {
-      "import": "./dist/next/index.js",
-      "types": "./dist/next/index.d.ts"
+      "import": "./dist/next/index.mjs",
+      "types": "./dist/next/index.d.mts"
     },
     "./express": {
-      "import": "./dist/express/index.js",
-      "types": "./dist/express/index.d.ts"
+      "import": "./dist/express/index.mjs",
+      "types": "./dist/express/index.d.mts"
     },
     "./stores": "./dist/stores",
     "./stores/fs": {
-      "import": "./dist/stores/fs.js",
-      "types": "./dist/stores/fs.d.ts"
+      "import": "./dist/stores/fs.mjs",
+      "types": "./dist/stores/fs.d.mts"
     },
     "./stores/redis": {
-      "import": "./dist/stores/redis.js",
-      "types": "./dist/stores/redis.d.ts"
+      "import": "./dist/stores/redis.mjs",
+      "types": "./dist/stores/redis.d.mts"
     },
     "./stores/postgres": {
-      "import": "./dist/stores/postgres.js",
-      "types": "./dist/stores/postgres.d.ts"
+      "import": "./dist/stores/postgres.mjs",
+      "types": "./dist/stores/postgres.d.mts"
     },
     "./stores/sqlite": {
-      "import": "./dist/stores/sqlite.js",
-      "types": "./dist/stores/sqlite.d.ts"
+      "import": "./dist/stores/sqlite.mjs",
+      "types": "./dist/stores/sqlite.d.mts"
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "prepublishOnly": "npm run build",
-    "watch": "tsup --watch"
+    "watch": "tsdown --watch"
   },
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0"
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
-    "@clerk/backend": "^2.29.2",
-    "@clerk/express": "^1.7.12",
-    "@clerk/nextjs": "^6.26.0",
+    "@clerk/backend": "^3.2.13",
+    "@clerk/express": "^2.1.5",
+    "@clerk/nextjs": "^7.2.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.4",
     "better-sqlite3": "^11.10.0",
-    "next": "^15.5.9",
+    "next": "^15.5.15",
     "pg": "^8.16.3",
     "redis": "^5.5.6",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
+    "@clerk/express": "^2.1.5",
+    "@clerk/nextjs": "^7.2.3",
     "better-sqlite3": "^8.7.0",
+    "express": "^5.0.0",
+    "next": "^15.2.8 || ^15.3.8 || ^15.4.10 || ^15.5.9 || ^15.6.0-0 || ^16.0.10 || ^16.1.0-0",
     "pg": "^8.11.0",
     "redis": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@clerk/express": {
+      "optional": true
+    },
+    "@clerk/nextjs": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
     "redis": {
       "optional": true
     },
@@ -103,28 +119,6 @@
     "better-sqlite3": {
       "optional": true
     }
-  },
-  "tsup": {
-    "entry": [
-      "client.ts",
-      "server.ts",
-      "next/index.ts",
-      "express/index.ts",
-      "stores/fs.ts",
-      "stores/redis.ts",
-      "stores/postgres.ts",
-      "stores/sqlite.ts"
-    ],
-    "format": [
-      "esm"
-    ],
-    "dts": true,
-    "clean": true,
-    "external": [
-      "redis",
-      "pg",
-      "better-sqlite3"
-    ]
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }

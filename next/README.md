@@ -7,13 +7,13 @@ Next.js utilities for building both MCP servers and clients with authentication 
 Make sure you have the required dependencies installed:
 
 ```bash
-npm install @clerk/mcp-tools @vercel/mcp-adapter next
+npm install @clerk/mcp-tools mcp-adapter next
 ```
 
 If you're using Clerk for authentication, also install the Clerk Next.js SDK:
 
 ```bash
-npm install @clerk/nextjs @clerk/backend
+npm install @clerk/nextjs
 ```
 
 ## Quick Start
@@ -44,7 +44,7 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import {
   createMcpHandler,
   experimental_withMcpAuth as withMcpAuth,
-} from "@vercel/mcp-adapter";
+} from "mcp-adapter";
 
 const clerk = await clerkClient();
 
@@ -84,7 +84,7 @@ const authHandler = withMcpAuth(
 export { authHandler as GET, authHandler as POST };
 ```
 
-**Note**: This implementation uses Vercel's `@vercel/mcp-adapter` which is specifically designed for Next.js applications and provides seamless integration with Clerk authentication.
+**Note**: This implementation uses Vercel's `mcp-adapter` which is specifically designed for Next.js applications and provides seamless integration with Clerk authentication.
 
 ### Building an MCP Client
 
