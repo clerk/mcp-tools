@@ -89,11 +89,31 @@
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
+    "@clerk/backend": "^2.29.2",
+    "@clerk/express": "^1.7.12",
+    "@clerk/nextjs": "^6.26.0",
     "better-sqlite3": "^8.7.0",
+    "express": "^5.0.0",
+    "next": "^15.0.0",
     "pg": "^8.11.0",
     "redis": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@clerk/backend": {
+      "optional": true
+    },
+    "@clerk/express": {
+      "optional": true
+    },
+    "@clerk/nextjs": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
     "redis": {
       "optional": true
     },
@@ -103,28 +123,6 @@
     "better-sqlite3": {
       "optional": true
     }
-  },
-  "tsdown": {
-    "entry": [
-      "client.ts",
-      "server.ts",
-      "next/index.ts",
-      "express/index.ts",
-      "stores/fs.ts",
-      "stores/redis.ts",
-      "stores/postgres.ts",
-      "stores/sqlite.ts"
-    ],
-    "format": [
-      "esm"
-    ],
-    "dts": true,
-    "clean": true,
-    "external": [
-      "redis",
-      "pg",
-      "better-sqlite3"
-    ]
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }
