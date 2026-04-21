@@ -1,8 +1,8 @@
 // @ts-ignore - better-sqlite3 is an optional peer dependency
-import Database from "better-sqlite3";
-import type { JsonSerializable } from "../client.js";
-import path from "node:path";
-import os from "node:os";
+import Database from 'better-sqlite3';
+import type { JsonSerializable } from '../client.js';
+import path from 'node:path';
+import os from 'node:os';
 
 export interface SqliteStoreConfig {
   /**
@@ -57,13 +57,13 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
   // Check if better-sqlite3 is available
   if (!Database) {
     throw new Error(
-      "better-sqlite3 package not found. Please install it with: npm install better-sqlite3 @types/better-sqlite3"
+      'better-sqlite3 package not found. Please install it with: npm install better-sqlite3 @types/better-sqlite3',
     );
   }
 
   const {
-    dbPath = path.join(os.tmpdir(), "mcp-store.db"),
-    tableName = "mcp_store",
+    dbPath = path.join(os.tmpdir(), 'mcp-store.db'),
+    tableName = 'mcp_store',
     enableWal = true,
     enableForeignKeys = false,
     timeout = 5000,
@@ -77,10 +77,10 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
 
   // Configure database
   if (enableWal) {
-    db.pragma("journal_mode = WAL");
+    db.pragma('journal_mode = WAL');
   }
   if (enableForeignKeys) {
-    db.pragma("foreign_keys = ON");
+    db.pragma('foreign_keys = ON');
   }
 
   // Create table if it doesn't exist
@@ -94,7 +94,7 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
   `;
 
   const createIndexSql = `
-    CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at 
+    CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at
     ON ${tableName} (created_at)
   `;
 
@@ -103,7 +103,7 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
 
   // Prepare statements for better performance
   const insertStmt = db.prepare(`
-    INSERT OR REPLACE INTO ${tableName} (key, value, updated_at) 
+    INSERT OR REPLACE INTO ${tableName} (key, value, updated_at)
     VALUES (?, ?, CURRENT_TIMESTAMP)
   `);
 
@@ -124,7 +124,7 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
   `);
 
   const cleanupStmt = db.prepare(`
-    DELETE FROM ${tableName} 
+    DELETE FROM ${tableName}
     WHERE created_at < datetime('now', '-' || ? || ' days')
   `);
 
@@ -142,10 +142,8 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
 
       try {
         return JSON.parse(row.value);
-      } catch (parseError) {
-        throw new Error(
-          `Failed to parse stored value for key "${k}": Invalid JSON`
-        );
+      } catch {
+        throw new Error(`Failed to parse stored value for key "${k}": Invalid JSON`);
       }
     },
 
@@ -189,12 +187,12 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
       dbSize: string;
       dbPath: string;
     }> => {
-      const countResult = db
-        .prepare(`SELECT COUNT(*) as count FROM ${tableName}`)
-        .get() as { count: number };
+      const countResult = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get() as {
+        count: number;
+      };
       const sizeResult = db
         .prepare(
-          "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"
+          'SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()',
         )
         .get() as { size: number };
 

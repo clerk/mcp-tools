@@ -1,6 +1,6 @@
 // @ts-ignore - pg is an optional peer dependency
-import pg from "pg";
-import type { JsonSerializable } from "../client.js";
+import pg from 'pg';
+import type { JsonSerializable } from '../client.js';
 
 const { Client } = pg;
 
@@ -82,19 +82,17 @@ export interface PostgresStoreConfig {
 export function createPostgresStore(config: PostgresStoreConfig = {}) {
   // Check if pg is available
   if (!pg) {
-    throw new Error(
-      "pg package not found. Please install it with: npm install pg @types/pg"
-    );
+    throw new Error('pg package not found. Please install it with: npm install pg @types/pg');
   }
 
   const {
     connectionString,
-    host = "localhost",
+    host = 'localhost',
     port = 5432,
     database,
     user,
     password,
-    tableName = "mcp_store",
+    tableName = 'mcp_store',
     ssl = false,
     connectionTimeoutMillis = 5000,
     idleTimeoutMillis = 10000,
@@ -117,8 +115,8 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
 
   const client = new Client(clientConfig);
 
-  client.on("error", (err: Error) => {
-    console.error("PostgreSQL Client Error:", err);
+  client.on('error', (err: Error) => {
+    console.error('PostgreSQL Client Error:', err);
   });
 
   // Connect immediately and create table if it doesn't exist
@@ -137,7 +135,7 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
 
     // Create index on created_at for potential cleanup queries
     await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at 
+      CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at
       ON ${tableName} (created_at)
     `);
   })();
@@ -147,9 +145,9 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       await initPromise; // Ensure connected and table exists
 
       const query = `
-        INSERT INTO ${tableName} (key, value, updated_at) 
-        VALUES ($1, $2, NOW()) 
-        ON CONFLICT (key) 
+        INSERT INTO ${tableName} (key, value, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (key)
         DO UPDATE SET value = $2, updated_at = NOW()
       `;
 
@@ -169,17 +167,15 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       const value = result.rows[0].value;
 
       // If it's already a JavaScript object (JSONB does this automatically), return it
-      if (typeof value === "object") {
+      if (typeof value === 'object') {
         return value;
       }
 
       // Otherwise parse as JSON string
       try {
         return JSON.parse(value);
-      } catch (parseError) {
-        throw new Error(
-          `Failed to parse stored value for key "${k}": Invalid JSON`
-        );
+      } catch {
+        throw new Error(`Failed to parse stored value for key "${k}": Invalid JSON`);
       }
     },
 
@@ -226,7 +222,7 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       await initPromise; // Ensure connected and table exists
 
       const query = `
-        DELETE FROM ${tableName} 
+        DELETE FROM ${tableName}
         WHERE created_at < NOW() - INTERVAL '${olderThanDays} days'
       `;
       const result = await client.query(query);
@@ -245,14 +241,12 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       await initPromise; // Ensure connected and table exists
 
       let totalKeys = 0;
-      let tableSize = "N/A";
-      let dbInfo = "N/A";
+      let tableSize = 'N/A';
+      let dbInfo = 'N/A';
 
       try {
         // Get total number of keys
-        const countResult = await client.query(
-          `SELECT COUNT(*) as count FROM ${tableName}`
-        );
+        const countResult = await client.query(`SELECT COUNT(*) as count FROM ${tableName}`);
         totalKeys = parseInt(countResult.rows[0].count);
 
         // Get table size
@@ -264,7 +258,7 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
         }
 
         // Get PostgreSQL version
-        const versionResult = await client.query("SELECT version()");
+        const versionResult = await client.query('SELECT version()');
         if (versionResult.rows.length > 0) {
           const version = versionResult.rows[0].version;
           const match = version.match(/PostgreSQL ([\d.]+)/);
@@ -272,7 +266,7 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
             dbInfo = `PostgreSQL ${match[1]}`;
           }
         }
-      } catch (error) {
+      } catch {
         // Stats not available, keep defaults
       }
 

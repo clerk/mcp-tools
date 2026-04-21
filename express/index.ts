@@ -1,14 +1,14 @@
-import { getAuth } from "@clerk/express";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type express from "express";
+import { getAuth } from '@clerk/express';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type express from 'express';
 import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
   verifyClerkToken,
-} from "../server";
+} from '../server';
 
 /**
  * Express middleware that enforces authentication for MCP requests.
@@ -32,42 +32,35 @@ import {
  * ```
  */
 export async function mcpAuth(
-  verifyToken: (
-    token: string,
-    req: express.Request
-  ) => Promise<AuthInfo | undefined>
+  verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
 ) {
-  return async (
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction
-  ) => {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const prmUrl = getPRMUrl(req);
 
     if (!req.headers.authorization) {
       return res
         .status(401)
         .set({
-          "WWW-Authenticate": `Bearer resource_metadata=${prmUrl}`,
+          'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}`,
         })
         .send({
-          error: "Unauthorized",
+          error: 'Unauthorized',
         });
     }
 
     const authHeader = req.headers.authorization;
-    const token = authHeader?.split(" ")[1];
+    const token = authHeader?.split(' ')[1];
 
     if (!token) {
       throw new Error(
-        `Invalid authorization header value, expected Bearer <token>, received ${authHeader}`
+        `Invalid authorization header value, expected Bearer <token>, received ${authHeader}`,
       );
     }
 
     const authData = await verifyToken(token, req);
 
     if (!authData) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
     // @ts-expect-error - we're monkey patching this on purpose
@@ -94,11 +87,11 @@ export async function mcpAuth(
 export async function mcpAuthClerk(
   req: express.Request,
   res: express.Response,
-  next: express.NextFunction
+  next: express.NextFunction,
 ): Promise<void> {
   (
     await mcpAuth(async (token, req: express.Request) => {
-      const authData = getAuth(req, { acceptsToken: "oauth_token" });
+      const authData = getAuth(req, { acceptsToken: 'oauth_token' });
 
       if (!authData.isAuthenticated) return undefined;
 
@@ -143,13 +136,10 @@ export function protectedResourceHandler({
   };
 }
 
-export async function authServerMetadataHandlerClerk(
-  _: express.Request,
-  res: express.Response
-) {
+export async function authServerMetadataHandlerClerk(_: express.Request, res: express.Response) {
   const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
   if (!publishableKey) {
-    throw new Error("CLERK_PUBLISHABLE_KEY environment variable is required");
+    throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
   }
 
   const metadata = await fetchClerkAuthorizationServerMetadata({
@@ -170,13 +160,11 @@ export async function authServerMetadataHandlerClerk(
  * );
  * ```
  */
-export function protectedResourceHandlerClerk(
-  properties?: Record<string, unknown>
-) {
+export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
   return (req: express.Request, res: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
-      throw new Error("CLERK_PUBLISHABLE_KEY environment variable is required");
+      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
     }
 
     const metadata = generateClerkProtectedResourceMetadata({
@@ -192,11 +180,8 @@ export function protectedResourceHandlerClerk(
 // Given a protected resource metadata url generate the url of the original
 // resource
 function getResourceUrl(req: express.Request) {
-  const url = new URL(`${req.protocol}://${req.get("host")}${req.originalUrl}`);
-  url.pathname = url.pathname.replace(
-    /\.well-known\/oauth-protected-resource\/?/,
-    ""
-  );
+  const url = new URL(`${req.protocol}://${req.get('host')}${req.originalUrl}`);
+  url.pathname = url.pathname.replace(/\.well-known\/oauth-protected-resource\/?/, '');
   return url.toString();
 }
 
@@ -204,7 +189,7 @@ function getResourceUrl(req: express.Request) {
 // given resource url
 function getPRMUrl(req: express.Request) {
   return `${req.protocol}://${req.get(
-    "host"
+    'host',
   )}/.well-known/oauth-protected-resource${req.originalUrl}`;
 }
 

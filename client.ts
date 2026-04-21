@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { randomUUID } from 'node:crypto';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 
-const CODE_VERIFIER_PREFIX = "pkce_verifier_";
-const STATE_PREFIX = "state_";
-const SESSION_PREFIX = "session_";
+const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
+const STATE_PREFIX = 'state_';
+const SESSION_PREFIX = 'session_';
 
 export type JsonSerializable =
   | null
@@ -49,10 +49,8 @@ export async function completeAuthWithCode({
 }) {
   const sessionId = await store.read(`${STATE_PREFIX}${state}`);
 
-  if (!sessionId || typeof sessionId !== "string") {
-    throw new Error(
-      `No session id associated with state "${state}" found in the store`
-    );
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new Error(`No session id associated with state "${state}" found in the store`);
   }
 
   const { transport } = await getClientBySessionId({
@@ -120,7 +118,7 @@ export async function getClientBySessionId({
     },
     tokens: () => {
       if (!client.accessToken) return undefined;
-      return { access_token: client.accessToken, token_type: "Bearer" };
+      return { access_token: client.accessToken, token_type: 'Bearer' };
     },
     saveTokens: async ({ access_token, refresh_token }) => {
       await store.write(`${SESSION_PREFIX}${sessionId}`, {
@@ -134,28 +132,21 @@ export async function getClientBySessionId({
       return void 0;
     },
     redirectToAuthorization: unexpectedFunctionCall(
-      "redirectToAuthorization",
-      "getting an existing client"
+      'redirectToAuthorization',
+      'getting an existing client',
     ),
-    saveCodeVerifier: unexpectedFunctionCall(
-      "saveCodeVerifier",
-      "getting an existing client"
-    ),
+    saveCodeVerifier: unexpectedFunctionCall('saveCodeVerifier', 'getting an existing client'),
     codeVerifier: async (): Promise<string> => {
       if (!state) {
         throw new Error(
-          "The state argument is required to retrieve a code verifier for an already initialized client"
+          'The state argument is required to retrieve a code verifier for an already initialized client',
         );
       }
 
-      const storedVerifier = await store.read(
-        `${CODE_VERIFIER_PREFIX}${state}`
-      );
+      const storedVerifier = await store.read(`${CODE_VERIFIER_PREFIX}${state}`);
 
-      if (!storedVerifier || typeof storedVerifier !== "string") {
-        throw new Error(
-          `No code verifier found for state "${state}" in the store`
-        );
+      if (!storedVerifier || typeof storedVerifier !== 'string') {
+        throw new Error(`No code verifier found for state "${state}" in the store`);
       }
 
       return storedVerifier;
@@ -254,10 +245,7 @@ export async function createKnownCredentialsMcpClient({
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(
-    `${SESSION_PREFIX}${sessionId}`,
-    client as JsonSerializable
-  );
+  await store.write(`${SESSION_PREFIX}${sessionId}`, client as JsonSerializable);
 
   // there's some non-dry code between this and the dynamically registered
   // client, but this is on purpose for flexibility and clarity.
@@ -276,17 +264,14 @@ export async function createKnownCredentialsMcpClient({
     }),
     // only should be used for dynamic client registration
     saveClientInformation: unexpectedFunctionCall(
-      "saveClientInformation",
-      "initializing a known credentials client"
+      'saveClientInformation',
+      'initializing a known credentials client',
     ),
     // it's impossible that we have an access token at this point, so we always
     // return undefined
     tokens: () => undefined,
     // called in the oauth callback route
-    saveTokens: unexpectedFunctionCall(
-      "saveTokens",
-      "initializing a known credentials client"
-    ),
+    saveTokens: unexpectedFunctionCall('saveTokens', 'initializing a known credentials client'),
     redirectToAuthorization: (url) => {
       redirect(url.toString());
     },
@@ -294,10 +279,7 @@ export async function createKnownCredentialsMcpClient({
       await store.write(`${CODE_VERIFIER_PREFIX}${state}`, verifier);
     },
     // called in the oauth callback route
-    codeVerifier: unexpectedFunctionCall(
-      "codeVerifier",
-      "initializing a known credentials client"
-    ),
+    codeVerifier: unexpectedFunctionCall('codeVerifier', 'initializing a known credentials client'),
   };
 
   return createReturnValue(client, authProvider, sessionId);
@@ -351,15 +333,6 @@ export interface CreateDynamicallyRegisteredMcpClientParams {
   store: McpClientStore;
 }
 
-interface DynamicallyRegisteredClient
-  extends Omit<
-    CreateDynamicallyRegisteredMcpClientParams,
-    "store" | "redirect"
-  > {
-  clientId?: string;
-  clientSecret?: string;
-}
-
 /**
  * Creates a new MCP client and transport for the first time that is assumed
  * to need to be dynamically registered with an authorization server.
@@ -398,7 +371,7 @@ export async function createDynamicallyRegisteredMcpClient({
       client_name: client.oauthClientName || client.mcpClientName,
       client_uri: client.oauthClientUri,
       scope: client.oauthScopes,
-      token_endpoint_auth_method: client.oauthPublicClient ? "none" : undefined,
+      token_endpoint_auth_method: client.oauthPublicClient ? 'none' : undefined,
       logo_uri: undefined,
       tos_uri: undefined,
     },
@@ -453,8 +426,8 @@ export async function createDynamicallyRegisteredMcpClient({
     },
     // called in the oauth callback route
     codeVerifier: unexpectedFunctionCall(
-      "codeVerifier",
-      "initializing a dynamically registered client"
+      'codeVerifier',
+      'initializing a dynamically registered client',
     ),
   };
 
@@ -468,12 +441,11 @@ export async function createDynamicallyRegisteredMcpClient({
 function createReturnValue(
   client: ClientData,
   authProvider: OAuthClientProvider,
-  sessionId: string
+  sessionId: string,
 ) {
-  const transport = new StreamableHTTPClientTransport(
-    new URL(client.mcpEndpoint),
-    { authProvider }
-  );
+  const transport = new StreamableHTTPClientTransport(new URL(client.mcpEndpoint), {
+    authProvider,
+  });
 
   const mcpClient = new Client({
     name: client.mcpClientName,
@@ -506,9 +478,7 @@ function _connect(client: Client, transport: StreamableHTTPClientTransport) {
  */
 function unexpectedFunctionCall(name: string, phase: string) {
   return () => {
-    throw new Error(
-      `Unexpected call to AuthProvider method "${name}" when ${phase}.`
-    );
+    throw new Error(`Unexpected call to AuthProvider method "${name}" when ${phase}.`);
   };
 }
 
@@ -539,7 +509,7 @@ async function getClientData(sessionId: string, store: McpClientStore) {
 
   if (
     !clientData ||
-    typeof clientData !== "object" ||
+    typeof clientData !== 'object' ||
     clientData === null ||
     Array.isArray(clientData)
   ) {

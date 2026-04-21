@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
-import fsSync from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import type { JsonSerializable } from "../client.js";
+import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import type { JsonSerializable } from '../client.js';
 
 export interface FsStoreConfig {
   /**
@@ -28,14 +28,14 @@ export interface FsStoreConfig {
  * ```
  */
 export function createFsStore(config: FsStoreConfig = {}) {
-  const { filePath = path.join(os.tmpdir(), "__mcp_demo") } = config;
+  const { filePath = path.join(os.tmpdir(), '__mcp_demo') } = config;
 
   // Ensure the directory exists
   const ensureDirectoryExists = async () => {
     const dir = path.dirname(filePath);
     try {
       await fs.mkdir(dir, { recursive: true });
-    } catch (error) {
+    } catch {
       // Directory might already exist, that's fine
     }
   };
@@ -44,22 +44,20 @@ export function createFsStore(config: FsStoreConfig = {}) {
     try {
       if (!fsSync.existsSync(filePath)) {
         await ensureDirectoryExists();
-        await fs.writeFile(filePath, "{}");
+        await fs.writeFile(filePath, '{}');
         return {};
       }
-      const content = await fs.readFile(filePath, "utf8");
+      const content = await fs.readFile(filePath, 'utf8');
       return JSON.parse(content);
-    } catch (error) {
+    } catch {
       // If file is corrupted, start fresh
       await ensureDirectoryExists();
-      await fs.writeFile(filePath, "{}");
+      await fs.writeFile(filePath, '{}');
       return {};
     }
   };
 
-  const writeStoreData = async (data: {
-    [key: string]: any;
-  }): Promise<void> => {
+  const writeStoreData = async (data: { [key: string]: any }): Promise<void> => {
     await ensureDirectoryExists();
     await fs.writeFile(filePath, JSON.stringify(data, null, 2));
   };
@@ -147,7 +145,7 @@ export function createFsStore(config: FsStoreConfig = {}) {
       filePath: string;
     }> => {
       const data = await readStoreData();
-      let fileSize = "0 B";
+      let fileSize = '0 B';
 
       try {
         if (fsSync.existsSync(filePath)) {
@@ -161,7 +159,7 @@ export function createFsStore(config: FsStoreConfig = {}) {
             fileSize = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
           }
         }
-      } catch (error) {
+      } catch {
         // Stats not available
       }
 
