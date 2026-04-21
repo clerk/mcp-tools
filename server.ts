@@ -1,4 +1,4 @@
-import type { MachineAuthObject } from "@clerk/backend";
+import { MachineAuthObject } from "@clerk/backend";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
 /**

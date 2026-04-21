@@ -20,7 +20,6 @@ export default defineConfig({
       "pg",
       "better-sqlite3",
       "next",
-      "@clerk/backend",
       "@clerk/express",
       "@clerk/nextjs",
       "express",

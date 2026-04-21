@@ -13,7 +13,7 @@ npm install @clerk/mcp-tools mcp-adapter next
 If you're using Clerk for authentication, also install the Clerk Next.js SDK:
 
 ```bash
-npm install @clerk/nextjs @clerk/backend
+npm install @clerk/nextjs
 ```
 
 ## Quick Start

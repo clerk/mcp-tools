@@ -89,7 +89,6 @@
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "@clerk/backend": "^3.2.13",
     "@clerk/express": "^2.1.5",
     "@clerk/nextjs": "^7.2.3",
     "better-sqlite3": "^8.7.0",
@@ -99,9 +98,6 @@
     "redis": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "@clerk/backend": {
-      "optional": true
-    },
     "@clerk/express": {
       "optional": true
     },
