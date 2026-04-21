@@ -98,7 +98,7 @@ export async function mcpAuthClerk(
 ): Promise<void> {
   (
     await mcpAuth(async (token, req: express.Request) => {
-      const authData = await getAuth(req, { acceptsToken: "oauth_token" });
+      const authData = getAuth(req, { acceptsToken: "oauth_token" });
 
       if (!authData.isAuthenticated) return undefined;
 
