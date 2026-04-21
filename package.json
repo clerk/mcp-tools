@@ -29,43 +29,43 @@
   ],
   "exports": {
     "./client": {
-      "import": "./dist/client.js",
-      "types": "./dist/client.d.ts"
+      "import": "./dist/client.mjs",
+      "types": "./dist/client.d.mts"
     },
     "./server": {
-      "import": "./dist/server.js",
-      "types": "./dist/server.d.ts"
+      "import": "./dist/server.mjs",
+      "types": "./dist/server.d.mts"
     },
     "./next": {
-      "import": "./dist/next/index.js",
-      "types": "./dist/next/index.d.ts"
+      "import": "./dist/next/index.mjs",
+      "types": "./dist/next/index.d.mts"
     },
     "./express": {
-      "import": "./dist/express/index.js",
-      "types": "./dist/express/index.d.ts"
+      "import": "./dist/express/index.mjs",
+      "types": "./dist/express/index.d.mts"
     },
     "./stores": "./dist/stores",
     "./stores/fs": {
-      "import": "./dist/stores/fs.js",
-      "types": "./dist/stores/fs.d.ts"
+      "import": "./dist/stores/fs.mjs",
+      "types": "./dist/stores/fs.d.mts"
     },
     "./stores/redis": {
-      "import": "./dist/stores/redis.js",
-      "types": "./dist/stores/redis.d.ts"
+      "import": "./dist/stores/redis.mjs",
+      "types": "./dist/stores/redis.d.mts"
     },
     "./stores/postgres": {
-      "import": "./dist/stores/postgres.js",
-      "types": "./dist/stores/postgres.d.ts"
+      "import": "./dist/stores/postgres.mjs",
+      "types": "./dist/stores/postgres.d.mts"
     },
     "./stores/sqlite": {
-      "import": "./dist/stores/sqlite.js",
-      "types": "./dist/stores/sqlite.d.ts"
+      "import": "./dist/stores/sqlite.mjs",
+      "types": "./dist/stores/sqlite.d.mts"
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "prepublishOnly": "npm run build",
-    "watch": "tsup --watch"
+    "watch": "tsdown --watch"
   },
   "publishConfig": {
     "access": "public"
@@ -85,7 +85,7 @@
     "next": "^15.5.9",
     "pg": "^8.16.3",
     "redis": "^5.5.6",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
@@ -104,7 +104,7 @@
       "optional": true
     }
   },
-  "tsup": {
+  "tsdown": {
     "entry": [
       "client.ts",
       "server.ts",
