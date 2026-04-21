@@ -28,7 +28,7 @@ Here's the basic structure you'll need:
 
 ```ts
 // app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandlerClerk } from "@clerk/mcp-tools/next";
+import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
 
 const handler = protectedResourceHandlerClerk();
 
@@ -39,19 +39,16 @@ export { handler as GET };
 
 ```ts
 // app/mcp/route.ts
-import { verifyClerkToken } from "@clerk/mcp-tools/next";
-import { auth, clerkClient } from "@clerk/nextjs/server";
-import {
-  createMcpHandler,
-  experimental_withMcpAuth as withMcpAuth,
-} from "mcp-adapter";
+import { verifyClerkToken } from '@clerk/mcp-tools/next';
+import { auth, clerkClient } from '@clerk/nextjs/server';
+import { createMcpHandler, experimental_withMcpAuth as withMcpAuth } from 'mcp-adapter';
 
 const clerk = await clerkClient();
 
 const handler = createMcpHandler((server) => {
   server.tool(
-    "get-clerk-user-data",
-    "Gets data about the Clerk user that authorized this request",
+    'get-clerk-user-data',
+    'Gets data about the Clerk user that authorized this request',
     {}, // tool parameters here if present
     async (_, { authInfo }) => {
       // non-null assertion is safe here, authHandler ensures presence
@@ -59,16 +56,16 @@ const handler = createMcpHandler((server) => {
       const userData = await clerk.users.getUser(userId);
 
       return {
-        content: [{ type: "text", text: JSON.stringify(userData) }],
+        content: [{ type: 'text', text: JSON.stringify(userData) }],
       };
-    }
+    },
   );
 });
 
 const authHandler = withMcpAuth(
   handler,
   async (_, token) => {
-    const clerkAuth = await auth({ acceptsToken: "oauth_token" });
+    const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
     // Note: OAuth tokens are machine tokens. Machine token usage is free
     // during our public beta period but will be subject to pricing once
     // generally available. Pricing is expected to be competitive and below
@@ -77,8 +74,8 @@ const authHandler = withMcpAuth(
   },
   {
     required: true,
-    resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
-  }
+    resourceMetadataPath: '/.well-known/oauth-protected-resource/mcp',
+  },
 );
 
 export { authHandler as GET, authHandler as POST };
@@ -106,10 +103,10 @@ Generic Next.js route handler that returns OAuth protected resource metadata for
 
 ```ts
 // app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandler } from "@clerk/mcp-tools/next";
+import { protectedResourceHandler } from '@clerk/mcp-tools/next';
 
 const handler = protectedResourceHandler({
-  authServerUrl: "https://auth.example.com",
+  authServerUrl: 'https://auth.example.com',
 });
 
 export { handler as GET };
@@ -123,7 +120,7 @@ Next.js route handler that returns OAuth protected resource metadata for Clerk i
 
 ```ts
 // app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandlerClerk } from "@clerk/mcp-tools/next";
+import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
 
 const handler = protectedResourceHandlerClerk();
 
@@ -140,7 +137,7 @@ Next.js route handler for OAuth 2.0 Authorization Server Metadata endpoint based
 
 ```ts
 // app/.well-known/oauth-authorization-server/route.ts
-import { authServerMetadataHandlerClerk } from "@clerk/mcp-tools/next";
+import { authServerMetadataHandlerClerk } from '@clerk/mcp-tools/next';
 
 const handler = authServerMetadataHandlerClerk();
 
@@ -158,7 +155,7 @@ CORS options request handler for OAuth metadata endpoints. Necessary for MCP cli
 import {
   protectedResourceHandlerClerk,
   metadataCorsOptionsRequestHandler,
-} from "@clerk/mcp-tools/next";
+} from '@clerk/mcp-tools/next';
 
 const handler = protectedResourceHandlerClerk();
 const corsHandler = metadataCorsOptionsRequestHandler();
@@ -179,13 +176,13 @@ A request handler for OAuth callback endpoints that completes the OAuth flow by 
 
 ```ts
 // app/oauth_callback/route.ts
-import { completeOAuthHandler } from "@clerk/mcp-tools/next";
-import fsStore from "@clerk/mcp-tools/stores/fs";
-import { redirect } from "next/navigation";
+import { completeOAuthHandler } from '@clerk/mcp-tools/next';
+import fsStore from '@clerk/mcp-tools/stores/fs';
+import { redirect } from 'next/navigation';
 
 const handler = completeOAuthHandler({
   store: fsStore,
-  callback: () => redirect("/dashboard"),
+  callback: () => redirect('/dashboard'),
 });
 
 export { handler as GET };
@@ -197,16 +194,16 @@ For MCP tool calling in Next.js, use the framework-agnostic client utilities:
 
 ```ts
 // app/api/mcp-tools/route.ts
-import { getClientBySessionId } from "@clerk/mcp-tools/client";
-import { cookies } from "next/headers";
-import fsStore from "@clerk/mcp-tools/stores/fs";
+import { getClientBySessionId } from '@clerk/mcp-tools/client';
+import { cookies } from 'next/headers';
+import fsStore from '@clerk/mcp-tools/stores/fs';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const sessionId = cookieStore.get("mcp-session")?.value;
+  const sessionId = cookieStore.get('mcp-session')?.value;
 
   if (!sessionId) {
-    return Response.json({ error: "No MCP session found" }, { status: 401 });
+    return Response.json({ error: 'No MCP session found' }, { status: 401 });
   }
 
   const body = await request.json();
@@ -246,10 +243,10 @@ For custom authentication systems, you'll need to implement your own token verif
 
 ```ts
 // app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandler } from "@clerk/mcp-tools/next";
+import { protectedResourceHandler } from '@clerk/mcp-tools/next';
 
 const handler = protectedResourceHandler({
-  authServerUrl: "https://your-auth-server.com",
+  authServerUrl: 'https://your-auth-server.com',
 });
 
 export { handler as GET };

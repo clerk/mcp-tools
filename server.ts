@@ -1,5 +1,5 @@
-import { MachineAuthObject } from "@clerk/backend";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { MachineAuthObject } from '@clerk/backend';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 /**
  * Generates protected resource metadata for the given auth server url and
@@ -23,23 +23,23 @@ export function generateProtectedResourceMetadata({
     {
       resource: resourceUrl,
       authorization_servers: [authServerUrl],
-      token_types_supported: ["urn:ietf:params:oauth:token-type:access_token"],
+      token_types_supported: ['urn:ietf:params:oauth:token-type:access_token'],
       token_introspection_endpoint: `${authServerUrl}/oauth/token`,
       token_introspection_endpoint_auth_methods_supported: [
-        "client_secret_post",
-        "client_secret_basic",
+        'client_secret_post',
+        'client_secret_basic',
       ],
       jwks_uri: `${authServerUrl}/.well-known/jwks.json`,
-      authorization_data_types_supported: ["oauth_scope"],
-      authorization_data_locations_supported: ["header", "body"],
+      authorization_data_types_supported: ['oauth_scope'],
+      authorization_data_locations_supported: ['header', 'body'],
       key_challenges_supported: [
         {
-          challenge_type: "urn:ietf:params:oauth:pkce:code_challenge",
-          challenge_algs: ["S256"],
+          challenge_type: 'urn:ietf:params:oauth:pkce:code_challenge',
+          challenge_algs: ['S256'],
         },
       ],
     },
-    properties
+    properties,
   );
 }
 
@@ -67,16 +67,16 @@ export function generateClerkProtectedResourceMetadata({
     authServerUrl: fapiUrl,
     resourceUrl,
     properties: {
-      service_documentation: "https://clerk.com/docs",
+      service_documentation: 'https://clerk.com/docs',
       ...properties,
     },
   });
 }
 
 function deriveFapiUrl(publishableKey: string) {
-  const key = publishableKey.replace(/^pk_(test|live)_/, "");
-  const decoded = Buffer.from(key, "base64").toString("utf8");
-  return `https://${decoded.replace(/\$/, "")}`;
+  const key = publishableKey.replace(/^pk_(test|live)_/, '');
+  const decoded = Buffer.from(key, 'base64').toString('utf8');
+  return `https://${decoded.replace(/\$/, '')}`;
 }
 
 export async function fetchClerkAuthorizationServerMetadata({
@@ -101,35 +101,33 @@ export async function fetchClerkAuthorizationServerMetadata({
  * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
  */
 export function verifyClerkToken(
-  auth: MachineAuthObject<"oauth_token">,
-  token: string | undefined
+  auth: MachineAuthObject<'oauth_token'>,
+  token: string | undefined,
 ): AuthInfo | undefined {
   if (!token) return undefined;
 
   if (!auth.isAuthenticated) {
-    console.error("Invalid OAuth access token");
+    console.error('Invalid OAuth access token');
     return undefined;
   }
 
-  if (auth.tokenType !== "oauth_token") {
-    throw new Error(
-      "the auth() function must be called with acceptsToken: 'oauth_token'"
-    );
+  if (auth.tokenType !== 'oauth_token') {
+    throw new Error("the auth() function must be called with acceptsToken: 'oauth_token'");
   }
 
   // None of these _should_ ever happen
   if (!auth.clientId) {
-    console.error("Clerk error: No clientId returned from auth()");
+    console.error('Clerk error: No clientId returned from auth()');
     return undefined;
   }
 
   if (!auth.scopes) {
-    console.error("Clerk error: No scopes returned from auth()");
+    console.error('Clerk error: No scopes returned from auth()');
     return undefined;
   }
 
   if (!auth.userId) {
-    console.error("Clerk error: No userId returned from auth()");
+    console.error('Clerk error: No userId returned from auth()');
     return undefined;
   }
 
@@ -145,8 +143,8 @@ export function verifyClerkToken(
  * CORS headers for OAuth metadata endpoints
  */
 export const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "*",
-  "Access-Control-Max-Age": "86400",
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Max-Age': '86400',
 };

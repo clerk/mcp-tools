@@ -48,11 +48,11 @@ In order for the [most up to date authentication flow in the MCP spec](https://m
 This library exposes a tool that can quickly generate such a metadata file for you. Here's an example of how to use it:
 
 ```ts
-import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
+import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 
 const result = generateProtectedResourceMetadata({
-  resourceUrl: "https://myapp.com/current-route",
-  authServerUrl: "https://auth.example.com",
+  resourceUrl: 'https://myapp.com/current-route',
+  authServerUrl: 'https://auth.example.com',
 });
 ```
 
@@ -61,11 +61,11 @@ You will want to set up a route at `.well-known/oauth-protected-resource` and ma
 If you are using [Clerk](https://clerk.com) for authentication in your app, we have a helper that makes this easier:
 
 ```ts
-import { generateClerkProtectedResourceMetadata } from "@clerk/mcp-tools/server";
+import { generateClerkProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 
 const result = generateClerkProtectedResourceMetadata({
   publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
-  resourceUrl: "https://myapp.com/current-route",
+  resourceUrl: 'https://myapp.com/current-route',
 });
 ```
 
@@ -82,11 +82,11 @@ There is [an older version of the MCP spec](https://modelcontextprotocol.io/spec
 
 ```ts
 // return this result from <your-app>/.well-known/oauth-authorization-server
-import { generateAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
+import { generateAuthorizationServerMetadata } from '@clerk/mcp-tools/server';
 
 const result = generateAuthorizationServerMetadata({
-  authServerUrl: "https://auth.example.com",
-  scopes: ["email", "profile", "openid"],
+  authServerUrl: 'https://auth.example.com',
+  scopes: ['email', 'profile', 'openid'],
 });
 ```
 
@@ -102,21 +102,21 @@ If this isn't the case, you can pass in overrides for any of these values. Passi
 
 ```ts
 // return this result from <your-app>/.well-known/oauth-authorization-server
-import { generateAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
+import { generateAuthorizationServerMetadata } from '@clerk/mcp-tools/server';
 
 const result = generateAuthorizationServerMetadata({
-  authServerUrl: "https://auth.example.com",
-  authorizationEndpoint: "foo/bar/authorize",
+  authServerUrl: 'https://auth.example.com',
+  authorizationEndpoint: 'foo/bar/authorize',
   registrationEndpoint: false,
-  tokenEndpoint: "tokens",
-  scopes: ["email", "profile", "openid", "foobar"],
+  tokenEndpoint: 'tokens',
+  scopes: ['email', 'profile', 'openid', 'foobar'],
 });
 ```
 
 If you are using [Clerk](https://clerk.com) for authentication in your app, you can use the following helper to fetch Clerk's metadata from your Clerk frontend API and return it.
 
 ```ts
-import { generateClerkAuthorizationServerMetadata } from "@clerk/mcp-tools/server";
+import { generateClerkAuthorizationServerMetadata } from '@clerk/mcp-tools/server';
 
 const result = generateClerkAuthorizationServerMetadata();
 ```
@@ -146,8 +146,8 @@ The process of actually making the MCP connection using the SDK, however, is fai
 Here's how you can create an MCP client using the core utilities:
 
 ```ts
-import { createDynamicallyRegisteredMcpClient } from "@clerk/mcp-tools/client";
-import { createRedisStore } from "@clerk/mcp-tools/stores/redis";
+import { createDynamicallyRegisteredMcpClient } from '@clerk/mcp-tools/client';
+import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 
 // Create a persistent store (use appropriate store for your environment)
 const store = createRedisStore({ url: process.env.REDIS_URL });
@@ -155,11 +155,11 @@ const store = createRedisStore({ url: process.env.REDIS_URL });
 export async function initializeMCPConnection(mcpEndpoint: string) {
   const { connect, sessionId } = createDynamicallyRegisteredMcpClient({
     mcpEndpoint,
-    oauthScopes: "openid profile email",
-    oauthRedirectUrl: "https://yourapp.com/oauth_callback",
-    oauthClientUri: "https://yourapp.com",
-    mcpClientName: "My App MCP Client",
-    mcpClientVersion: "0.0.1",
+    oauthScopes: 'openid profile email',
+    oauthRedirectUrl: 'https://yourapp.com/oauth_callback',
+    oauthClientUri: 'https://yourapp.com',
+    mcpClientName: 'My App MCP Client',
+    mcpClientVersion: '0.0.1',
     redirect: (url: string) => {
       // Implement redirect logic for your framework
       window.location.href = url;
@@ -179,7 +179,7 @@ export async function initializeMCPConnection(mcpEndpoint: string) {
 After the user completes the OAuth flow, you'll need to handle the callback:
 
 ```ts
-import { completeAuthWithCode } from "@clerk/mcp-tools/client";
+import { completeAuthWithCode } from '@clerk/mcp-tools/client';
 
 export async function handleOAuthCallback(code: string, state: string) {
   const result = await completeAuthWithCode({
@@ -198,13 +198,9 @@ export async function handleOAuthCallback(code: string, state: string) {
 Once authentication is complete, you can call MCP tools:
 
 ```ts
-import { getClientBySessionId } from "@clerk/mcp-tools/client";
+import { getClientBySessionId } from '@clerk/mcp-tools/client';
 
-export async function callMCPTool(
-  sessionId: string,
-  toolName: string,
-  args: any
-) {
+export async function callMCPTool(sessionId: string, toolName: string, args: any) {
   const { client, connect } = getClientBySessionId({
     sessionId,
     store,
@@ -238,7 +234,7 @@ As such, each of the client functions require that you pass in a store adapter. 
 #### File System Store (Development)
 
 ```ts
-import fsStore from "@clerk/mcp-tools/stores/fs";
+import fsStore from '@clerk/mcp-tools/stores/fs';
 ```
 
 This uses a temporary file and is fast, easy, and adequate for local development and testing. However, it's not suitable for production since the file could be deleted at any time.
@@ -250,7 +246,7 @@ For production environments, use one of these persistent stores:
 ##### Redis Store
 
 ```ts
-import { createRedisStore } from "@clerk/mcp-tools/stores/redis";
+import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 
 const store = createRedisStore({
   url: process.env.REDIS_URL,
@@ -260,7 +256,7 @@ const store = createRedisStore({
 ##### Postgres Store
 
 ```ts
-import { createPostgresStore } from "@clerk/mcp-tools/stores/postgres";
+import { createPostgresStore } from '@clerk/mcp-tools/stores/postgres';
 
 const store = createPostgresStore({
   connectionString: process.env.DATABASE_URL,
@@ -270,10 +266,10 @@ const store = createPostgresStore({
 ##### SQLite Store
 
 ```ts
-import { createSqliteStore } from "@clerk/mcp-tools/stores/sqlite";
+import { createSqliteStore } from '@clerk/mcp-tools/stores/sqlite';
 
 const store = createSqliteStore({
-  filename: "./mcp-sessions.db",
+  filename: './mcp-sessions.db',
 });
 ```
 
@@ -305,7 +301,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 #### Scope: `@clerk/mcp-tools/client`
 
 - `createKnownCredentialsMcpClient`
-
   - **Description:** If dynamic client registration is not desirable, and your interface can collect a client id and secret from an existing OAuth client, you can create a MCP client with this function. Though it does increase friction in the user experience, we recommend allowing MCP services that do not enable dynamic client registration, since it comes with several security/fraud risks that not every provider wants to take on.
   - **Arguments**:
 
@@ -385,7 +380,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `createDynamicallyRegisteredMcpClient`
-
   - **Description:** Creates a new MCP client given only an MCP endpoint url. Registers an OAuth client with the authorization server on-demand via [OAuth 2.0 Dynamic Client Registration Protocol](https://datatracker.ietf.org/doc/html/rfc7591).
   - **Arguments**:
 
@@ -470,7 +464,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `getClientBySessionId`
-
   - **Description:** Given an existing session id, constructs a MCP client that matches the information used to create the client/session initially. Intended to be used in OAuth callback routes and any subsequent MCP calls once the service has been initialized.
   - **Arguments**:
 
@@ -524,7 +517,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `completeAuthWithCode`
-
   - **Description:** Designed to be used in the OAuth callback route. Passing in the code, state, and your store will finish the auth process
   - **Arguments:**
 
@@ -567,7 +559,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 #### Scope: `@clerk/mcp-tools/server`
 
 - `generateProtectedResourceMetadata`
-
   - **Description:** Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). This metadata helps OAuth clients understand how to authenticate with your resource server.
   - **Arguments:**
 
@@ -609,7 +600,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `generateClerkProtectedResourceMetadata`
-
   - **Description:** Generates OAuth 2.0 Protected Resource Metadata specifically configured for Clerk authentication. This is a convenience wrapper around `generateProtectedResourceMetadata` that automatically derives the auth server URL from your Clerk publishable key.
   - **Arguments:**
 
@@ -629,7 +619,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:** Same as `generateProtectedResourceMetadata`
 
 - `fetchClerkAuthorizationServerMetadata`
-
   - **Description:** Fetches OAuth 2.0 Authorization Server Metadata from Clerk's servers based on your publishable key. This returns the actual metadata from Clerk's authorization server rather than generating it locally.
   - **Arguments:**
 
@@ -666,7 +655,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `corsHeaders`
-
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
   - **Value:**
 

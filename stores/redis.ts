@@ -1,6 +1,6 @@
 // @ts-ignore - Redis is an optional peer dependency
-import Redis from "redis";
-import type { JsonSerializable } from "../client.js";
+import Redis from 'redis';
+import type { JsonSerializable } from '../client.js';
 
 export interface RedisStoreConfig {
   /**
@@ -66,17 +66,15 @@ export interface RedisStoreConfig {
 export function createRedisStore(config: RedisStoreConfig = {}) {
   // Check if Redis is available
   if (!Redis) {
-    throw new Error(
-      "Redis package not found. Please install it with: npm install redis@^4.0.0"
-    );
+    throw new Error('Redis package not found. Please install it with: npm install redis@^4.0.0');
   }
 
   const {
-    host = "localhost",
+    host = 'localhost',
     port = 6379,
     password,
     db = 0,
-    keyPrefix = "mcp:",
+    keyPrefix = 'mcp:',
     connectTimeout = 5000,
     ttl,
     tls = false,
@@ -98,8 +96,8 @@ export function createRedisStore(config: RedisStoreConfig = {}) {
 
   const redis = Redis.createClient(redisConfig);
 
-  redis.on("error", (err: Error) => {
-    console.error("Redis Client Error:", err);
+  redis.on('error', (err: Error) => {
+    console.error('Redis Client Error:', err);
   });
 
   const formatKey = (key: string): string => `${keyPrefix}${key}`;
@@ -137,10 +135,8 @@ export function createRedisStore(config: RedisStoreConfig = {}) {
         const parsed = JSON.parse(value);
         // Return the actual value, not the wrapper object
         return parsed.value !== undefined ? parsed.value : parsed;
-      } catch (parseError) {
-        throw new Error(
-          `Failed to parse stored value for key "${k}": Invalid JSON`
-        );
+      } catch {
+        throw new Error(`Failed to parse stored value for key "${k}": Invalid JSON`);
       }
     },
 
@@ -192,15 +188,11 @@ export function createRedisStore(config: RedisStoreConfig = {}) {
               // If parsing fails, use epoch time
             }
             return { key, created_at: new Date(0).toISOString() };
-          })
+          }),
         );
 
         return keysWithTimes
-          .sort(
-            (a, b) =>
-              new Date(a.created_at).getTime() -
-              new Date(b.created_at).getTime()
-          )
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
           .map((item) => item.key);
       } catch {
         // If sorting fails, return unsorted
@@ -254,19 +246,19 @@ export function createRedisStore(config: RedisStoreConfig = {}) {
       const pattern = `${keyPrefix}*`;
       const keys = await redis.keys(pattern);
 
-      let memoryUsage = "N/A";
-      let redisInfo = "N/A";
+      let memoryUsage = 'N/A';
+      let redisInfo = 'N/A';
 
       try {
         // Get Redis info for memory usage
-        const info = await redis.info("memory");
+        const info = await redis.info('memory');
         const memoryMatch = info.match(/used_memory_human:([^\r\n]+)/);
         if (memoryMatch) {
           memoryUsage = memoryMatch[1].trim();
         }
 
         // Get basic Redis info
-        const serverInfo = await redis.info("server");
+        const serverInfo = await redis.info('server');
         const versionMatch = serverInfo.match(/redis_version:([^\r\n]+)/);
         if (versionMatch) {
           redisInfo = `Redis ${versionMatch[1].trim()}`;
