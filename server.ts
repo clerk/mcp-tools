@@ -79,7 +79,7 @@ function deriveFapiUrl(publishableKey: string) {
   return `https://${decoded.replace(/\$/, "")}`;
 }
 
-export function fetchClerkAuthorizationServerMetadata({
+export async function fetchClerkAuthorizationServerMetadata({
   publishableKey,
 }: {
   publishableKey: string;
