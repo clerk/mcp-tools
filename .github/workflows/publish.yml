@@ -63,11 +63,7 @@ jobs:
       - name: Publish (dry run)
         if: ${{ inputs.dry_run }}
         run: pnpm publish --dry-run --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish
         if: ${{ !inputs.dry_run }}
         run: pnpm publish --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
