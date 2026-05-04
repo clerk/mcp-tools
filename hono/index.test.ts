@@ -209,6 +209,18 @@ describe('mcpAuth', () => {
 
     expect(verifyToken).toHaveBeenCalledWith('my-token', expect.any(Object));
   });
+
+  test('returns 401 when Authorization header has no token value', async () => {
+    const app = new Hono();
+    app.get('/mcp', mcpAuth(async () => undefined), (c) => c.json({ ok: true }));
+
+    const res = await app.request('http://localhost/mcp', {
+      headers: { Authorization: 'Bearer' },
+    });
+    expect(res.status).toBe(401);
+    const wwwAuth = res.headers.get('WWW-Authenticate');
+    expect(wwwAuth).toMatch(/^Bearer resource_metadata=/);
+  });
 });
 
 describe('mcpAuthClerk', () => {
@@ -274,6 +286,30 @@ describe('streamableHttpHandler', () => {
     });
 
     expect(res.status).toBe(200);
+  });
+
+  test('handles sequential requests against the same server instance', async () => {
+    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(server));
+
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test-client', version: '1.0.0' },
+      },
+    });
+    const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body };
+
+    const res1 = await app.request('http://localhost/mcp', opts);
+    const res2 = await app.request('http://localhost/mcp', opts);
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
   });
 
   test('forwards authInfo from context to the transport', async () => {
