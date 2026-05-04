@@ -123,11 +123,26 @@ export function streamableHttpHandler(server: McpServer) {
           }),
         })
       : req;
+    let response: Response;
     try {
-      return await transport.handleRequest(forwardedReq, { authInfo: c.get('mcpAuth') as AuthInfo | undefined });
-    } finally {
+      response = await transport.handleRequest(forwardedReq, {
+        authInfo: c.get('mcpAuth') as AuthInfo | undefined,
+      });
+    } catch (e) {
       await transport.close();
+      throw e;
     }
+
+    if (!response.body) {
+      await transport.close();
+      return response;
+    }
+
+    // Pipe the body through a TransformStream so transport.close() is called
+    // only after the response stream is fully consumed, not before.
+    const { readable, writable } = new TransformStream();
+    response.body.pipeTo(writable).finally(() => transport.close());
+    return new Response(readable, { status: response.status, headers: response.headers });
   };
 }
 
