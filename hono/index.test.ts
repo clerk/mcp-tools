@@ -306,6 +306,7 @@ describe('streamableHttpHandler', () => {
     const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body };
 
     const res1 = await app.request('http://localhost/mcp', opts);
+    await res1.text(); // consume body so transport is released for next request
     const res2 = await app.request('http://localhost/mcp', opts);
 
     expect(res1.status).toBe(200);
