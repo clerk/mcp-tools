@@ -77,8 +77,12 @@ export function mcpAuth(
     const token = authHeader.split(' ')[1];
 
     if (!token) {
-      throw new Error(
-        `Invalid authorization header value, expected Bearer <token>, received ${authHeader}`,
+      return c.json(
+        { error: 'Unauthorized' },
+        {
+          status: 401,
+          headers: { 'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}` },
+        },
       );
     }
 
@@ -119,7 +123,11 @@ export function streamableHttpHandler(server: McpServer) {
           }),
         })
       : req;
-    return transport.handleRequest(forwardedReq, { authInfo: c.get('mcpAuth') as AuthInfo | undefined });
+    try {
+      return await transport.handleRequest(forwardedReq, { authInfo: c.get('mcpAuth') as AuthInfo | undefined });
+    } finally {
+      await transport.close();
+    }
   };
 }
 
