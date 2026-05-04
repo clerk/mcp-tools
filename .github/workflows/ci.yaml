@@ -1,4 +1,4 @@
-name: Lint
+name: CI
 permissions:
   contents: read
 
@@ -18,3 +18,15 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install
       - run: pnpm dedupe --check
+      - run: pnpm lint
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm test
