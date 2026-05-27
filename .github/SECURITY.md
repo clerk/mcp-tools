@@ -95,7 +95,7 @@ To stay informed about security updates, we recommend:
 
 - Watching this repository for releases
 - Enabling GitHub notifications for security advisories
-- Following [@ClerkDev](https://twitter.com/ClerkDev) on Twitter
+- Following [@clerk](https://x.com/clerk) on X
 
 ## Questions?
 
