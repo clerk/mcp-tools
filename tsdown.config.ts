@@ -6,6 +6,7 @@ export default defineConfig({
     'server.ts',
     'next/index.ts',
     'express/index.ts',
+    'stores/index.ts',
     'stores/fs.ts',
     'stores/redis.ts',
     'stores/postgres.ts',
