@@ -44,7 +44,10 @@
       "import": "./dist/express/index.mjs",
       "types": "./dist/express/index.d.mts"
     },
-    "./stores": "./dist/stores",
+    "./stores": {
+      "import": "./dist/stores/index.mjs",
+      "types": "./dist/stores/index.d.mts"
+    },
     "./stores/fs": {
       "import": "./dist/stores/fs.mjs",
       "types": "./dist/stores/fs.d.mts"
