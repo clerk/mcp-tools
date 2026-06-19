@@ -30,7 +30,7 @@ import {
 } from '@clerk/mcp-tools/hono';
 
 const app = new Hono();
-app.use(clerkMiddleware());
+app.use('*', clerkMiddleware());
 
 const server = new McpServer({ name: 'my-server', version: '1.0.0' });
 
@@ -50,11 +50,7 @@ export default app;
 ```ts
 import { Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import {
-  mcpAuth,
-  protectedResourceHandler,
-  streamableHttpHandler,
-} from '@clerk/mcp-tools/hono';
+import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/hono';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 const app = new Hono();
@@ -69,7 +65,6 @@ app.get(
 app.post(
   '/mcp',
   mcpAuth(async (token, c): Promise<AuthInfo | undefined> => {
-    // verify token with your auth provider
     const user = await verifyMyToken(token);
     if (!user) return undefined;
     return {

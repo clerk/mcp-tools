@@ -1,8 +1,9 @@
 import { getAuth } from '@clerk/hono';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context, MiddlewareHandler, Next } from 'hono';
+import { env } from 'hono/adapter';
 import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
@@ -15,6 +16,10 @@ declare module 'hono' {
     mcpAuth: AuthInfo;
   }
 }
+
+type ClerkEnv = {
+  CLERK_PUBLISHABLE_KEY?: string;
+};
 
 export function protectedResourceHandler({
   authServerUrl,
@@ -35,7 +40,7 @@ export function protectedResourceHandler({
 
 export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
   return (c: Context) => {
-    const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
+    const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
       throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
     }
@@ -49,7 +54,7 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
 }
 
 export async function authServerMetadataHandlerClerk(c: Context) {
-  const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
+  const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
   if (!publishableKey) {
     throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
   }
@@ -61,29 +66,16 @@ export function mcpAuth(
   verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
 ): MiddlewareHandler {
   return async (c: Context, next: Next) => {
-    const prmUrl = getPRMUrl(c);
+    const authHeader = c.req.header('authorization');
 
-    if (!c.req.header('authorization')) {
-      return c.json(
-        { error: 'Unauthorized' },
-        {
-          status: 401,
-          headers: { 'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}` },
-        },
-      );
+    if (!authHeader) {
+      return unauthorized(c);
     }
 
-    const authHeader = c.req.header('authorization')!;
-    const token = authHeader.split(' ')[1];
+    const [scheme, token, ...rest] = authHeader.trim().split(/\s+/);
 
-    if (!token) {
-      return c.json(
-        { error: 'Unauthorized' },
-        {
-          status: 401,
-          headers: { 'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}` },
-        },
-      );
+    if (scheme?.toLowerCase() !== 'bearer' || !token || rest.length > 0) {
+      return unauthorized(c);
     }
 
     const authData = await verifyToken(token, c);
@@ -97,13 +89,11 @@ export function mcpAuth(
   };
 }
 
-export async function mcpAuthClerk(c: Context, next: Next): Promise<Response | void> {
-  return mcpAuth(async (token, ctx) => {
-    const authData = getAuth(ctx, { acceptsToken: 'oauth_token' });
-    if (!authData.isAuthenticated) return undefined;
-    return verifyClerkToken(authData, token);
-  })(c, next);
-}
+export const mcpAuthClerk = mcpAuth(async (token, c) => {
+  const authData = getAuth(c, { acceptsToken: 'oauth_token' });
+  if (!authData.isAuthenticated) return undefined;
+  return verifyClerkToken(authData, token);
+});
 
 export function streamableHttpHandler(server: McpServer) {
   return async (c: Context) => {
@@ -112,25 +102,14 @@ export function streamableHttpHandler(server: McpServer) {
     });
     await server.connect(transport);
     const req = c.req.raw;
-    const accept = req.headers.get('accept') ?? '';
-    const needsAccept =
-      !accept.includes('application/json') || !accept.includes('text/event-stream');
-    const forwardedReq = needsAccept
-      ? new Request(req, {
-          headers: new Headers({
-            ...Object.fromEntries(req.headers.entries()),
-            accept: 'application/json, text/event-stream',
-          }),
-        })
-      : req;
     let response: Response;
     try {
-      response = await transport.handleRequest(forwardedReq, {
-        authInfo: c.get('mcpAuth') as AuthInfo | undefined,
+      response = await transport.handleRequest(req, {
+        authInfo: c.get('mcpAuth'),
       });
-    } catch (e) {
+    } catch (error) {
       await transport.close();
-      throw e;
+      throw error;
     }
 
     if (!response.body) {
@@ -155,4 +134,14 @@ function getResourceUrl(c: Context): string {
 function getPRMUrl(c: Context): string {
   const url = new URL(c.req.url);
   return `${url.origin}/.well-known/oauth-protected-resource${url.pathname}`;
+}
+
+function unauthorized(c: Context) {
+  return c.json(
+    { error: 'Unauthorized' },
+    {
+      status: 401,
+      headers: { 'WWW-Authenticate': `Bearer resource_metadata=${getPRMUrl(c)}` },
+    },
+  );
 }
