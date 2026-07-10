@@ -52,6 +52,10 @@ const initializeBody = JSON.stringify({
   },
 });
 
+function createMcpServer() {
+  return new McpServer({ name: 'test-server', version: '1.0.0' });
+}
+
 describe('protectedResourceHandler', () => {
   test('returns metadata with auth server URL and derived resource URL', async () => {
     const app = new Hono();
@@ -356,9 +360,8 @@ describe('mcpAuthClerk', () => {
 
 describe('streamableHttpHandler', () => {
   test('handles an MCP initialize request and returns 200', async () => {
-    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(server));
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
 
     const res = await app.request('http://localhost/mcp', {
       method: 'POST',
@@ -370,10 +373,9 @@ describe('streamableHttpHandler', () => {
     await res.text();
   });
 
-  test('handles sequential requests against the same server instance', async () => {
-    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+  test('handles sequential requests', async () => {
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(server));
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
 
     const opts = {
       method: 'POST',
@@ -382,7 +384,7 @@ describe('streamableHttpHandler', () => {
     };
 
     const res1 = await app.request('http://localhost/mcp', opts);
-    await res1.text(); // consume body so transport is released for next request
+    await res1.text();
     const res2 = await app.request('http://localhost/mcp', opts);
 
     expect(res1.status).toBe(200);
@@ -390,10 +392,10 @@ describe('streamableHttpHandler', () => {
     await res2.text();
   });
 
-  test('queues a new request until the previous response releases the server', async () => {
-    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+  test('does not block a new request on an unconsumed response', async () => {
+    const createServer = vi.fn(createMcpServer);
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(server));
+    app.post('/mcp', streamableHttpHandler(createServer));
 
     const opts = {
       method: 'POST',
@@ -402,12 +404,12 @@ describe('streamableHttpHandler', () => {
     };
 
     const res1 = await app.request('http://localhost/mcp', opts);
-    const res2Promise = app.request('http://localhost/mcp', opts);
-    await res1.text();
-    const res2 = await res2Promise;
+    const res2 = await app.request('http://localhost/mcp', opts);
 
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);
+    expect(createServer).toHaveBeenCalledTimes(2);
+    await res1.text();
     await res2.text();
   });
 
@@ -418,7 +420,6 @@ describe('streamableHttpHandler', () => {
       clientId: 'c1',
       extra: { userId: 'u1' },
     };
-    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
     const app = new Hono();
     app.post(
       '/mcp',
@@ -426,7 +427,7 @@ describe('streamableHttpHandler', () => {
         c.set('mcpAuth', authInfo);
         return next();
       },
-      streamableHttpHandler(server),
+      streamableHttpHandler(createMcpServer),
     );
 
     const res = await app.request('http://localhost/mcp', {
@@ -440,9 +441,8 @@ describe('streamableHttpHandler', () => {
   });
 
   test('returns SDK 406 response when POST Accept header is missing', async () => {
-    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(server));
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
 
     const res = await app.request('http://localhost/mcp', {
       method: 'POST',

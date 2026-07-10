@@ -95,23 +95,14 @@ export const mcpAuthClerk = mcpAuth(async (token, c) => {
   return verifyClerkToken(authData, token);
 });
 
-export function streamableHttpHandler(server: McpServer) {
-  let previousRequest = Promise.resolve();
-
+export function streamableHttpHandler(createServer: () => McpServer) {
   return async (c: Context) => {
-    const waitForPreviousRequest = previousRequest;
-    let releaseRequest!: () => void;
-    previousRequest = new Promise<void>((resolve) => {
-      releaseRequest = resolve;
-    });
-
-    await waitForPreviousRequest;
-
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
 
     try {
+      const server = createServer();
       await server.connect(transport);
       const response = await transport.handleRequest(c.req.raw, {
         authInfo: c.get('mcpAuth'),
@@ -119,31 +110,18 @@ export function streamableHttpHandler(server: McpServer) {
 
       if (!response.body) {
         await transport.close();
-        releaseRequest();
         return response;
       }
 
-      // Keep the server attached until the response is consumed, while making
-      // later requests wait for transport.close() to release the server.
       const { readable, writable } = new TransformStream();
       void response.body
         .pipeTo(writable)
-        .finally(async () => {
-          try {
-            await transport.close();
-          } finally {
-            releaseRequest();
-          }
-        })
+        .finally(() => transport.close())
         .catch(() => undefined);
 
       return new Response(readable, { status: response.status, headers: response.headers });
     } catch (error) {
-      try {
-        await transport.close();
-      } finally {
-        releaseRequest();
-      }
+      await transport.close().catch(() => undefined);
       throw error;
     }
   };

@@ -32,15 +32,17 @@ import {
 const app = new Hono();
 app.use('*', clerkMiddleware());
 
-const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-
-server.tool('get_user', 'Gets the current user', {}, async (_, { authInfo }) => ({
-  content: [{ type: 'text', text: JSON.stringify(authInfo) }],
-}));
+function createServer() {
+  const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+  server.tool('get_user', 'Gets the current user', {}, async (_, { authInfo }) => ({
+    content: [{ type: 'text', text: JSON.stringify(authInfo) }],
+  }));
+  return server;
+}
 
 app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(server));
+app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 
 export default app;
 ```
@@ -55,7 +57,9 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 const app = new Hono();
 
-const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+function createServer() {
+  return new McpServer({ name: 'my-server', version: '1.0.0' });
+}
 
 app.get(
   '/.well-known/oauth-protected-resource',
@@ -74,7 +78,7 @@ app.post(
       extra: { userId: user.id },
     };
   }),
-  streamableHttpHandler(server),
+  streamableHttpHandler(createServer),
 );
 
 export default app;
@@ -102,6 +106,6 @@ Same as `protectedResourceHandler`, but derives `authServerUrl` automatically fr
 
 Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`.
 
-### `streamableHttpHandler(server)`
+### `streamableHttpHandler(createServer)`
 
-Handler that connects an `McpServer` instance to a `WebStandardStreamableHTTPServerTransport` and processes the request. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server.
+Handler that creates an `McpServer` and `WebStandardStreamableHTTPServerTransport` for each request. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
