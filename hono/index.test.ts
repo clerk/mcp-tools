@@ -25,6 +25,7 @@ import { getAuth } from '@clerk/hono';
 import { env } from 'hono/adapter';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { generateClerkProtectedResourceMetadata } from '../server';
 
 import {
   protectedResourceHandler,
@@ -113,6 +114,22 @@ describe('protectedResourceHandlerClerk', () => {
     const json = await res.json();
     expect(json.authorization_servers).toEqual(['https://clerk.example.com']);
     expect(json.resource).toBe('http://myapp.com/');
+  });
+
+  test('works in edge runtimes without Node.js Buffer', () => {
+    const metadata = (() => {
+      vi.stubGlobal('Buffer', undefined);
+      try {
+        return generateClerkProtectedResourceMetadata({
+          publishableKey: FAKE_PK,
+          resourceUrl: 'https://mcp.example.com',
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    })();
+
+    expect(metadata.authorization_servers).toEqual(['https://clerk.example.com']);
   });
 
   test('reads CLERK_PUBLISHABLE_KEY through Hono adapter env', async () => {
@@ -350,6 +367,7 @@ describe('streamableHttpHandler', () => {
     });
 
     expect(res.status).toBe(200);
+    await res.text();
   });
 
   test('handles sequential requests against the same server instance', async () => {
@@ -369,6 +387,28 @@ describe('streamableHttpHandler', () => {
 
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);
+    await res2.text();
+  });
+
+  test('queues a new request until the previous response releases the server', async () => {
+    const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(server));
+
+    const opts = {
+      method: 'POST',
+      headers: mcpHeaders,
+      body: initializeBody,
+    };
+
+    const res1 = await app.request('http://localhost/mcp', opts);
+    const res2Promise = app.request('http://localhost/mcp', opts);
+    await res1.text();
+    const res2 = await res2Promise;
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    await res2.text();
   });
 
   test('forwards authInfo from context to the transport', async () => {
@@ -396,6 +436,7 @@ describe('streamableHttpHandler', () => {
     });
 
     expect(res.status).toBe(200);
+    await res.text();
   });
 
   test('returns SDK 406 response when POST Accept header is missing', async () => {

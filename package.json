@@ -22,6 +22,7 @@
   },
   "files": [
     "dist",
+    "hono/README.md",
     "README.md",
     "LICENSE"
   ],

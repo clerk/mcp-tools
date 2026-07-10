@@ -28,6 +28,7 @@ This library has tools for both of these parties, so step one is to be clear on 
 For detailed implementation guides and examples specific to your framework, see:
 
 - **[Express.js Integration](./express/README.md)** - Complete guide for building MCP servers with Express.js
+- **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono and edge runtimes
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
 
 ### Table of Contents
@@ -72,6 +73,7 @@ const result = generateClerkProtectedResourceMetadata({
 For framework-specific implementations of protected resource metadata handlers, see:
 
 - [Express.js implementation](./express/README.md#protected-resource-metadata)
+- [Hono implementation](./hono/README.md)
 - [Next.js implementation](./next/README.md#protectedresourcehandler)
 
 #### Authorization server metadata
@@ -124,6 +126,7 @@ const result = generateClerkAuthorizationServerMetadata();
 For framework-specific implementations, see:
 
 - [Express.js implementation](./express/README.md)
+- [Hono implementation](./hono/README.md)
 - [Next.js implementation](./next/README.md#authservermetadatahandlerclerk)
 
 #### Creating an MCP endpoint
@@ -131,6 +134,7 @@ For framework-specific implementations, see:
 To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters, since each framework has its own way of handling request and response objects, which are critical parts of implementing the MCP protocol:
 
 - **Express.js**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/express` - see [Express.js guide](./express/README.md#mcp-request-handler)
+- **Hono**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/hono` - see [Hono guide](./hono/README.md)
 - **Next.js**: Use Vercel's MCP adapter with Next.js route handlers - see [Next.js guide](./next/README.md#building-an-mcp-server)
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
@@ -670,6 +674,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 For detailed documentation on server utilities and framework-specific implementations, see:
 
 - [Express.js server guide](./express/README.md)
+- [Hono server guide](./hono/README.md)
 - [Next.js server guide](./next/README.md#building-an-mcp-server)
 
 #### Framework-Specific Utilities
@@ -677,4 +682,5 @@ For detailed documentation on server utilities and framework-specific implementa
 For framework-specific utilities and handlers, see:
 
 - **Express.js**: See [Express.js reference documentation](./express/README.md)
+- **Hono**: See [Hono reference documentation](./hono/README.md)
 - **Next.js**: See [Next.js reference documentation](./next/README.md)

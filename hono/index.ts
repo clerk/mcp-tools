@@ -96,32 +96,56 @@ export const mcpAuthClerk = mcpAuth(async (token, c) => {
 });
 
 export function streamableHttpHandler(server: McpServer) {
+  let previousRequest = Promise.resolve();
+
   return async (c: Context) => {
+    const waitForPreviousRequest = previousRequest;
+    let releaseRequest!: () => void;
+    previousRequest = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+
+    await waitForPreviousRequest;
+
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
-    await server.connect(transport);
-    const req = c.req.raw;
-    let response: Response;
+
     try {
-      response = await transport.handleRequest(req, {
+      await server.connect(transport);
+      const response = await transport.handleRequest(c.req.raw, {
         authInfo: c.get('mcpAuth'),
       });
+
+      if (!response.body) {
+        await transport.close();
+        releaseRequest();
+        return response;
+      }
+
+      // Keep the server attached until the response is consumed, while making
+      // later requests wait for transport.close() to release the server.
+      const { readable, writable } = new TransformStream();
+      void response.body
+        .pipeTo(writable)
+        .finally(async () => {
+          try {
+            await transport.close();
+          } finally {
+            releaseRequest();
+          }
+        })
+        .catch(() => undefined);
+
+      return new Response(readable, { status: response.status, headers: response.headers });
     } catch (error) {
-      await transport.close();
+      try {
+        await transport.close();
+      } finally {
+        releaseRequest();
+      }
       throw error;
     }
-
-    if (!response.body) {
-      await transport.close();
-      return response;
-    }
-
-    // Pipe the body through a TransformStream so transport.close() is called
-    // only after the response stream is fully consumed, not before.
-    const { readable, writable } = new TransformStream();
-    response.body.pipeTo(writable).finally(() => transport.close());
-    return new Response(readable, { status: response.status, headers: response.headers });
   };
 }
 
