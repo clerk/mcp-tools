@@ -6,6 +6,7 @@ export default defineConfig({
     'server.ts',
     'next/index.ts',
     'express/index.ts',
+    'hono/index.ts',
     'stores/fs.ts',
     'stores/redis.ts',
     'stores/postgres.ts',
@@ -23,6 +24,8 @@ export default defineConfig({
       '@clerk/express',
       '@clerk/nextjs',
       'express',
+      'hono',
+      '@clerk/hono',
     ],
   },
 });

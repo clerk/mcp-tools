@@ -1,4 +1,4 @@
-import { MachineAuthObject } from '@clerk/backend';
+import type { MachineAuthObject } from '@clerk/backend';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 /**
@@ -75,7 +75,9 @@ export function generateClerkProtectedResourceMetadata({
 
 function deriveFapiUrl(publishableKey: string) {
   const key = publishableKey.replace(/^pk_(test|live)_/, '');
-  const decoded = Buffer.from(key, 'base64').toString('utf8');
+  const normalizedKey = key.replace(/-/g, '+').replace(/_/g, '/');
+  const paddedKey = normalizedKey.padEnd(Math.ceil(normalizedKey.length / 4) * 4, '=');
+  const decoded = atob(paddedKey);
   return `https://${decoded.replace(/\$/, '')}`;
 }
 
