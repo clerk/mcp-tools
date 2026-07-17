@@ -6,8 +6,46 @@ on:
   pull_request:
     branches:
       - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
 
 jobs:
+  changeset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100
+
+      - name: Fetch main branch for changeset comparison
+        run: git fetch origin main:refs/remotes/origin/main --depth=100
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Require Changeset
+        if: ${{ github.event.pull_request.draft == false }}
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [[
+            "$PR_AUTHOR" = "clerk-cookie" ||
+            "$PR_AUTHOR" = "renovate[bot]" ||
+            "$PR_AUTHOR" = "dependabot[bot]"
+          ]]; then
+            echo 'Skipping changeset check for bot PR';
+            exit 0;
+          fi
+
+          pnpm changeset status --since=origin/main
+
   lint:
     runs-on: ubuntu-latest
     steps:
