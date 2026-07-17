@@ -6,6 +6,11 @@ on:
   pull_request:
     branches:
       - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
 
 jobs:
   changeset:
@@ -28,7 +33,12 @@ jobs:
       - name: Require Changeset
         if: ${{ github.event.pull_request.draft == false }}
         run: |
-          if [[ "${{ github.event.pull_request.user.login }}" = "clerk-cookie" || "${{ github.event.pull_request.user.login }}" = "renovate[bot]" ]]; then
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          if [[
+            "$PR_AUTHOR" = "clerk-cookie" ||
+            "$PR_AUTHOR" = "renovate[bot]" ||
+            "$PR_AUTHOR" = "dependabot[bot]"
+          ]]; then
             echo 'Skipping changeset check for bot PR';
             exit 0;
           fi
