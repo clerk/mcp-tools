@@ -72,19 +72,24 @@
   },
   "scripts": {
     "build": "tsdown",
+    "changeset": "changeset",
+    "changeset:empty": "pnpm changeset --empty",
     "prepublishOnly": "npm run build",
+    "release": "changeset publish && git push --follow-tags",
     "watch": "tsdown --watch",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "version-packages": "changeset version && pnpm install --lockfile-only --engine-strict=false"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.4",
     "@clerk/backend": "^3.2.13",
     "@clerk/express": "^2.1.5",
     "@clerk/hono": "^0.1.15",
