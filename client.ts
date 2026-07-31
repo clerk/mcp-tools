@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { OAuthClientProvider, OAuthClientInformationFull } from '@modelcontextprotocol/client';
 
 const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';

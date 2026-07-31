@@ -1,5 +1,5 @@
 import type { MachineAuthObject } from '@clerk/backend';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 
 /**
  * Generates protected resource metadata for the given auth server url and
@@ -100,7 +100,7 @@ export async function fetchClerkAuthorizationServerMetadata({
  * as `authData to the MCP SDK.
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
  * @param token - The token to verify
- * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
+ * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/server";`
  */
 export function verifyClerkToken(
   auth: MachineAuthObject<'oauth_token'>,

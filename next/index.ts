@@ -1,3 +1,5 @@
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import type { AuthInfo, McpServerFactory } from '@modelcontextprotocol/server';
 import type { NextRequest } from 'next/server';
 import { type McpClientStore, completeAuthWithCode } from '../client';
 import {
@@ -144,6 +146,87 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
       headers: corsHeaders,
     });
   };
+}
+
+/**
+ * A Next.js route handler that will handle MCP requests using the streamable
+ * http transport, given a factory that returns an MCP server object from the
+ * MCP SDK. The factory is called once per request — v2 transports are
+ * per-request and stateless.
+ *
+ * If a `verifyToken` function is provided, requests must carry a valid
+ * `Authorization: Bearer <token>` header; the resulting auth info is passed
+ * through to the MCP server handlers.
+ * @param createServer - A factory returning a fresh MCP server object
+ * @example
+ * ```ts
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
+ *
+ *   // define server tools, resources, etc...
+ *
+ *   return server;
+ * }
+ *
+ * const handler = streamableHttpHandler(createServer, {
+ *   verifyToken: async (token) => {
+ *     const authData = await auth({ acceptsToken: "oauth_token" });
+ *     if (!authData.isAuthenticated) return undefined;
+ *     return verifyClerkToken(authData, token);
+ *   },
+ * });
+ *
+ * export { handler as GET, handler as POST };
+ * ```
+ */
+export function streamableHttpHandler(
+  createServer: McpServerFactory,
+  options?: {
+    verifyToken?: (token: string, req: Request) => Promise<AuthInfo | undefined>;
+  },
+): (req: Request) => Promise<Response> {
+  const handler = createMcpHandler(createServer);
+  const verifyToken = options?.verifyToken;
+
+  return async (req: Request): Promise<Response> => {
+    if (!verifyToken) return handler.fetch(req);
+
+    const authHeader = req.headers.get('authorization');
+
+    if (!authHeader) {
+      return unauthorized(req);
+    }
+
+    const [scheme, token, ...rest] = authHeader.trim().split(/\s+/);
+
+    if (scheme?.toLowerCase() !== 'bearer' || !token || rest.length > 0) {
+      return unauthorized(req);
+    }
+
+    const authInfo = await verifyToken(token, req);
+
+    if (!authInfo) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    return handler.fetch(req, { authInfo });
+  };
+}
+
+function unauthorized(req: Request) {
+  const url = new URL(req.url);
+  return Response.json(
+    { error: 'Unauthorized' },
+    {
+      status: 401,
+      headers: {
+        'WWW-Authenticate': `Bearer resource_metadata=${url.origin}/.well-known/oauth-protected-resource${url.pathname}`,
+      },
+    },
+  );
 }
 
 // re-export the verifyClerkToken function for convenience

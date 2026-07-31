@@ -7,7 +7,7 @@ Next.js utilities for building both MCP servers and clients with authentication 
 Make sure you have the required dependencies installed:
 
 ```bash
-npm install @clerk/mcp-tools mcp-adapter next
+npm install @clerk/mcp-tools @modelcontextprotocol/server next
 ```
 
 If you're using Clerk for authentication, also install the Clerk Next.js SDK:
@@ -39,20 +39,23 @@ export { handler as GET };
 
 ```ts
 // app/mcp/route.ts
-import { verifyClerkToken } from '@clerk/mcp-tools/next';
+import { streamableHttpHandler, verifyClerkToken } from '@clerk/mcp-tools/next';
 import { auth, clerkClient } from '@clerk/nextjs/server';
-import { createMcpHandler, experimental_withMcpAuth as withMcpAuth } from 'mcp-adapter';
+import { McpServer } from '@modelcontextprotocol/server';
 
 const clerk = await clerkClient();
 
-const handler = createMcpHandler((server) => {
-  server.tool(
+// The factory is called once per request — v2 transports are per-request
+// and stateless, so each request gets a fresh server instance.
+function createServer() {
+  const server = new McpServer({ name: 'clerk-mcp-server', version: '1.0.0' });
+
+  server.registerTool(
     'get-clerk-user-data',
-    'Gets data about the Clerk user that authorized this request',
-    {}, // tool parameters here if present
-    async (_, { authInfo }) => {
-      // non-null assertion is safe here, authHandler ensures presence
-      const userId = authInfo!.extra!.userId! as string;
+    { description: 'Gets data about the Clerk user that authorized this request' },
+    async (_args, ctx) => {
+      // non-null assertion is safe here, verifyToken ensures presence
+      const userId = ctx.http!.authInfo!.extra!.userId! as string;
       const userData = await clerk.users.getUser(userId);
 
       return {
@@ -60,11 +63,12 @@ const handler = createMcpHandler((server) => {
       };
     },
   );
-});
 
-const authHandler = withMcpAuth(
-  handler,
-  async (_, token) => {
+  return server;
+}
+
+const handler = streamableHttpHandler(createServer, {
+  verifyToken: async (token) => {
     const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
     // Note: OAuth tokens are machine tokens. Machine token usage is free
     // during our public beta period but will be subject to pricing once
@@ -72,16 +76,12 @@ const authHandler = withMcpAuth(
     // market averages.
     return verifyClerkToken(clerkAuth, token);
   },
-  {
-    required: true,
-    resourceMetadataPath: '/.well-known/oauth-protected-resource/mcp',
-  },
-);
+});
 
-export { authHandler as GET, authHandler as POST };
+export { handler as GET, handler as POST };
 ```
 
-**Note**: This implementation uses Vercel's `mcp-adapter` which is specifically designed for Next.js applications and provides seamless integration with Clerk authentication.
+**Note**: Servers built with `streamableHttpHandler` answer both the modern `server/discover` handshake and the legacy `initialize` handshake, so existing MCP clients keep working.
 
 ### Building an MCP Client
 

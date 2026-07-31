@@ -1,5 +1,8 @@
 import { Hono } from 'hono';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 
 vi.mock('../server', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server')>();
@@ -19,12 +22,8 @@ vi.mock('@clerk/hono', () => ({
 vi.mock('hono/adapter', () => ({
   env: vi.fn(() => process.env),
 }));
-
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { getAuth } from '@clerk/hono';
 import { env } from 'hono/adapter';
-
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { generateClerkProtectedResourceMetadata } from '../server';
 
 import {
@@ -457,3 +456,97 @@ describe('streamableHttpHandler', () => {
     );
   });
 });
+
+describe('backward-compat handshake', () => {
+  test('answers the legacy initialize handshake with an InitializeResult', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: mcpHeaders,
+      body: initializeBody,
+    });
+
+    expect(res.status).toBe(200);
+    const message = await readJsonRpcMessage(res);
+    expect(message.result.protocolVersion).toBeDefined();
+    expect(message.result.serverInfo.name).toBe('test-server');
+  });
+
+  test('answers the modern server/discover handshake with a DiscoverResult', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: {
+        ...mcpHeaders,
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'server/discover',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'server/discover',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientInfo': { name: 'test-client', version: '1.0.0' },
+            'io.modelcontextprotocol/clientCapabilities': {},
+          },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const message = await readJsonRpcMessage(res);
+    expect(message.result.supportedVersions).toContain('2026-07-28');
+    expect(message.result.capabilities).toBeDefined();
+  });
+
+  test('a v2 client connects and calls a tool end to end', async () => {
+    const app = new Hono();
+    app.all(
+      '/mcp',
+      streamableHttpHandler(() => {
+        const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+        server.registerTool('ping', { description: 'responds with pong' }, async () => ({
+          content: [{ type: 'text', text: 'pong' }],
+        }));
+        return server;
+      }),
+    );
+
+    const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
+      fetch: async (input, init) => app.request(String(input), init),
+    });
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+
+    await client.connect(transport);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.map((t) => t.name)).toContain('ping');
+
+      const result = await client.callTool({ name: 'ping', arguments: {} });
+      expect(result.content).toEqual([{ type: 'text', text: 'pong' }]);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+// The legacy leg answers over SSE while the modern leg answers with a plain
+// JSON body — normalize both to the contained JSON-RPC message.
+async function readJsonRpcMessage(res: Response) {
+  const contentType = res.headers.get('content-type') ?? '';
+  const text = await res.text();
+
+  if (contentType.includes('text/event-stream')) {
+    const dataLine = text.split('\n').find((line) => line.startsWith('data: '));
+    if (!dataLine) throw new Error(`No data line in SSE response: ${text}`);
+    return JSON.parse(dataLine.slice('data: '.length));
+  }
+
+  return JSON.parse(text);
+}

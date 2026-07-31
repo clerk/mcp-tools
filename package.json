@@ -86,7 +86,9 @@
     "version-packages": "changeset version && pnpm install --lockfile-only --engine-strict=false"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.4",

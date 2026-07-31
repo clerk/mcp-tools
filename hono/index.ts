@@ -1,7 +1,6 @@
 import { getAuth } from '@clerk/hono';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import type { AuthInfo, McpServerFactory } from '@modelcontextprotocol/server';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
@@ -95,35 +94,11 @@ export const mcpAuthClerk = mcpAuth(async (token, c) => {
   return verifyClerkToken(authData, token);
 });
 
-export function streamableHttpHandler(createServer: () => McpServer) {
-  return async (c: Context) => {
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+export function streamableHttpHandler(createServer: McpServerFactory) {
+  const handler = createMcpHandler(createServer);
 
-    try {
-      const server = createServer();
-      await server.connect(transport);
-      const response = await transport.handleRequest(c.req.raw, {
-        authInfo: c.get('mcpAuth'),
-      });
-
-      if (!response.body) {
-        await transport.close();
-        return response;
-      }
-
-      const { readable, writable } = new TransformStream();
-      void response.body
-        .pipeTo(writable)
-        .finally(() => transport.close())
-        .catch(() => undefined);
-
-      return new Response(readable, { status: response.status, headers: response.headers });
-    } catch (error) {
-      await transport.close().catch(() => undefined);
-      throw error;
-    }
+  return (c: Context) => {
+    return handler.fetch(c.req.raw, { authInfo: c.get('mcpAuth') });
   };
 }
 

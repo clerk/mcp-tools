@@ -1,7 +1,7 @@
 import { getAuth } from '@clerk/express';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import type { AuthInfo, McpServerFactory } from '@modelcontextprotocol/server';
 import type express from 'express';
 import {
   fetchClerkAuthorizationServerMetadata,
@@ -16,19 +16,23 @@ import {
  * auth data or false
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
  *
- * // define server tools, resources, etc...
+ *   // define server tools, resources, etc...
+ *
+ *   return server;
+ * }
  *
  * async function verifyToken(token, req) {
  *   const authData = // verify the token and return the auth data
  *   return authData;
  * }
  *
- * app.get("/mcp", mcpAuth(verifyToken), streamableHttpHandler(server));
+ * app.post("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuth(
@@ -74,14 +78,18 @@ export async function mcpAuth(
  * Express middleware that enforces authentication for MCP requests and automatically verifies the OAuth access token using Clerk.
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
  *
- * // define server tools, resources, etc...
+ *   // define server tools, resources, etc...
  *
- * app.get("/mcp", mcpAuthClerk, streamableHttpHandler(server));
+ *   return server;
+ * }
+ *
+ * app.post("/mcp", mcpAuthClerk, streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuthClerk(
@@ -195,28 +203,30 @@ function getPRMUrl(req: express.Request) {
 
 /**
  * An express handler that will handle MCP requests using the streamable http
- * transport, given an MCP server object from the MCP SDK.
- * @param server - The MCP server object from the MCP SDK
+ * transport, given a factory that returns an MCP server object from the MCP
+ * SDK. The factory is called once per request — v2 transports are
+ * per-request and stateless.
+ * @param createServer - A factory returning a fresh MCP server object
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
  *
- * // define server tools, resources, etc...
+ *   // define server tools, resources, etc...
  *
- * app.get("/mcp", streamableHttpHandler(server));
+ *   return server;
+ * }
+ *
+ * app.post("/mcp", streamableHttpHandler(createServer));
  * ```
  */
-export function streamableHttpHandler(server: McpServer) {
+export function streamableHttpHandler(createServer: McpServerFactory) {
+  const handler = toNodeHandler(createMcpHandler(createServer));
+
   return async (req: express.Request, res: express.Response) => {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-
-    await server.connect(transport);
-
-    await transport.handleRequest(req, res, req.body);
+    await handler(req, res, req.body);
   };
 }
