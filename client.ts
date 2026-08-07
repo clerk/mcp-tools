@@ -27,6 +27,7 @@ export interface McpClientStore {
 export async function completeAuthWithCode({
   state,
   code,
+  iss,
   store,
 }: {
   /**
@@ -39,6 +40,13 @@ export async function completeAuthWithCode({
    * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.1
    */
   state: string;
+  /**
+   * The issuer identifier returned from the auth provider via querystring, if
+   * present. Validated against the recorded issuer before the code is
+   * redeemed, defending against authorization server mix-up attacks.
+   * @see https://datatracker.ietf.org/doc/html/rfc9207
+   */
+  iss?: string;
   /**
    * A persistent store for auth data
    * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
@@ -57,7 +65,7 @@ export async function completeAuthWithCode({
     state,
   });
 
-  await transport.finishAuth(code);
+  await transport.finishAuth(code, iss);
 
   // Read the updated client data AFTER finishAuth (which saves tokens)
   const updatedClientData = await getClientData(sessionId, store);

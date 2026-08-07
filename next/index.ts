@@ -28,6 +28,7 @@ export function completeOAuthHandler({
     const qs = req.nextUrl.searchParams;
     const code = qs.get('code');
     const state = qs.get('state');
+    const iss = qs.get('iss') ?? undefined;
 
     if (!state) {
       return Response.json({ error: 'State missing' }, { status: 400 });
@@ -37,8 +38,9 @@ export function completeOAuthHandler({
       return Response.json({ error: 'Authorization code missing' }, { status: 400 });
     }
 
-    // this function will run the state param check internally
-    const res = await completeAuthWithCode({ state, code, store });
+    // this function will run the state param check internally; iss, when
+    // present, is validated against the recorded issuer (RFC 9207)
+    const res = await completeAuthWithCode({ state, code, iss, store });
 
     return callback(res);
   };

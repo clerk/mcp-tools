@@ -13,5 +13,6 @@ Migrate from the monolithic `@modelcontextprotocol/sdk` 1.x to the stable v2 pac
 
 - `streamableHttpHandler` for Next.js (`@clerk/mcp-tools/next`) with an optional `verifyToken` hook — no more dependency on the external `mcp-adapter` package.
 - Servers built with any adapter answer both the modern `server/discover` handshake (protocol revision 2026-07-28) and the legacy `initialize` handshake via the v2 SDK's built-in stateless legacy fallback.
+- `completeAuthWithCode` accepts an optional `iss` parameter, validated against the recorded issuer before the authorization code is redeemed (RFC 9207 mix-up defense, per the 2026-07-28 spec). The Next.js `completeOAuthHandler` reads `iss` from the callback querystring automatically.
 
 The OAuth session stores (fs/redis/postgres/sqlite) are unchanged: they hold application-level OAuth state (PKCE verifiers, tokens), not protocol sessions.

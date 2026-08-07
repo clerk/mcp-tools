@@ -45,13 +45,13 @@ vi.mock('pg', () => ({
 }));
 
 import { completeAuthWithCode, createDynamicallyRegisteredMcpClient } from './client';
-import type { McpClientStore } from './client';
+import type { JsonSerializable, McpClientStore } from './client';
 
 const BASE_URL = 'http://localhost:39999';
 
 // A minimal OAuth authorization server + protected MCP endpoint, served
 // through a global fetch stub so the SDK's own auth machinery drives the flow.
-function mockOAuthServer() {
+function mockOAuthServer({ advertiseIss = false }: { advertiseIss?: boolean } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
 
@@ -81,6 +81,7 @@ function mockOAuthServer() {
         grant_types_supported: ['authorization_code', 'refresh_token'],
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+        ...(advertiseIss ? { authorization_response_iss_parameter_supported: true } : {}),
       });
     }
 
@@ -201,5 +202,81 @@ describe.each(storeCases)('OAuth redirect flow with $name store', ({ createStore
     expect(session.accessToken).toBe('access_token_123');
     expect(session.refreshToken).toBe('refresh_token_456');
     expect(session.authComplete).toBe(true);
+  });
+});
+
+describe('authorization response iss validation (RFC 9207)', () => {
+  function memoryStore(): McpClientStore {
+    const data = new Map<string, JsonSerializable>();
+    return {
+      read: async (key) => data.get(key) ?? null,
+      write: async (key, value) => {
+        data.set(key, value);
+      },
+    };
+  }
+
+  async function startAuthFlow(store: McpClientStore) {
+    let redirectUrl: string | undefined;
+
+    const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
+      mcpEndpoint: `${BASE_URL}/mcp`,
+      oauthRedirectUrl: `${BASE_URL}/callback`,
+      mcpClientName: 'test-client',
+      mcpClientVersion: '1.0.0',
+      redirect: (url) => {
+        redirectUrl = url;
+      },
+      store,
+    });
+
+    await Promise.resolve(connect()).catch(() => undefined);
+    const state = new URL(redirectUrl!).searchParams.get('state')!;
+    return { state, sessionId };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test('accepts a matching iss and completes the exchange', async () => {
+    vi.stubGlobal('fetch', mockOAuthServer({ advertiseIss: true }));
+    const store = memoryStore();
+    const { state, sessionId } = await startAuthFlow(store);
+
+    await completeAuthWithCode({ state, code: randomUUID(), iss: BASE_URL, store });
+
+    const session = (await store.read(`session_${sessionId}`)) as Record<string, unknown>;
+    expect(session.accessToken).toBe('access_token_123');
+    expect(session.authComplete).toBe(true);
+  });
+
+  test('rejects a mismatched iss without redeeming the code', async () => {
+    const fetchMock = mockOAuthServer({ advertiseIss: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const store = memoryStore();
+    const { state, sessionId } = await startAuthFlow(store);
+
+    await expect(
+      completeAuthWithCode({ state, code: randomUUID(), iss: 'https://attacker.example', store }),
+    ).rejects.toThrow(/Issuer mismatch/);
+
+    const tokenCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input instanceof Request ? input.url : input).includes('/token'),
+    );
+    expect(tokenCalls).toHaveLength(0);
+
+    const session = (await store.read(`session_${sessionId}`)) as Record<string, unknown>;
+    expect(session.accessToken).toBeUndefined();
+  });
+
+  test('rejects an omitted iss when the server advertises iss support', async () => {
+    vi.stubGlobal('fetch', mockOAuthServer({ advertiseIss: true }));
+    const store = memoryStore();
+    const { state } = await startAuthFlow(store);
+
+    await expect(completeAuthWithCode({ state, code: randomUUID(), store })).rejects.toThrow(
+      /Issuer mismatch/,
+    );
   });
 });
