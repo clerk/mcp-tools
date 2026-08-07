@@ -7,7 +7,7 @@ Express.js utilities for building MCP servers with authentication support. These
 Make sure you have the required dependencies installed:
 
 ```bash
-npm install @clerk/mcp-tools express @modelcontextprotocol/sdk
+npm install @clerk/mcp-tools express @modelcontextprotocol/server
 ```
 
 If you're using Clerk for authentication, also install the Clerk express SDK:
@@ -25,8 +25,8 @@ Here's a complete example using Clerk for authentication:
 ```ts
 import 'dotenv/config';
 import express from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createClerkClient, MachineAuthObject, clerkMiddleware } from '@clerk/express';
+import { McpServer } from '@modelcontextprotocol/server';
+import { createClerkClient, clerkMiddleware } from '@clerk/express';
 import {
   mcpAuthClerk,
   protectedResourceHandlerClerk,
@@ -38,32 +38,37 @@ const app = express();
 app.use(clerkMiddleware());
 app.use(express.json());
 
-const server = new McpServer({
-  name: 'clerk-mcp-server',
-  version: '1.0.0',
-});
-
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY! });
 
-server.tool(
-  'get_clerk_user_data',
-  'Gets data about the Clerk user that authorized this request',
-  {},
-  async (_, { authInfo }) => {
-    const clerkAuthInfo = authInfo as unknown as MachineAuthObject<'oauth_token'>;
+// The factory is called once per request — v2 transports are per-request
+// and stateless, so each request gets a fresh server instance.
+function createServer() {
+  const server = new McpServer({
+    name: 'clerk-mcp-server',
+    version: '1.0.0',
+  });
 
-    if (!clerkAuthInfo?.userId) {
+  server.registerTool(
+    'get_clerk_user_data',
+    { description: 'Gets data about the Clerk user that authorized this request' },
+    async (_args, ctx) => {
+      const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
+
+      if (!userId) {
+        return {
+          content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        };
+      }
+
+      const user = await clerk.users.getUser(userId);
       return {
-        content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        content: [{ type: 'text', text: JSON.stringify(user) }],
       };
-    }
+    },
+  );
 
-    const user = await clerk.users.getUser(clerkAuthInfo.userId);
-    return {
-      content: [{ type: 'text', text: JSON.stringify(user) }],
-    };
-  },
-);
+  return server;
+}
 
 app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
 app.get(
@@ -73,7 +78,7 @@ app.get(
   }),
 );
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(server));
+app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -86,16 +91,11 @@ Here's an example using custom JWT authentication:
 import 'dotenv/config';
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 const app = express();
 app.use(express.json());
-
-const server = new McpServer({
-  name: 'custom-auth-server',
-  version: '1.0.0',
-});
 
 // Custom token verification
 async function verifyToken(token: string, req: express.Request) {
@@ -107,28 +107,36 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-server.tool(
-  'get_user_data',
-  'Gets data about the authenticated user',
-  {},
-  async (_, { authInfo }) => {
-    const { userId } = authInfo as any;
+function createServer() {
+  const server = new McpServer({
+    name: 'custom-auth-server',
+    version: '1.0.0',
+  });
 
-    if (!userId) {
+  server.registerTool(
+    'get_user_data',
+    { description: 'Gets data about the authenticated user' },
+    async (_args, ctx) => {
+      const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
+
+      if (!userId) {
+        return {
+          content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        };
+      }
+
+      // Pseudo-code: Replace with your actual user data fetching logic
+      // This could be a database query, API call, etc. depending on your auth provider
+      const user = await fetchUserFromDatabase(userId);
+
       return {
-        content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        content: [{ type: 'text', text: JSON.stringify(user) }],
       };
-    }
+    },
+  );
 
-    // Pseudo-code: Replace with your actual user data fetching logic
-    // This could be a database query, API call, etc. depending on your auth provider
-    const user = await fetchUserFromDatabase(userId);
-
-    return {
-      content: [{ type: 'text', text: JSON.stringify(user) }],
-    };
-  },
-);
+  return server;
+}
 
 // Protected resource metadata for your custom auth system
 app.get(
@@ -138,7 +146,7 @@ app.get(
   }),
 );
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(server));
+app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -168,7 +176,7 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(server));
+app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
 ```
 
 The middleware will:
@@ -189,7 +197,7 @@ Pre-configured authentication middleware for Clerk that automatically handles OA
 import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 // No additional configuration needed - uses Clerk's built-in token verification
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(server));
+app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 ```
 
 This middleware automatically:
@@ -262,52 +270,52 @@ app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerCler
 
 ### `streamableHttpHandler`
 
-Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK.
+Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. Servers built with it answer both the modern `server/discover` handshake and the legacy `initialize` handshake.
 
 **Parameters:**
 
-- `server: McpServer` - The MCP server instance from the MCP SDK
+- `createServer: McpServerFactory` - A factory returning a fresh MCP server instance, called once per request (v2 transports are per-request and stateless)
 
 **Example:**
 
 ```ts
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { streamableHttpHandler } from '@clerk/mcp-tools/express';
 
-const server = new McpServer({
-  name: 'my-server',
-  version: '1.0.0',
-});
+function createServer() {
+  const server = new McpServer({
+    name: 'my-server',
+    version: '1.0.0',
+  });
 
-// Configure your server with tools, resources, etc.
-server.setRequestHandler('tools/list', async () => {
-  // Your tools implementation
-});
+  // Configure your server with tools, resources, etc.
 
-app.post('/mcp', streamableHttpHandler(server));
+  return server;
+}
+
+app.post('/mcp', streamableHttpHandler(createServer));
 ```
 
 ## Accessing Authentication Data in Tools
 
-When using the authentication middleware, the auth data is automatically passed to your MCP tools through the `authInfo` parameter in the tool handler:
+When using the authentication middleware, the auth data is automatically passed to your MCP tools through `ctx.http.authInfo` in the tool handler:
 
 ```ts
-server.tool(
+server.registerTool(
   'authenticated_tool',
-  'A tool that needs user authentication',
-  { type: 'object', properties: {} },
-  async (args, { authInfo }) => {
-    // For Clerk authentication
-    const clerkAuthInfo = authInfo as unknown as MachineAuthObject<'oauth_token'>;
+  { description: 'A tool that needs user authentication' },
+  async (_args, ctx) => {
+    // For Clerk authentication, verifyClerkToken stores the user id in extra
+    const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
 
-    if (!clerkAuthInfo?.userId) {
+    if (!userId) {
       return {
         content: [{ type: 'text', text: 'Authentication required' }],
       };
     }
 
     // Use the user ID to fetch data or perform authenticated operations
-    const user = await clerk.users.getUser(clerkAuthInfo.userId);
+    const user = await clerk.users.getUser(userId);
 
     return {
       content: [{ type: 'text', text: `Hello, ${user.firstName}!` }],
@@ -324,13 +332,12 @@ async function verifyToken(token: string, req: express.Request) {
   return { userId: decoded.sub, email: decoded.email, scopes: decoded.scope };
 }
 
-server.tool(
+server.registerTool(
   'custom_auth_tool',
-  'Tool using custom auth',
-  { type: 'object', properties: {} },
-  async (args, { authInfo }) => {
-    // authInfo contains whatever your verifyToken function returned
-    const { userId, email, scopes } = authInfo as any;
+  { description: 'Tool using custom auth' },
+  async (_args, ctx) => {
+    // ctx.http.authInfo contains whatever your verifyToken function returned
+    const { userId, email, scopes } = ctx.http?.authInfo as any;
 
     return {
       content: [{ type: 'text', text: `User: ${email}, ID: ${userId}` }],
@@ -377,6 +384,6 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 app.post(
   '/mcp',
   mcpAuthClerk, // MCP authentication
-  streamableHttpHandler(server), // MCP request handling
+  streamableHttpHandler(createServer), // MCP request handling
 );
 ```

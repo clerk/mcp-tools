@@ -1,5 +1,8 @@
 import { Hono } from 'hono';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 
 vi.mock('../server', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server')>();
@@ -19,13 +22,17 @@ vi.mock('@clerk/hono', () => ({
 vi.mock('hono/adapter', () => ({
   env: vi.fn(() => process.env),
 }));
-
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { getAuth } from '@clerk/hono';
 import { env } from 'hono/adapter';
-
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { generateClerkProtectedResourceMetadata } from '../server';
+import {
+  createMcpServer,
+  discoverBody,
+  discoverHeaders,
+  initializeBody,
+  mcpHeaders,
+  readJsonRpcMessage,
+} from '../test-helpers';
 
 import {
   protectedResourceHandler,
@@ -37,24 +44,6 @@ import {
 } from './index';
 
 const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
-const mcpHeaders = {
-  'Content-Type': 'application/json',
-  Accept: 'application/json, text/event-stream',
-};
-const initializeBody = JSON.stringify({
-  jsonrpc: '2.0',
-  id: 1,
-  method: 'initialize',
-  params: {
-    protocolVersion: '2024-11-05',
-    capabilities: {},
-    clientInfo: { name: 'test-client', version: '1.0.0' },
-  },
-});
-
-function createMcpServer() {
-  return new McpServer({ name: 'test-server', version: '1.0.0' });
-}
 
 describe('protectedResourceHandler', () => {
   test('returns metadata with auth server URL and derived resource URL', async () => {
@@ -455,5 +444,69 @@ describe('streamableHttpHandler', () => {
     expect(json.error.message).toContain(
       'Client must accept both application/json and text/event-stream',
     );
+  });
+});
+
+describe('backward-compat handshake', () => {
+  test('answers the legacy initialize handshake with an InitializeResult', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: mcpHeaders,
+      body: initializeBody,
+    });
+
+    expect(res.status).toBe(200);
+    const message = await readJsonRpcMessage(res);
+    expect(message.result.protocolVersion).toBeDefined();
+    expect(message.result.serverInfo.name).toBe('test-server');
+  });
+
+  test('answers the modern server/discover handshake with a DiscoverResult', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { ...mcpHeaders, ...discoverHeaders },
+      body: discoverBody,
+    });
+
+    expect(res.status).toBe(200);
+    const message = await readJsonRpcMessage(res);
+    expect(message.result.supportedVersions).toContain('2026-07-28');
+    expect(message.result.capabilities).toBeDefined();
+  });
+
+  test('a v2 client connects and calls a tool end to end', async () => {
+    const app = new Hono();
+    app.all(
+      '/mcp',
+      streamableHttpHandler(() => {
+        const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+        server.registerTool('ping', { description: 'responds with pong' }, async () => ({
+          content: [{ type: 'text', text: 'pong' }],
+        }));
+        return server;
+      }),
+    );
+
+    const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
+      fetch: async (input, init) => app.request(String(input), init),
+    });
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+
+    await client.connect(transport);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.map((t) => t.name)).toContain('ping');
+
+      const result = await client.callTool({ name: 'ping', arguments: {} });
+      expect(result.content).toEqual([{ type: 'text', text: 'pong' }]);
+    } finally {
+      await client.close();
+    }
   });
 });

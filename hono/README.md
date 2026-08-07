@@ -5,7 +5,7 @@ Hono utilities for building MCP servers with authentication support.
 ## Installation
 
 ```bash
-npm install @clerk/mcp-tools hono @modelcontextprotocol/sdk
+npm install @clerk/mcp-tools hono @modelcontextprotocol/server
 ```
 
 If you're using Clerk for authentication, also install:
@@ -20,7 +20,7 @@ npm install @clerk/hono
 
 ```ts
 import { Hono } from 'hono';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { clerkMiddleware } from '@clerk/hono';
 import {
   mcpAuthClerk,
@@ -34,8 +34,8 @@ app.use('*', clerkMiddleware());
 
 function createServer() {
   const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-  server.tool('get_user', 'Gets the current user', {}, async (_, { authInfo }) => ({
-    content: [{ type: 'text', text: JSON.stringify(authInfo) }],
+  server.registerTool('get_user', { description: 'Gets the current user' }, async (_args, ctx) => ({
+    content: [{ type: 'text', text: JSON.stringify(ctx.http?.authInfo) }],
   }));
   return server;
 }
@@ -51,9 +51,9 @@ export default app;
 
 ```ts
 import { Hono } from 'hono';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/hono';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 
 const app = new Hono();
 
@@ -108,4 +108,4 @@ Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Re
 
 ### `streamableHttpHandler(createServer)`
 
-Handler that creates an `McpServer` and `WebStandardStreamableHTTPServerTransport` for each request. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
+Handler that creates a fresh `McpServer` and per-request stateless transport for each request. Servers built with it answer both the modern `server/discover` handshake and the legacy `initialize` handshake. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
