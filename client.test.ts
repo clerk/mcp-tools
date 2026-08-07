@@ -151,6 +151,34 @@ const storeCases: StoreCase[] = [
   },
 ];
 
+async function startAuthFlow(store: McpClientStore) {
+  let redirectUrl: string | undefined;
+
+  const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
+    mcpEndpoint: `${BASE_URL}/mcp`,
+    oauthRedirectUrl: `${BASE_URL}/callback`,
+    mcpClientName: 'test-client',
+    mcpClientVersion: '1.0.0',
+    redirect: (url) => {
+      redirectUrl = url;
+    },
+    store,
+  });
+
+  // The 401 kicks off discovery + dynamic registration, ending in a
+  // redirect to the authorization endpoint instead of a connection.
+  await Promise.resolve(connect()).catch(() => undefined);
+
+  expect(redirectUrl).toBeDefined();
+  const authorizeUrl = new URL(redirectUrl!);
+  const state = authorizeUrl.searchParams.get('state')!;
+  return { sessionId, authorizeUrl, state };
+}
+
+async function readSession(store: McpClientStore, sessionId: string) {
+  return (await store.read(`session_${sessionId}`)) as Record<string, unknown>;
+}
+
 describe.each(storeCases)('OAuth redirect flow with $name store', ({ createStore }) => {
   beforeEach(() => {
     vi.stubGlobal('fetch', mockOAuthServer());
@@ -162,42 +190,18 @@ describe.each(storeCases)('OAuth redirect flow with $name store', ({ createStore
 
   test('completes dynamic registration, redirect, and token exchange', async () => {
     const store = await createStore();
-    let redirectUrl: string | undefined;
+    const { sessionId, authorizeUrl, state } = await startAuthFlow(store);
 
-    const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
-      mcpEndpoint: `${BASE_URL}/mcp`,
-      oauthRedirectUrl: `${BASE_URL}/callback`,
-      mcpClientName: 'test-client',
-      mcpClientVersion: '1.0.0',
-      redirect: (url) => {
-        redirectUrl = url;
-      },
-      store,
-    });
-
-    // The 401 kicks off discovery + dynamic registration, ending in a
-    // redirect to the authorization endpoint instead of a connection.
-    await Promise.resolve(connect()).catch(() => undefined);
-
-    expect(redirectUrl).toBeDefined();
-    const authorizeUrl = new URL(redirectUrl!);
     expect(authorizeUrl.pathname).toBe('/authorize');
     expect(authorizeUrl.searchParams.get('client_id')).toBe('dyn_client_123');
     expect(authorizeUrl.searchParams.get('code_challenge')).toBeTruthy();
-
-    const state = authorizeUrl.searchParams.get('state');
     expect(state).toBeTruthy();
 
-    // Simulate the authorization server redirecting back with a code.
-    const result = await completeAuthWithCode({
-      state: state!,
-      code: randomUUID(),
-      store,
-    });
+    const result = await completeAuthWithCode({ state, code: randomUUID(), store });
 
     expect(result.sessionId).toBe(sessionId);
 
-    const session = (await store.read(`session_${sessionId}`)) as Record<string, unknown>;
+    const session = await readSession(store, sessionId);
     expect(session.clientId).toBe('dyn_client_123');
     expect(session.accessToken).toBe('access_token_123');
     expect(session.refreshToken).toBe('refresh_token_456');
@@ -216,25 +220,6 @@ describe('authorization response iss validation (RFC 9207)', () => {
     };
   }
 
-  async function startAuthFlow(store: McpClientStore) {
-    let redirectUrl: string | undefined;
-
-    const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
-      mcpEndpoint: `${BASE_URL}/mcp`,
-      oauthRedirectUrl: `${BASE_URL}/callback`,
-      mcpClientName: 'test-client',
-      mcpClientVersion: '1.0.0',
-      redirect: (url) => {
-        redirectUrl = url;
-      },
-      store,
-    });
-
-    await Promise.resolve(connect()).catch(() => undefined);
-    const state = new URL(redirectUrl!).searchParams.get('state')!;
-    return { state, sessionId };
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -246,7 +231,7 @@ describe('authorization response iss validation (RFC 9207)', () => {
 
     await completeAuthWithCode({ state, code: randomUUID(), iss: BASE_URL, store });
 
-    const session = (await store.read(`session_${sessionId}`)) as Record<string, unknown>;
+    const session = await readSession(store, sessionId);
     expect(session.accessToken).toBe('access_token_123');
     expect(session.authComplete).toBe(true);
   });
@@ -266,7 +251,7 @@ describe('authorization response iss validation (RFC 9207)', () => {
     );
     expect(tokenCalls).toHaveLength(0);
 
-    const session = (await store.read(`session_${sessionId}`)) as Record<string, unknown>;
+    const session = await readSession(store, sessionId);
     expect(session.accessToken).toBeUndefined();
   });
 
