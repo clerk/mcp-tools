@@ -1,4 +1,3 @@
-import { getAuth } from '@clerk/hono';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuthInfo, McpServerFactory } from '@modelcontextprotocol/server';
 import type { Context, MiddlewareHandler, Next } from 'hono';
@@ -89,6 +88,10 @@ export function mcpAuth(
 }
 
 export const mcpAuthClerk = mcpAuth(async (token, c) => {
+  // Imported lazily so apps using only the custom mcpAuth path don't need
+  // the optional @clerk/hono peer installed.
+  const { getAuth } = await import('@clerk/hono');
+
   const authData = getAuth(c, { acceptsToken: 'oauth_token' });
   if (!authData.isAuthenticated) return undefined;
   return verifyClerkToken(authData, token);

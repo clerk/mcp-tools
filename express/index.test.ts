@@ -1,6 +1,12 @@
 import type express from 'express';
 import { describe, test, expect, vi } from 'vitest';
 
+// If the adapter ever eagerly imports the optional @clerk/express peer
+// again, this module-level mock makes the import of './index' below throw.
+vi.mock('@clerk/express', () => {
+  throw new Error('@clerk/express must not be loaded eagerly');
+});
+
 import {
   createMcpServer,
   discoverBody,
@@ -96,5 +102,11 @@ describe('streamableHttpHandler', () => {
     }
 
     expect(createServer).toHaveBeenCalledTimes(2);
+  });
+
+  test('module loads without the optional @clerk/express peer', () => {
+    // The vi.mock at the top of this file throws if @clerk/express is
+    // imported eagerly — reaching this assertion proves it wasn't.
+    expect(streamableHttpHandler).toBeTypeOf('function');
   });
 });

@@ -1,4 +1,3 @@
-import { getAuth } from '@clerk/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuthInfo, McpServerFactory } from '@modelcontextprotocol/server';
@@ -97,6 +96,10 @@ export async function mcpAuthClerk(
   res: express.Response,
   next: express.NextFunction,
 ): Promise<void> {
+  // Imported lazily so apps using only the custom mcpAuth path don't need
+  // the optional @clerk/express peer installed.
+  const { getAuth } = await import('@clerk/express');
+
   (
     await mcpAuth(async (token, req: express.Request) => {
       const authData = getAuth(req, { acceptsToken: 'oauth_token' });

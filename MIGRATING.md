@@ -11,10 +11,18 @@ npm uninstall @modelcontextprotocol/sdk
 npm install @modelcontextprotocol/server
 ```
 
-The official codemod handles most mechanical renames in your own code:
+Also check the Clerk peer dependencies: this version raises the optional peer floors to `@clerk/express@^2.1.5`, `@clerk/hono@^0.1.0`, and `@clerk/nextjs@^7.2.3`. If your app is still on `@clerk/express` 1.x (or an older `@clerk/nextjs`), npm will fail the install with an `ERESOLVE` conflict — bump the Clerk SDK first.
+
+The codemod (maintained by the MCP project, not Clerk) handles most mechanical renames in your own code:
 
 ```bash
 npx @modelcontextprotocol/codemod v1-to-v2 .
+```
+
+The codemod marks anything it cannot rewrite with `@mcp-codemod-error` comments and may leave old handler signatures (like `async (_, { authInfo })`) in place behind them. After running it, search your code for leftovers and fix them by hand using the sections below:
+
+```bash
+grep -rn '@mcp-codemod-error' .
 ```
 
 ## 2. Construct servers with `registerTool` and import from `@modelcontextprotocol/server`
