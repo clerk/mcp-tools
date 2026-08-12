@@ -2,7 +2,7 @@
 '@clerk/mcp-tools': minor
 ---
 
-Migrate from the monolithic `@modelcontextprotocol/sdk` 1.x to the stable v2 packages (`@modelcontextprotocol/server`, `@modelcontextprotocol/client`, `@modelcontextprotocol/node` 2.0.0).
+Migrate from the monolithic `@modelcontextprotocol/sdk` 1.x to the stable v2 packages (`@modelcontextprotocol/server`, `@modelcontextprotocol/client`, `@modelcontextprotocol/node` 2.0.0). See [MIGRATING.md](https://github.com/clerk/mcp-tools/blob/main/MIGRATING.md) for a step-by-step upgrade guide.
 
 **Breaking changes:**
 

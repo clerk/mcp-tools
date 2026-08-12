@@ -2,6 +2,8 @@
 
 A library built on top of the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that makes it easier to implement MCP with auth into your MCP client and/or server.
 
+> **Upgrading from 0.6.x?** This library now targets MCP SDK v2 and protocol revision 2026-07-28, which changes some public APIs. See the [migration guide](./MIGRATING.md).
+
 ### What is MCP?
 
 It's a protocol that enables AI applications like Claude, ChatGPT, Cursor, etc to ask you for permission to access some of your private information that normally you'd need to sign in with your account to access. For example, your emails, or your private github repositories, etc.
