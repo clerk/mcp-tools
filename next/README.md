@@ -53,7 +53,7 @@ function createServer() {
   server.registerTool(
     'get-clerk-user-data',
     { description: 'Gets data about the Clerk user that authorized this request' },
-    async (_args, ctx) => {
+    async (ctx) => {
       // non-null assertion is safe here, verifyToken ensures presence
       const userId = ctx.http!.authInfo!.extra!.userId! as string;
       const userData = await clerk.users.getUser(userId);

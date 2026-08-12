@@ -51,7 +51,7 @@ function createServer() {
   server.registerTool(
     'get_clerk_user_data',
     { description: 'Gets data about the Clerk user that authorized this request' },
-    async (_args, ctx) => {
+    async (ctx) => {
       const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
 
       if (!userId) {
@@ -116,7 +116,7 @@ function createServer() {
   server.registerTool(
     'get_user_data',
     { description: 'Gets data about the authenticated user' },
-    async (_args, ctx) => {
+    async (ctx) => {
       const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
 
       if (!userId) {
@@ -304,7 +304,7 @@ When using the authentication middleware, the auth data is automatically passed 
 server.registerTool(
   'authenticated_tool',
   { description: 'A tool that needs user authentication' },
-  async (_args, ctx) => {
+  async (ctx) => {
     // For Clerk authentication, verifyClerkToken stores the user id in extra
     const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
 
@@ -332,18 +332,14 @@ async function verifyToken(token: string, req: express.Request) {
   return { userId: decoded.sub, email: decoded.email, scopes: decoded.scope };
 }
 
-server.registerTool(
-  'custom_auth_tool',
-  { description: 'Tool using custom auth' },
-  async (_args, ctx) => {
-    // ctx.http.authInfo contains whatever your verifyToken function returned
-    const { userId, email, scopes } = ctx.http?.authInfo as any;
+server.registerTool('custom_auth_tool', { description: 'Tool using custom auth' }, async (ctx) => {
+  // ctx.http.authInfo contains whatever your verifyToken function returned
+  const { userId, email, scopes } = ctx.http?.authInfo as any;
 
-    return {
-      content: [{ type: 'text', text: `User: ${email}, ID: ${userId}` }],
-    };
-  },
-);
+  return {
+    content: [{ type: 'text', text: `User: ${email}, ID: ${userId}` }],
+  };
+});
 ```
 
 ## Environment Variables

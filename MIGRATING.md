@@ -34,7 +34,7 @@ npx @modelcontextprotocol/codemod v1-to-v2 .
 + server.registerTool(
 +   'get_user_data',
 +   { description: 'Gets data about the authenticated user' },
-+   async (_args, ctx) => { ... },
++   async (ctx) => { ... },
 + );
 ```
 
@@ -45,7 +45,7 @@ v1 passed `{ authInfo }` directly as the handler's second argument. v2 nests it 
 ```diff
 - async (_, { authInfo }) => {
 -   const userId = authInfo?.extra?.userId as string | undefined;
-+ async (_args, ctx) => {
++ async (ctx) => {
 +   const userId = ctx.http?.authInfo?.extra?.userId as string | undefined;
 ```
 

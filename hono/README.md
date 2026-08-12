@@ -34,7 +34,7 @@ app.use('*', clerkMiddleware());
 
 function createServer() {
   const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-  server.registerTool('get_user', { description: 'Gets the current user' }, async (_args, ctx) => ({
+  server.registerTool('get_user', { description: 'Gets the current user' }, async (ctx) => ({
     content: [{ type: 'text', text: JSON.stringify(ctx.http?.authInfo) }],
   }));
   return server;
