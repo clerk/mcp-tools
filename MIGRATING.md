@@ -71,14 +71,16 @@ v2 transports are constructed per-request and stateless, so `streamableHttpHandl
 + }
 
 - app.post('/mcp', mcpAuthClerk, streamableHttpHandler(server));
-+ app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
++ app.all('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 ```
+
+Note the `post` → `all` change. The handler answers `GET` and `DELETE` — the 2025-era session operations — with a JSON-RPC `405 Method not allowed.`, which is what legacy clients expect when a server offers no SSE stream. If you leave the route mounted as `post`, Express answers those verbs with its own HTML `404` before the handler ever sees them, and older clients get an ambiguous error instead of the graceful one.
 
 `mcpAuth`, `mcpAuthClerk`, `protectedResourceHandler(Clerk)`, and `authServerMetadataHandlerClerk` are unchanged.
 
 ## 5. Hono: same signature, return a v2 server
 
-The Hono adapter already took a factory, so no call-site change — but the factory must now return a v2 `McpServer` (steps 2–3 above).
+The Hono adapter already took a factory, so no call-site change — but the factory must now return a v2 `McpServer` (steps 2–3 above). As with Express, mount the route with `app.all` rather than `app.post` so the handler can answer `GET`/`DELETE` with a proper `405`.
 
 ## 6. Next.js: first-party handler replaces `mcp-handler`
 
@@ -114,8 +116,10 @@ The Hono adapter already took a factory, so no call-site change — but the fact
 +     return verifyClerkToken(clerkAuth, token);
 +   },
 + });
-+ export { handler as GET, handler as POST };
++ export { handler as GET, handler as POST, handler as DELETE };
 ```
+
+Export `DELETE` alongside `GET` and `POST` so the handler — not Next's own 405 page — answers legacy session-termination requests with a JSON-RPC error body.
 
 If you prefer to stay on `mcp-handler`, its 2.x releases also support MCP SDK v2 — `verifyClerkToken` keeps working with `withMcpAuth` as before.
 
@@ -132,5 +136,6 @@ The fs/redis/postgres/sqlite stores are untouched. They hold application-level O
 
 ## 9. Wire-level behavior notes
 
-- Legacy (2025-era) requests are served by the SDK's stateless fallback: single-request POST exchanges work as before, but session operations (GET/DELETE with `Mcp-Session-Id`) answer `405` — protocol sessions no longer exist.
+- Legacy (2025-era) requests are served by the SDK's stateless fallback: single-request POST exchanges work as before, but session operations (GET/DELETE with `Mcp-Session-Id`) answer `405` with `{"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not allowed."},"id":null}` — protocol sessions no longer exist. You only get that response if the route is mounted for those verbs (see step 4); otherwise your framework's own 404 handler answers first.
+- `Mcp-Session-Id` is never sent or accepted. The long-lived `GET` SSE stream is replaced by `subscriptions/listen`, and the legacy JSON-RPC `ping` method is gone (`-32601`).
 - Modern (2026-07-28) requests must carry the `Mcp-Method` header and the per-request `_meta` envelope. SDK clients do this automatically; only hand-rolled HTTP callers need to care.

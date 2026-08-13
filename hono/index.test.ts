@@ -362,6 +362,20 @@ describe('streamableHttpHandler', () => {
     await res.text();
   });
 
+  test.each(['GET', 'DELETE'])(
+    'answers %s with a 405 JSON-RPC error (legacy session ops are gone)',
+    async (method) => {
+      const app = new Hono();
+      // mounted with `all` so the handler — not Hono's 404 — answers these
+      app.all('/mcp', streamableHttpHandler(createMcpServer));
+
+      const res = await app.request('http://localhost/mcp', { method });
+
+      expect(res.status).toBe(405);
+      expect((await res.json()).error.message).toBe('Method not allowed.');
+    },
+  );
+
   test('handles sequential requests', async () => {
     const app = new Hono();
     app.post('/mcp', streamableHttpHandler(createMcpServer));

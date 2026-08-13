@@ -78,10 +78,10 @@ const handler = streamableHttpHandler(createServer, {
   },
 });
 
-export { handler as GET, handler as POST };
+export { handler as GET, handler as POST, handler as DELETE };
 ```
 
-**Note**: Servers built with `streamableHttpHandler` answer both the modern `server/discover` handshake and the legacy `initialize` handshake, so existing MCP clients keep working.
+**Note**: Servers built with `streamableHttpHandler` answer both the modern `server/discover` handshake and the legacy `initialize` handshake, so existing MCP clients keep working. Export the handler as `DELETE` too — it answers the removed 2025-era session operations with a JSON-RPC `405 Method not allowed.` rather than letting Next return its own error page.
 
 ### Building an MCP Client
 

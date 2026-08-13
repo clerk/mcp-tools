@@ -31,7 +31,7 @@ import {
  *   return authData;
  * }
  *
- * app.post("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
+ * app.all("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuth(
@@ -88,7 +88,7 @@ export async function mcpAuth(
  *   return server;
  * }
  *
- * app.post("/mcp", mcpAuthClerk, streamableHttpHandler(createServer));
+ * app.all("/mcp", mcpAuthClerk, streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuthClerk(
@@ -223,7 +223,7 @@ function getPRMUrl(req: express.Request) {
  *   return server;
  * }
  *
- * app.post("/mcp", streamableHttpHandler(createServer));
+ * app.all("/mcp", streamableHttpHandler(createServer));
  * ```
  */
 export function streamableHttpHandler(createServer: McpServerFactory) {

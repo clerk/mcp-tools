@@ -20,9 +20,9 @@ import { streamableHttpHandler } from './index';
 // Minimal duck-typed req/res pairs — toNodeHandler only touches the
 // NodeIncomingMessageLike/NodeServerResponseLike surface, and the body is
 // delivered pre-parsed the way express.json() would.
-function mockReq(body: string, headers: Record<string, string> = {}) {
+function mockReq(body: string, headers: Record<string, string> = {}, method = 'POST') {
   return {
-    method: 'POST',
+    method,
     url: '/mcp',
     headers: Object.fromEntries(
       Object.entries({ ...mcpHeaders, host: 'localhost', ...headers }).map(([key, value]) => [
@@ -30,7 +30,7 @@ function mockReq(body: string, headers: Record<string, string> = {}) {
         value,
       ]),
     ),
-    body: JSON.parse(body),
+    body: body ? JSON.parse(body) : undefined,
     async *[Symbol.asyncIterator]() {},
   } as unknown as express.Request;
 }
@@ -103,6 +103,20 @@ describe('streamableHttpHandler', () => {
 
     expect(createServer).toHaveBeenCalledTimes(2);
   });
+
+  test.each(['GET', 'DELETE'])(
+    'answers %s with a 405 JSON-RPC error (legacy session ops are gone)',
+    async (method) => {
+      const handler = streamableHttpHandler(createMcpServer);
+      const { res, toResponse } = mockRes();
+
+      await handler(mockReq('', {}, method), res);
+
+      const response = toResponse();
+      expect(response.status).toBe(405);
+      expect((await response.json()).error.message).toBe('Method not allowed.');
+    },
+  );
 
   test('module loads without the optional @clerk/express peer', () => {
     // The vi.mock at the top of this file throws if @clerk/express is

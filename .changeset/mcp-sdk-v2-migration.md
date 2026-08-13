@@ -17,6 +17,7 @@ Migrate from the monolithic `@modelcontextprotocol/sdk` 1.x to the stable v2 pac
 
 **Fixed:**
 
+- Documented examples now mount the MCP route for all HTTP verbs (`app.all` on Express/Hono, an added `DELETE` export on Next.js). The handler answers the removed 2025-era session operations (`GET`/`DELETE`) with a JSON-RPC `405 Method not allowed.`; a `post`-only route let the framework's 404 handler answer them first, giving legacy clients an ambiguous error.
 - The Express and Hono adapters no longer import their optional Clerk peer (`@clerk/express` / `@clerk/hono`) at module load. Apps using only the custom `mcpAuth(verifyToken)` path previously crashed with `ERR_MODULE_NOT_FOUND` unless the Clerk SDK was installed; the peer is now loaded lazily inside `mcpAuthClerk` only.
 
 The OAuth session stores (fs/redis/postgres/sqlite) are unchanged: they hold application-level OAuth state (PKCE verifiers, tokens), not protocol sessions.

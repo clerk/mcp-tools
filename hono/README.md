@@ -42,10 +42,12 @@ function createServer() {
 
 app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
+app.all('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 
 export default app;
 ```
+
+**Mount with `all`, not `post`.** The handler answers `GET` and `DELETE` (the removed 2025-era session operations) with a JSON-RPC `405 Method not allowed.` — the graceful response legacy clients expect. A `post`-only route lets the framework's 404 handler answer those verbs instead.
 
 ### With Custom Authentication
 

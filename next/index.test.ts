@@ -52,6 +52,18 @@ describe('streamableHttpHandler', () => {
     expect(createServer).toHaveBeenCalledTimes(2);
   });
 
+  test.each(['GET', 'DELETE'])(
+    'answers %s with a 405 JSON-RPC error (legacy session ops are gone)',
+    async (method) => {
+      const handler = streamableHttpHandler(createMcpServer);
+
+      const res = await handler(new Request('http://localhost/mcp', { method }));
+
+      expect(res.status).toBe(405);
+      expect((await res.json()).error.message).toBe('Method not allowed.');
+    },
+  );
+
   test('returns 401 with WWW-Authenticate when verifyToken is set and Authorization is missing', async () => {
     const verifyToken = vi.fn();
     const handler = streamableHttpHandler(createMcpServer, { verifyToken });

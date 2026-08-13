@@ -78,7 +78,7 @@ app.get(
   }),
 );
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
+app.all('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -146,7 +146,7 @@ app.get(
   }),
 );
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
+app.all('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -176,7 +176,7 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
+app.all('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
 ```
 
 The middleware will:
@@ -197,7 +197,7 @@ Pre-configured authentication middleware for Clerk that automatically handles OA
 import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 // No additional configuration needed - uses Clerk's built-in token verification
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
+app.all('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 ```
 
 This middleware automatically:
@@ -293,8 +293,10 @@ function createServer() {
   return server;
 }
 
-app.post('/mcp', streamableHttpHandler(createServer));
+app.all('/mcp', streamableHttpHandler(createServer));
 ```
+
+**Mount with `all`, not `post`.** The handler answers `GET` and `DELETE` (the removed 2025-era session operations) with a JSON-RPC `405 Method not allowed.` — the graceful response legacy clients expect. A `post`-only route lets the framework's 404 handler answer those verbs instead.
 
 ## Accessing Authentication Data in Tools
 
