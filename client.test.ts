@@ -44,14 +44,26 @@ vi.mock('pg', () => ({
   },
 }));
 
-import { completeAuthWithCode, createDynamicallyRegisteredMcpClient } from './client';
+import {
+  completeAuthWithCode,
+  createDynamicallyRegisteredMcpClient,
+  createKnownCredentialsMcpClient,
+  getClientBySessionId,
+} from './client';
 import type { JsonSerializable, McpClientStore } from './client';
 
 const BASE_URL = 'http://localhost:39999';
+const OTHER_AS_URL = 'http://localhost:39998';
 
 // A minimal OAuth authorization server + protected MCP endpoint, served
 // through a global fetch stub so the SDK's own auth machinery drives the flow.
-function mockOAuthServer({ advertiseIss = false }: { advertiseIss?: boolean } = {}) {
+// AS endpoints answer on whatever origin the request hits, so pointing
+// `authServerOrigin` at a second origin simulates the AS behind the resource
+// changing between flows.
+function mockOAuthServer({
+  advertiseIss = false,
+  authServerOrigin = BASE_URL,
+}: { advertiseIss?: boolean; authServerOrigin?: string } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
 
@@ -67,16 +79,16 @@ function mockOAuthServer({ advertiseIss = false }: { advertiseIss?: boolean } = 
     if (url.pathname === '/.well-known/oauth-protected-resource/mcp') {
       return Response.json({
         resource: `${BASE_URL}/mcp`,
-        authorization_servers: [BASE_URL],
+        authorization_servers: [authServerOrigin],
       });
     }
 
     if (url.pathname === '/.well-known/oauth-authorization-server') {
       return Response.json({
-        issuer: BASE_URL,
-        authorization_endpoint: `${BASE_URL}/authorize`,
-        token_endpoint: `${BASE_URL}/token`,
-        registration_endpoint: `${BASE_URL}/register`,
+        issuer: url.origin,
+        authorization_endpoint: `${url.origin}/authorize`,
+        token_endpoint: `${url.origin}/token`,
+        registration_endpoint: `${url.origin}/register`,
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'refresh_token'],
         code_challenge_methods_supported: ['S256'],
@@ -89,8 +101,8 @@ function mockOAuthServer({ advertiseIss = false }: { advertiseIss?: boolean } = 
       const body = JSON.parse(String(init?.body));
       return Response.json(
         {
-          client_id: 'dyn_client_123',
-          client_secret: 'dyn_secret_456',
+          client_id: `dyn_client_${url.port}`,
+          client_secret: `dyn_secret_${url.port}`,
           redirect_uris: body.redirect_uris,
           token_endpoint_auth_method: 'client_secret_post',
         },
@@ -193,7 +205,7 @@ describe.each(storeCases)('OAuth redirect flow with $name store', ({ createStore
     const { sessionId, authorizeUrl, state } = await startAuthFlow(store);
 
     expect(authorizeUrl.pathname).toBe('/authorize');
-    expect(authorizeUrl.searchParams.get('client_id')).toBe('dyn_client_123');
+    expect(authorizeUrl.searchParams.get('client_id')).toBe('dyn_client_39999');
     expect(authorizeUrl.searchParams.get('code_challenge')).toBeTruthy();
     expect(state).toBeTruthy();
 
@@ -202,7 +214,7 @@ describe.each(storeCases)('OAuth redirect flow with $name store', ({ createStore
     expect(result.sessionId).toBe(sessionId);
 
     const session = await readSession(store, sessionId);
-    expect(session.clientId).toBe('dyn_client_123');
+    expect(session.clientId).toBe('dyn_client_39999');
     expect(session.accessToken).toBe('access_token_123');
     expect(session.refreshToken).toBe('refresh_token_456');
     expect(session.authComplete).toBe(true);
@@ -210,16 +222,6 @@ describe.each(storeCases)('OAuth redirect flow with $name store', ({ createStore
 });
 
 describe('authorization response iss validation (RFC 9207)', () => {
-  function memoryStore(): McpClientStore {
-    const data = new Map<string, JsonSerializable>();
-    return {
-      read: async (key) => data.get(key) ?? null,
-      write: async (key, value) => {
-        data.set(key, value);
-      },
-    };
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -263,5 +265,132 @@ describe('authorization response iss validation (RFC 9207)', () => {
     await expect(completeAuthWithCode({ state, code: randomUUID(), store })).rejects.toThrow(
       /Issuer mismatch/,
     );
+  });
+});
+
+function memoryStore(): McpClientStore {
+  const data = new Map<string, JsonSerializable>();
+  return {
+    read: async (key) => data.get(key) ?? null,
+    write: async (key, value) => {
+      data.set(key, value);
+    },
+  };
+}
+
+describe('issuer-keyed credentials (SEP-2352)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test('stamps the AS issuer on persisted credentials and discovery state', async () => {
+    vi.stubGlobal('fetch', mockOAuthServer());
+    const store = memoryStore();
+    const { state, sessionId } = await startAuthFlow(store);
+
+    const afterRedirect = await readSession(store, sessionId);
+    expect(afterRedirect.issuer).toBe(BASE_URL);
+    const discovery = afterRedirect.discoveryState as Record<string, unknown>;
+    expect(discovery).toBeDefined();
+    expect(discovery.authorizationServerUrl).toBe(BASE_URL);
+
+    await completeAuthWithCode({ state, code: randomUUID(), store });
+
+    const session = await readSession(store, sessionId);
+    expect(session.issuer).toBe(BASE_URL);
+    expect(session.accessToken).toBe('access_token_123');
+  });
+
+  test('authProvider round-trips the issuer stamp on client information and tokens', async () => {
+    vi.stubGlobal('fetch', mockOAuthServer());
+    const store = memoryStore();
+    const { state, sessionId } = await startAuthFlow(store);
+    await completeAuthWithCode({ state, code: randomUUID(), store });
+
+    const { authProvider } = await getClientBySessionId({ sessionId, store });
+
+    const info = await authProvider.clientInformation({ issuer: BASE_URL });
+    expect(info).toMatchObject({ client_id: 'dyn_client_39999', issuer: BASE_URL });
+
+    const tokens = await authProvider.tokens({ issuer: BASE_URL });
+    expect(tokens).toMatchObject({ access_token: 'access_token_123', issuer: BASE_URL });
+
+    // the transport's per-request bearer read passes no ctx and must still
+    // receive the most recently saved token set
+    const bearer = await authProvider.tokens();
+    expect(bearer?.access_token).toBe('access_token_123');
+  });
+
+  test('re-registers and drops tokens when the authorization server changes', async () => {
+    vi.stubGlobal('fetch', mockOAuthServer());
+    const store = memoryStore();
+    const { state, sessionId } = await startAuthFlow(store);
+    await completeAuthWithCode({ state, code: randomUUID(), store });
+
+    // the resource now points at a different AS
+    const fetchMock = mockOAuthServer({ authServerOrigin: OTHER_AS_URL });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { authProvider } = await getClientBySessionId({ sessionId, store });
+    await authProvider.invalidateCredentials?.('discovery');
+
+    const { auth } = await import('@modelcontextprotocol/client');
+    // the redirect leg is not wired in this phase, so the flow stops after
+    // re-registration when it tries to hand off to the user agent
+    await expect(auth(authProvider, { serverUrl: `${BASE_URL}/mcp` })).rejects.toThrow(
+      /Unexpected call/,
+    );
+
+    const registerCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input instanceof Request ? input.url : input).startsWith(`${OTHER_AS_URL}/register`),
+    );
+    expect(registerCalls).toHaveLength(1);
+
+    const session = await readSession(store, sessionId);
+    expect(session.clientId).toBe('dyn_client_39998');
+    expect(session.issuer).toBe(OTHER_AS_URL);
+    // tokens issued by the previous AS are never replayed against the new one
+    expect(session.accessToken).toBeUndefined();
+    expect(session.refreshToken).toBeUndefined();
+  });
+
+  test('known-credentials flow persists the issuer stamp without dynamic registration', async () => {
+    const fetchMock = mockOAuthServer();
+    vi.stubGlobal('fetch', fetchMock);
+    const store = memoryStore();
+
+    let redirectUrl: string | undefined;
+    const { connect, sessionId } = await createKnownCredentialsMcpClient({
+      clientId: 'known_client',
+      clientSecret: 'known_secret',
+      mcpEndpoint: `${BASE_URL}/mcp`,
+      oauthRedirectUrl: `${BASE_URL}/callback`,
+      mcpClientName: 'test-client',
+      mcpClientVersion: '1.0.0',
+      redirect: (url) => {
+        redirectUrl = url;
+      },
+      store,
+    });
+
+    await Promise.resolve(connect()).catch(() => undefined);
+
+    expect(redirectUrl).toBeDefined();
+    const authorizeUrl = new URL(redirectUrl!);
+    expect(authorizeUrl.searchParams.get('client_id')).toBe('known_client');
+
+    const registerCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input instanceof Request ? input.url : input).includes('/register'),
+    );
+    expect(registerCalls).toHaveLength(0);
+
+    const session = await readSession(store, sessionId);
+    expect(session.issuer).toBe(BASE_URL);
+
+    const state = authorizeUrl.searchParams.get('state')!;
+    await completeAuthWithCode({ state, code: randomUUID(), store });
+    const completed = await readSession(store, sessionId);
+    expect(completed.accessToken).toBe('access_token_123');
+    expect(completed.authComplete).toBe(true);
   });
 });

@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import type { OAuthClientProvider, OAuthClientInformationFull } from '@modelcontextprotocol/client';
+import type {
+  OAuthClientProvider,
+  OAuthDiscoveryState,
+  StoredOAuthClientInformation,
+  StoredOAuthTokens,
+} from '@modelcontextprotocol/client';
 
 const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';
@@ -74,7 +79,7 @@ export async function completeAuthWithCode({
   await store.write(`${SESSION_PREFIX}${sessionId}`, {
     ...updatedClientData,
     authComplete: true,
-  });
+  } as unknown as JsonSerializable);
 
   return { transport, sessionId };
 }
@@ -104,6 +109,8 @@ export async function getClientBySessionId({
   state?: string;
 }) {
   const client = await getClientData(sessionId, store);
+  const persist = () =>
+    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
 
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
@@ -112,30 +119,54 @@ export async function getClientBySessionId({
       logo_uri: undefined,
       tos_uri: undefined,
     },
-    clientInformation: () => ({
-      client_id: client.clientId!,
-      client_secret: client.clientSecret!,
-    }),
-    saveClientInformation: async (newInfo: OAuthClientInformationFull) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        ...newInfo,
+    clientInformation: () => {
+      if (!client.clientId) return undefined;
+
+      // the issuer stamp lets the SDK refuse to send these credentials to a
+      // different authorization server (SEP-2352); a stamped mismatch is
+      // discarded and triggers re-registration
+      return {
+        client_id: client.clientId,
+        client_secret: client.clientSecret,
+        issuer: client.issuer,
+      };
+    },
+    saveClientInformation: async (newInfo: StoredOAuthClientInformation) => {
+      // tokens issued by the previous authorization server must never be
+      // replayed against the one these credentials were registered with
+      if (client.issuer && newInfo.issuer && client.issuer !== newInfo.issuer) {
+        delete client.accessToken;
+        delete client.refreshToken;
+        delete client.authComplete;
+      }
+
+      Object.assign(client, {
+        clientId: newInfo.client_id,
+        clientSecret: newInfo.client_secret,
+        issuer: newInfo.issuer,
       });
+      await persist();
     },
-    tokens: () => {
+    tokens: (): StoredOAuthTokens | undefined => {
       if (!client.accessToken) return undefined;
-      return { access_token: client.accessToken, token_type: 'Bearer' };
+      return { access_token: client.accessToken, token_type: 'Bearer', issuer: client.issuer };
     },
-    saveTokens: async ({ access_token, refresh_token }) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
+    saveTokens: async ({ access_token, refresh_token, issuer }) => {
+      Object.assign(client, {
         accessToken: access_token,
         refreshToken: refresh_token,
+        issuer: issuer ?? client.issuer,
       });
-
-      await store.read(`${SESSION_PREFIX}${sessionId}`);
-
-      return void 0;
+      await persist();
+    },
+    saveDiscoveryState: async (state: OAuthDiscoveryState) => {
+      client.discoveryState = state;
+      await persist();
+    },
+    discoveryState: () => client.discoveryState,
+    invalidateCredentials: async (scope) => {
+      applyCredentialInvalidation(client, scope);
+      await persist();
     },
     redirectToAuthorization: unexpectedFunctionCall(
       'redirectToAuthorization',
@@ -239,19 +270,24 @@ export interface CreateKnownCredentialsMcpClientParams {
 export async function createKnownCredentialsMcpClient({
   redirect,
   store,
-  ...client
+  ...clientParams
 }: CreateKnownCredentialsMcpClientParams): Promise<McpClientReturnType> {
   const state = randomUUID();
   const sessionId = randomUUID();
+
+  const client: ClientData = { ...clientParams };
 
   // associate state with session id
   // in the oauth callback, we only have the state, and will need to get the
   // client information, so we need this to resolve the session id
   await store.write(`${STATE_PREFIX}${state}`, sessionId);
 
+  const persist = () =>
+    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client as JsonSerializable);
+  await persist();
 
   // there's some non-dry code between this and the dynamically registered
   // client, but this is on purpose for flexibility and clarity.
@@ -265,19 +301,31 @@ export async function createKnownCredentialsMcpClient({
     },
     state: () => state,
     clientInformation: () => ({
-      client_id: client.clientId,
+      client_id: client.clientId!,
       client_secret: client.clientSecret,
+      issuer: client.issuer,
     }),
-    // only should be used for dynamic client registration
-    saveClientInformation: unexpectedFunctionCall(
-      'saveClientInformation',
-      'initializing a known credentials client',
-    ),
+    // pre-registered credentials are never re-registered, but the SDK
+    // back-stamps the authorization server's issuer onto them on first use
+    // (SEP-2352), which arrives through this method
+    saveClientInformation: async (newInfo: StoredOAuthClientInformation) => {
+      Object.assign(client, { issuer: newInfo.issuer });
+      await persist();
+    },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
     tokens: () => undefined,
     // called in the oauth callback route
     saveTokens: unexpectedFunctionCall('saveTokens', 'initializing a known credentials client'),
+    saveDiscoveryState: async (discoveryState: OAuthDiscoveryState) => {
+      client.discoveryState = discoveryState;
+      await persist();
+    },
+    discoveryState: () => client.discoveryState,
+    invalidateCredentials: async (scope) => {
+      applyCredentialInvalidation(client, scope);
+      await persist();
+    },
     redirectToAuthorization: (url) => {
       redirect(url.toString());
     },
@@ -353,10 +401,10 @@ export async function createDynamicallyRegisteredMcpClient({
 
   // this is our in-memory client object, we will update it with the client id
   // and secret after dynamic registration is complete
-  let client = {
+  const client: ClientData = {
     ...clientParams,
-    clientId: undefined as string | undefined,
-    clientSecret: undefined as string | undefined,
+    clientId: undefined,
+    clientSecret: undefined,
   };
 
   // associate state with session id
@@ -364,9 +412,12 @@ export async function createDynamicallyRegisteredMcpClient({
   // client information, so we need this to resolve the session id
   await store.write(`${STATE_PREFIX}${state}`, sessionId);
 
+  const persist = () =>
+    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+  await persist();
 
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
@@ -395,32 +446,40 @@ export async function createDynamicallyRegisteredMcpClient({
       return {
         client_id: client.clientId,
         client_secret: client.clientSecret,
+        issuer: client.issuer,
       };
     },
     // this is called after a new oauth client is created, so we now have a
-    // client id and secret
-    saveClientInformation: async (newInfo: OAuthClientInformationFull) => {
-      const newClientInfo = {
+    // client id and secret, stamped with the issuer of the authorization
+    // server that created it (SEP-2352)
+    saveClientInformation: async (newInfo: StoredOAuthClientInformation) => {
+      Object.assign(client, {
         clientId: newInfo.client_id,
         clientSecret: newInfo.client_secret,
-      };
-
-      // update the in-memory client object with the new client id and secret
-      client = { ...client, ...newClientInfo };
-
-      // persist the updated client object to the store
-      await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+        issuer: newInfo.issuer,
+      });
+      await persist();
     },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
     tokens: () => undefined,
     // called in the oauth callback route
-    saveTokens: async ({ access_token, refresh_token }) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
+    saveTokens: async ({ access_token, refresh_token, issuer }) => {
+      Object.assign(client, {
         accessToken: access_token,
         refreshToken: refresh_token,
+        issuer: issuer ?? client.issuer,
       });
+      await persist();
+    },
+    saveDiscoveryState: async (discoveryState: OAuthDiscoveryState) => {
+      client.discoveryState = discoveryState;
+      await persist();
+    },
+    discoveryState: () => client.discoveryState,
+    invalidateCredentials: async (scope) => {
+      applyCredentialInvalidation(client, scope);
+      await persist();
     },
     redirectToAuthorization: (url) => {
       redirect(url.toString());
@@ -505,6 +564,45 @@ export interface ClientData {
   oauthClientUri?: string;
   oauthScopes?: string;
   oauthPublicClient?: boolean;
+  /**
+   * The issuer identifier of the authorization server that the persisted
+   * client credentials and tokens were issued by (SEP-2352). Credentials
+   * stamped for one issuer are never sent to a different one.
+   */
+  issuer?: string;
+  /**
+   * OAuth discovery results persisted across the redirect round-trip, so the
+   * callback leg can verify it is talking to the same authorization server it
+   * redirected to, without re-running discovery.
+   */
+  discoveryState?: OAuthDiscoveryState;
+}
+
+/**
+ * Clears persisted credential material when the SDK signals that it is no
+ * longer valid. The `verifier` scope is a no-op here because code verifiers
+ * are keyed by OAuth state, not by session.
+ */
+function applyCredentialInvalidation(
+  client: ClientData,
+  scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery',
+) {
+  if (scope === 'all' || scope === 'client') {
+    delete client.clientId;
+    delete client.clientSecret;
+    delete client.issuer;
+  }
+
+  // tokens issued to an invalidated client registration die with it
+  if (scope === 'all' || scope === 'client' || scope === 'tokens') {
+    delete client.accessToken;
+    delete client.refreshToken;
+    delete client.authComplete;
+  }
+
+  if (scope === 'all' || scope === 'discovery') {
+    delete client.discoveryState;
+  }
 }
 
 /**
