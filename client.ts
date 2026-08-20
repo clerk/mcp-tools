@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  validateClientMetadataUrl,
+} from '@modelcontextprotocol/client';
 import type {
   OAuthClientProvider,
   OAuthDiscoveryState,
@@ -114,6 +118,7 @@ export async function getClientBySessionId({
 
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
+    clientMetadataUrl: client.oauthClientMetadataUrl,
     clientMetadata: {
       redirect_uris: [client.oauthRedirectUrl],
       logo_uri: undefined,
@@ -358,6 +363,15 @@ export interface CreateDynamicallyRegisteredMcpClientParams {
    */
   oauthClientUri?: string;
   /**
+   * HTTPS URL of a Client ID Metadata Document describing this OAuth client.
+   * When the authorization server advertises CIMD support
+   * (`client_id_metadata_document_supported`), this URL is used directly as
+   * the `client_id` and dynamic client registration is skipped; otherwise the
+   * flow falls back to dynamic registration.
+   * @see https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document
+   */
+  oauthClientMetadataUrl?: string;
+  /**
    * OAuth scopes that you'd like to request access to
    */
   oauthScopes?: string;
@@ -396,6 +410,9 @@ export async function createDynamicallyRegisteredMcpClient({
   store,
   ...clientParams
 }: CreateDynamicallyRegisteredMcpClientParams): Promise<McpClientReturnType> {
+  // fail fast on a malformed CIMD URL, before any flow state is persisted
+  validateClientMetadataUrl(clientParams.oauthClientMetadataUrl);
+
   const state = randomUUID();
   const sessionId = randomUUID();
 
@@ -421,6 +438,9 @@ export async function createDynamicallyRegisteredMcpClient({
 
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
+    // when the authorization server supports CIMD, this URL becomes the
+    // client_id and dynamic registration is skipped
+    clientMetadataUrl: client.oauthClientMetadataUrl,
     // this information is used to create an oauth client via dynamic client
     // registration
     clientMetadata: {
@@ -562,6 +582,7 @@ export interface ClientData {
   authComplete?: boolean;
   oauthClientName?: string;
   oauthClientUri?: string;
+  oauthClientMetadataUrl?: string;
   oauthScopes?: string;
   oauthPublicClient?: boolean;
   /**

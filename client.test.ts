@@ -62,8 +62,9 @@ const OTHER_AS_URL = 'http://localhost:39998';
 // changing between flows.
 function mockOAuthServer({
   advertiseIss = false,
+  advertiseCimd = false,
   authServerOrigin = BASE_URL,
-}: { advertiseIss?: boolean; authServerOrigin?: string } = {}) {
+}: { advertiseIss?: boolean; advertiseCimd?: boolean; authServerOrigin?: string } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
 
@@ -94,6 +95,7 @@ function mockOAuthServer({
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
         ...(advertiseIss ? { authorization_response_iss_parameter_supported: true } : {}),
+        ...(advertiseCimd ? { client_id_metadata_document_supported: true } : {}),
       });
     }
 
@@ -353,6 +355,88 @@ describe('issuer-keyed credentials (SEP-2352)', () => {
     expect(session.accessToken).toBeUndefined();
     expect(session.refreshToken).toBeUndefined();
   });
+
+  test('CIMD: uses the client metadata URL as client_id when the AS supports it', async () => {
+    const fetchMock = mockOAuthServer({ advertiseCimd: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const store = memoryStore();
+    const metadataUrl = 'https://client.example.com/.well-known/oauth-client-metadata.json';
+
+    let redirectUrl: string | undefined;
+    const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
+      mcpEndpoint: `${BASE_URL}/mcp`,
+      oauthRedirectUrl: `${BASE_URL}/callback`,
+      oauthClientMetadataUrl: metadataUrl,
+      mcpClientName: 'test-client',
+      mcpClientVersion: '1.0.0',
+      redirect: (url) => {
+        redirectUrl = url;
+      },
+      store,
+    });
+
+    await Promise.resolve(connect()).catch(() => undefined);
+
+    expect(redirectUrl).toBeDefined();
+    const authorizeUrl = new URL(redirectUrl!);
+    expect(authorizeUrl.searchParams.get('client_id')).toBe(metadataUrl);
+
+    // CIMD replaces dynamic client registration entirely
+    const registerCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input instanceof Request ? input.url : input).includes('/register'),
+    );
+    expect(registerCalls).toHaveLength(0);
+
+    const state = authorizeUrl.searchParams.get('state')!;
+    await completeAuthWithCode({ state, code: randomUUID(), store });
+
+    const session = await readSession(store, sessionId);
+    expect(session.clientId).toBe(metadataUrl);
+    expect(session.accessToken).toBe('access_token_123');
+    expect(session.authComplete).toBe(true);
+  });
+
+  test('CIMD: falls back to dynamic registration when the AS does not advertise support', async () => {
+    const fetchMock = mockOAuthServer();
+    vi.stubGlobal('fetch', fetchMock);
+    const store = memoryStore();
+
+    let redirectUrl: string | undefined;
+    const { connect } = await createDynamicallyRegisteredMcpClient({
+      mcpEndpoint: `${BASE_URL}/mcp`,
+      oauthRedirectUrl: `${BASE_URL}/callback`,
+      oauthClientMetadataUrl: 'https://client.example.com/oauth-client-metadata.json',
+      mcpClientName: 'test-client',
+      mcpClientVersion: '1.0.0',
+      redirect: (url) => {
+        redirectUrl = url;
+      },
+      store,
+    });
+
+    await Promise.resolve(connect()).catch(() => undefined);
+
+    expect(new URL(redirectUrl!).searchParams.get('client_id')).toBe('dyn_client_39999');
+  });
+
+  test.each(['http://insecure.example/client.json', 'https://no-path.example/'])(
+    'CIMD: rejects the invalid client metadata URL %s before starting the flow',
+    async (oauthClientMetadataUrl) => {
+      vi.stubGlobal('fetch', mockOAuthServer({ advertiseCimd: true }));
+
+      await expect(
+        createDynamicallyRegisteredMcpClient({
+          mcpEndpoint: `${BASE_URL}/mcp`,
+          oauthRedirectUrl: `${BASE_URL}/callback`,
+          oauthClientMetadataUrl,
+          mcpClientName: 'test-client',
+          mcpClientVersion: '1.0.0',
+          redirect: () => undefined,
+          store: memoryStore(),
+        }),
+      ).rejects.toThrow(/clientMetadataUrl/);
+    },
+  );
 
   test('known-credentials flow persists the issuer stamp without dynamic registration', async () => {
     const fetchMock = mockOAuthServer();
