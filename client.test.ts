@@ -280,6 +280,77 @@ function memoryStore(): McpClientStore {
   };
 }
 
+describe('DCR application_type (SEP-837)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function registerViaDcr({
+    oauthRedirectUrl,
+    oauthAdditionalRedirectUrls,
+  }: {
+    oauthRedirectUrl: string;
+    oauthAdditionalRedirectUrls?: string[];
+  }) {
+    const fetchMock = mockOAuthServer();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { connect, authProvider } = await createDynamicallyRegisteredMcpClient({
+      mcpEndpoint: `${BASE_URL}/mcp`,
+      oauthRedirectUrl,
+      oauthAdditionalRedirectUrls,
+      mcpClientName: 'test-client',
+      mcpClientVersion: '1.0.0',
+      redirect: () => undefined,
+      store: memoryStore(),
+    });
+
+    await Promise.resolve(connect()).catch(() => undefined);
+
+    const registerCall = fetchMock.mock.calls.find(([input]) =>
+      String(input instanceof Request ? input.url : input).includes('/register'),
+    );
+    expect(registerCall).toBeDefined();
+    const body = JSON.parse(String(registerCall![1]?.body)) as Record<string, unknown>;
+    return { body, authProvider };
+  }
+
+  test('a pure web redirect set registers with the SDK-derived web type', async () => {
+    const { body, authProvider } = await registerViaDcr({
+      oauthRedirectUrl: 'https://app.example.com/callback',
+    });
+
+    // the library leaves the field to the SDK's derivation for unmixed sets
+    expect(authProvider.clientMetadata.application_type).toBeUndefined();
+    expect(body.application_type).toBe('web');
+  });
+
+  test('a custom-scheme redirect set registers with the SDK-derived native type', async () => {
+    const { body, authProvider } = await registerViaDcr({
+      oauthRedirectUrl: 'myapp://oauth/callback',
+    });
+
+    expect(authProvider.clientMetadata.application_type).toBeUndefined();
+    expect(body.application_type).toBe('native');
+  });
+
+  test('a mixed web + custom-scheme redirect set registers explicitly as native', async () => {
+    const { body, authProvider } = await registerViaDcr({
+      oauthRedirectUrl: 'https://app.example.com/callback',
+      oauthAdditionalRedirectUrls: ['myapp://oauth/callback'],
+    });
+
+    // mixed sets are ambiguous under OIDC DCR §2, so the library pins the
+    // value instead of relying on the SDK heuristic
+    expect(authProvider.clientMetadata.application_type).toBe('native');
+    expect(body.application_type).toBe('native');
+    expect(body.redirect_uris).toEqual([
+      'https://app.example.com/callback',
+      'myapp://oauth/callback',
+    ]);
+  });
+});
+
 describe('issuer-keyed credentials (SEP-2352)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

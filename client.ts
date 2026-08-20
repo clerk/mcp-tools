@@ -116,11 +116,14 @@ export async function getClientBySessionId({
   const persist = () =>
     store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
 
+  const redirectUris = [client.oauthRedirectUrl, ...(client.oauthAdditionalRedirectUrls ?? [])];
+
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
     clientMetadataUrl: client.oauthClientMetadataUrl,
     clientMetadata: {
-      redirect_uris: [client.oauthRedirectUrl],
+      redirect_uris: redirectUris,
+      application_type: explicitApplicationType(redirectUris),
       logo_uri: undefined,
       tos_uri: undefined,
     },
@@ -355,6 +358,15 @@ export interface CreateDynamicallyRegisteredMcpClientParams {
    */
   oauthRedirectUrl: string;
   /**
+   * Extra redirect URLs to register alongside `oauthRedirectUrl`, for clients
+   * that need more than one (for example a web callback plus a custom-scheme
+   * callback for a companion native app). When the combined set mixes web and
+   * native-class (custom-scheme or loopback) URLs, `application_type` is set
+   * to `native` explicitly, since the SDK's derivation is ambiguous for mixed
+   * sets.
+   */
+  oauthAdditionalRedirectUrls?: string[];
+  /**
    * The name of the OAuth client to be created with the authorization server
    */
   oauthClientName?: string;
@@ -436,6 +448,8 @@ export async function createDynamicallyRegisteredMcpClient({
   // re-create the client later in the oauth callback and any mcp call endpoints
   await persist();
 
+  const redirectUris = [client.oauthRedirectUrl, ...(client.oauthAdditionalRedirectUrls ?? [])];
+
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
     // when the authorization server supports CIMD, this URL becomes the
@@ -444,7 +458,8 @@ export async function createDynamicallyRegisteredMcpClient({
     // this information is used to create an oauth client via dynamic client
     // registration
     clientMetadata: {
-      redirect_uris: [client.oauthRedirectUrl],
+      redirect_uris: redirectUris,
+      application_type: explicitApplicationType(redirectUris),
       client_name: client.oauthClientName || client.mcpClientName,
       client_uri: client.oauthClientUri,
       scope: client.oauthScopes,
@@ -583,6 +598,7 @@ export interface ClientData {
   oauthClientName?: string;
   oauthClientUri?: string;
   oauthClientMetadataUrl?: string;
+  oauthAdditionalRedirectUrls?: string[];
   oauthScopes?: string;
   oauthPublicClient?: boolean;
   /**
@@ -597,6 +613,40 @@ export interface ClientData {
    * redirected to, without re-running discovery.
    */
   discoveryState?: OAuthDiscoveryState;
+}
+
+/**
+ * Pins `application_type` for a redirect URI set that mixes web and
+ * native-class (custom-scheme or loopback) URLs, which is ambiguous under
+ * OIDC DCR §2 and left to a heuristic by the SDK. A registration carrying a
+ * custom-scheme or loopback URI is a native app per RFC 8252, which also
+ * permits claiming https URLs, so mixed sets are pinned to `native`. Unmixed
+ * sets return undefined — the SDK derives the correct value for those.
+ */
+function explicitApplicationType(redirectUris: string[]): 'native' | undefined {
+  let hasWeb = false;
+  let hasNative = false;
+
+  for (const raw of redirectUris) {
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      continue;
+    }
+
+    const isHttp = url.protocol === 'http:' || url.protocol === 'https:';
+    const isLoopback =
+      url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+
+    if (!isHttp || isLoopback) {
+      hasNative = true;
+    } else {
+      hasWeb = true;
+    }
+  }
+
+  return hasWeb && hasNative ? 'native' : undefined;
 }
 
 /**
