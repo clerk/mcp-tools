@@ -1,4 +1,5 @@
 import type { MachineAuthObject } from '@clerk/backend';
+import { validateOriginHeader } from '@modelcontextprotocol/server';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 
 /**
@@ -138,6 +139,57 @@ export function verifyClerkToken(
     scopes: auth.scopes,
     clientId: auth.clientId,
     extra: { userId: auth.userId },
+  };
+}
+
+/**
+ * Validates a request's `Origin` header for the MCP endpoint, defending
+ * browser-reachable servers against DNS rebinding and cross-site request
+ * forgery (the MCP spec requires servers to validate Origin).
+ *
+ * Requests without an `Origin` header pass — non-browser MCP clients do not
+ * send one. A present value must have a hostname matching the request's own
+ * host (same-origin, port-agnostic) or one of `allowedOrigins`; anything
+ * else, including the unparsable and the opaque `null` origin, is rejected.
+ *
+ * @returns `{ ok: true }` when the request may proceed, otherwise
+ * `{ ok: false, message }` — answer those with a 403.
+ */
+export function validateOrigin({
+  originHeader,
+  requestHost,
+  allowedOrigins = [],
+}: {
+  /** The raw `Origin` request header, if any */
+  originHeader: string | null | undefined;
+  /** The raw `Host` request header (may include a port) */
+  requestHost: string | null | undefined;
+  /** Extra allowed origin hostnames (no scheme, no port) */
+  allowedOrigins?: string[];
+}): { ok: true } | { ok: false; message: string } {
+  const allowedHostnames = [...allowedOrigins];
+
+  if (requestHost) {
+    try {
+      allowedHostnames.push(new URL(`http://${requestHost}`).hostname);
+    } catch {
+      // an unparsable Host header contributes no same-origin allowance
+    }
+  }
+
+  const result = validateOriginHeader(originHeader, allowedHostnames);
+  return result.ok ? { ok: true } : { ok: false, message: result.message };
+}
+
+/**
+ * The 403 JSON-RPC error body answered to requests with a disallowed
+ * `Origin`, mirroring the MCP SDK's own origin-validation response.
+ */
+export function invalidOriginResponseBody(message: string) {
+  return {
+    jsonrpc: '2.0',
+    error: { code: -32000, message },
+    id: null,
   };
 }
 

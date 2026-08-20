@@ -65,6 +65,49 @@ function mockRes() {
   };
 }
 
+describe('origin validation', () => {
+  test('rejects a cross-origin browser request with 403', async () => {
+    const handler = streamableHttpHandler(createMcpServer);
+    const { res, toResponse } = mockRes();
+
+    await handler(mockReq(initializeBody, { origin: 'https://evil.example' }), res);
+
+    const response = toResponse();
+    expect(response.status).toBe(403);
+    const json = await response.json();
+    expect(json.error.message).toContain('Invalid Origin');
+  });
+
+  test('rejects the opaque null origin with 403', async () => {
+    const handler = streamableHttpHandler(createMcpServer);
+    const { res, toResponse } = mockRes();
+
+    await handler(mockReq(initializeBody, { origin: 'null' }), res);
+
+    expect(toResponse().status).toBe(403);
+  });
+
+  test('allows a same-origin request by default', async () => {
+    const handler = streamableHttpHandler(createMcpServer);
+    const { res, toResponse } = mockRes();
+
+    await handler(mockReq(initializeBody, { origin: 'http://localhost' }), res);
+
+    expect(toResponse().status).toBe(200);
+  });
+
+  test('allows an allowlisted cross-origin request', async () => {
+    const handler = streamableHttpHandler(createMcpServer, {
+      allowedOrigins: ['app.example.com'],
+    });
+    const { res, toResponse } = mockRes();
+
+    await handler(mockReq(initializeBody, { origin: 'https://app.example.com' }), res);
+
+    expect(toResponse().status).toBe(200);
+  });
+});
+
 describe('streamableHttpHandler', () => {
   test('answers the legacy initialize handshake with an InitializeResult', async () => {
     const handler = streamableHttpHandler(createMcpServer);

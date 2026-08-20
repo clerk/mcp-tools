@@ -443,6 +443,51 @@ describe('streamableHttpHandler', () => {
     await res.text();
   });
 
+  test('rejects a cross-origin browser request with 403', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { ...mcpHeaders, Origin: 'https://evil.example' },
+      body: initializeBody,
+    });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.message).toContain('Invalid Origin');
+  });
+
+  test('allows a same-origin request by default', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { ...mcpHeaders, Origin: 'http://localhost' },
+      body: initializeBody,
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+  });
+
+  test('allows an allowlisted cross-origin request', async () => {
+    const app = new Hono();
+    app.post(
+      '/mcp',
+      streamableHttpHandler(createMcpServer, { allowedOrigins: ['app.example.com'] }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { ...mcpHeaders, Origin: 'https://app.example.com' },
+      body: initializeBody,
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+  });
+
   test('returns SDK 406 response when POST Accept header is missing', async () => {
     const app = new Hono();
     app.post('/mcp', streamableHttpHandler(createMcpServer));

@@ -6,6 +6,8 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
+  invalidOriginResponseBody,
+  validateOrigin,
   verifyClerkToken,
 } from '../server';
 
@@ -97,10 +99,30 @@ export const mcpAuthClerk = mcpAuth(async (token, c) => {
   return verifyClerkToken(authData, token);
 });
 
-export function streamableHttpHandler(createServer: McpServerFactory) {
+/**
+ * Requests carrying an `Origin` header are rejected with a 403 unless the
+ * origin matches the request's own host or `options.allowedOrigins`,
+ * protecting browser-reachable servers against DNS rebinding (the MCP spec
+ * requires servers to validate Origin). Non-browser clients send no Origin
+ * and are unaffected.
+ */
+export function streamableHttpHandler(
+  createServer: McpServerFactory,
+  options?: { allowedOrigins?: string[] },
+) {
   const handler = createMcpHandler(createServer);
 
   return (c: Context) => {
+    const origin = validateOrigin({
+      originHeader: c.req.header('origin'),
+      requestHost: new URL(c.req.url).host,
+      allowedOrigins: options?.allowedOrigins,
+    });
+
+    if (!origin.ok) {
+      return c.json(invalidOriginResponseBody(origin.message), { status: 403 });
+    }
+
     return handler.fetch(c.req.raw, { authInfo: c.get('mcpAuth') });
   };
 }

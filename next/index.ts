@@ -11,6 +11,8 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
+  invalidOriginResponseBody,
+  validateOrigin,
   verifyClerkToken,
 } from '../server';
 
@@ -180,6 +182,12 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
  * If a `verifyToken` function is provided, requests must carry a valid
  * `Authorization: Bearer <token>` header; the resulting auth info is passed
  * through to the MCP server handlers.
+ *
+ * Requests carrying an `Origin` header are rejected with a 403 unless the
+ * origin matches the request's own host or `options.allowedOrigins`,
+ * protecting browser-reachable servers against DNS rebinding (the MCP spec
+ * requires servers to validate Origin). Non-browser clients send no Origin
+ * and are unaffected.
  * @param createServer - A factory returning a fresh MCP server object
  * @example
  * ```ts
@@ -209,12 +217,23 @@ export function streamableHttpHandler(
   createServer: McpServerFactory,
   options?: {
     verifyToken?: (token: string, req: Request) => Promise<AuthInfo | undefined>;
+    allowedOrigins?: string[];
   },
 ): (req: Request) => Promise<Response> {
   const handler = createMcpHandler(createServer);
   const verifyToken = options?.verifyToken;
 
   return async (req: Request): Promise<Response> => {
+    const origin = validateOrigin({
+      originHeader: req.headers.get('origin'),
+      requestHost: new URL(req.url).host,
+      allowedOrigins: options?.allowedOrigins,
+    });
+
+    if (!origin.ok) {
+      return Response.json(invalidOriginResponseBody(origin.message), { status: 403 });
+    }
+
     if (!verifyToken) return handler.fetch(req);
 
     const authHeader = req.headers.get('authorization');

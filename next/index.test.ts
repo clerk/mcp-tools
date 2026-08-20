@@ -115,6 +115,37 @@ describe('streamableHttpHandler', () => {
     expect(res.status).toBe(401);
     expect(verifyToken).not.toHaveBeenCalled();
   });
+
+  test('rejects a cross-origin browser request with 403 before token verification', async () => {
+    const verifyToken = vi.fn();
+    const handler = streamableHttpHandler(createMcpServer, { verifyToken });
+
+    const res = await handler(mcpRequest(initializeBody, { Origin: 'https://evil.example' }));
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.message).toContain('Invalid Origin');
+    expect(verifyToken).not.toHaveBeenCalled();
+  });
+
+  test('allows a same-origin request by default', async () => {
+    const handler = streamableHttpHandler(createMcpServer);
+
+    const res = await handler(mcpRequest(initializeBody, { Origin: 'http://localhost' }));
+
+    expect(res.status).toBe(200);
+    await res.text();
+  });
+
+  test('allows an allowlisted cross-origin request', async () => {
+    const handler = streamableHttpHandler(createMcpServer, {
+      allowedOrigins: ['app.example.com'],
+    });
+
+    const res = await handler(mcpRequest(initializeBody, { Origin: 'https://app.example.com' }));
+
+    expect(res.status).toBe(200);
+    await res.text();
+  });
 });
 
 describe('completeOAuthHandler error responses', () => {

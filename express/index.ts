@@ -6,6 +6,8 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
+  invalidOriginResponseBody,
+  validateOrigin,
   verifyClerkToken,
 } from '../server';
 
@@ -209,7 +211,15 @@ function getPRMUrl(req: express.Request) {
  * transport, given a factory that returns an MCP server object from the MCP
  * SDK. The factory is called once per request — v2 transports are
  * per-request and stateless.
+ *
+ * Requests carrying an `Origin` header are rejected with a 403 unless the
+ * origin matches the request's own host or `options.allowedOrigins`,
+ * protecting browser-reachable servers against DNS rebinding (the MCP spec
+ * requires servers to validate Origin). Non-browser clients send no Origin
+ * and are unaffected.
  * @param createServer - A factory returning a fresh MCP server object
+ * @param options.allowedOrigins - Extra allowed origin hostnames (no scheme,
+ * no port) for cross-origin browser clients
  * @example
  * ```ts
  * function createServer() {
@@ -226,10 +236,26 @@ function getPRMUrl(req: express.Request) {
  * app.all("/mcp", streamableHttpHandler(createServer));
  * ```
  */
-export function streamableHttpHandler(createServer: McpServerFactory) {
+export function streamableHttpHandler(
+  createServer: McpServerFactory,
+  options?: { allowedOrigins?: string[] },
+) {
   const handler = toNodeHandler(createMcpHandler(createServer));
 
   return async (req: express.Request, res: express.Response) => {
+    const origin = validateOrigin({
+      originHeader: req.headers.origin,
+      requestHost: req.headers.host,
+      allowedOrigins: options?.allowedOrigins,
+    });
+
+    if (!origin.ok) {
+      res
+        .writeHead(403, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify(invalidOriginResponseBody(origin.message)));
+      return;
+    }
+
     await handler(req, res, req.body);
   };
 }
