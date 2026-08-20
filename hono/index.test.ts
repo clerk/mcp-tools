@@ -457,7 +457,7 @@ describe('streamableHttpHandler', () => {
     expect((await res.json()).error.message).toContain('Invalid Origin');
   });
 
-  test('allows a same-origin request by default', async () => {
+  test('allows localhost-class origins by default', async () => {
     const app = new Hono();
     app.post('/mcp', streamableHttpHandler(createMcpServer));
 
@@ -469,6 +469,19 @@ describe('streamableHttpHandler', () => {
 
     expect(res.status).toBe(200);
     await res.text();
+  });
+
+  test('rejects an origin matching the request host (DNS rebinding sends both)', async () => {
+    const app = new Hono();
+    app.post('/mcp', streamableHttpHandler(createMcpServer));
+
+    const res = await app.request('http://myapp.example/mcp', {
+      method: 'POST',
+      headers: { ...mcpHeaders, Origin: 'https://myapp.example' },
+      body: initializeBody,
+    });
+
+    expect(res.status).toBe(403);
   });
 
   test('allows an allowlisted cross-origin request', async () => {

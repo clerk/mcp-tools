@@ -87,13 +87,25 @@ describe('origin validation', () => {
     expect(toResponse().status).toBe(403);
   });
 
-  test('allows a same-origin request by default', async () => {
+  test('allows localhost-class origins by default', async () => {
     const handler = streamableHttpHandler(createMcpServer);
     const { res, toResponse } = mockRes();
 
     await handler(mockReq(initializeBody, { origin: 'http://localhost' }), res);
 
     expect(toResponse().status).toBe(200);
+  });
+
+  test('rejects an origin matching the request host (DNS rebinding sends both)', async () => {
+    const handler = streamableHttpHandler(createMcpServer);
+    const { res, toResponse } = mockRes();
+
+    await handler(
+      mockReq(initializeBody, { origin: 'https://myapp.example', host: 'myapp.example' }),
+      res,
+    );
+
+    expect(toResponse().status).toBe(403);
   });
 
   test('allows an allowlisted cross-origin request', async () => {

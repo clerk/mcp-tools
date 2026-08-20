@@ -7,6 +7,7 @@ import {
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
   invalidOriginResponseBody,
+  type StreamableHttpHandlerOptions,
   validateOrigin,
   verifyClerkToken,
 } from '../server';
@@ -213,13 +214,13 @@ function getPRMUrl(req: express.Request) {
  * per-request and stateless.
  *
  * Requests carrying an `Origin` header are rejected with a 403 unless the
- * origin matches the request's own host or `options.allowedOrigins`,
- * protecting browser-reachable servers against DNS rebinding (the MCP spec
- * requires servers to validate Origin). Non-browser clients send no Origin
- * and are unaffected.
+ * origin's hostname is localhost-class (`localhost`, `127.0.0.1`, `[::1]`)
+ * or listed in `options.allowedOrigins`, protecting browser-reachable
+ * servers against DNS rebinding (the MCP spec requires servers to validate
+ * Origin). Non-browser clients send no Origin and are unaffected.
  * @param createServer - A factory returning a fresh MCP server object
- * @param options.allowedOrigins - Extra allowed origin hostnames (no scheme,
- * no port) for cross-origin browser clients
+ * @param options.allowedOrigins - Allowed origin hostnames (no scheme, no
+ * port) for browser clients beyond the localhost-class defaults
  * @example
  * ```ts
  * function createServer() {
@@ -238,14 +239,13 @@ function getPRMUrl(req: express.Request) {
  */
 export function streamableHttpHandler(
   createServer: McpServerFactory,
-  options?: { allowedOrigins?: string[] },
-) {
+  options?: StreamableHttpHandlerOptions,
+): (req: express.Request, res: express.Response) => Promise<void> {
   const handler = toNodeHandler(createMcpHandler(createServer));
 
   return async (req: express.Request, res: express.Response) => {
     const origin = validateOrigin({
       originHeader: req.headers.origin,
-      requestHost: req.headers.host,
       allowedOrigins: options?.allowedOrigins,
     });
 

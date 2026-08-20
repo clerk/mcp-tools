@@ -31,6 +31,25 @@ export interface McpClientStore {
 }
 
 /**
+ * The single place asserting that a {@link ClientData} record is
+ * JSON-serializable — every field on it is, but the interface has no index
+ * signature, so the type system needs the assertion.
+ */
+function toStoredJson(client: ClientData): JsonSerializable {
+  return client as unknown as JsonSerializable;
+}
+
+async function resolveSessionId(state: string, store: McpClientStore): Promise<string> {
+  const sessionId = await store.read(`${STATE_PREFIX}${state}`);
+
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new Error(`No session id associated with state "${state}" found in the store`);
+  }
+
+  return sessionId;
+}
+
+/**
  * This function is used to complete the OAuth flow. It is used in the OAuth
  * callback route to complete the OAuth flow given a state and auth code.
  */
@@ -63,28 +82,21 @@ export async function completeAuthWithCode({
    */
   store: McpClientStore;
 }) {
-  const sessionId = await store.read(`${STATE_PREFIX}${state}`);
+  const sessionId = await resolveSessionId(state, store);
 
-  if (!sessionId || typeof sessionId !== 'string') {
-    throw new Error(`No session id associated with state "${state}" found in the store`);
-  }
-
-  const { transport } = await getClientBySessionId({
+  const { transport, clientData } = await getClientBySessionId({
     sessionId,
     store,
     state,
   });
 
+  // finishAuth saves tokens through the provider, which mutates clientData
+  // in place — no store re-read needed
   await transport.finishAuth(code, iss);
 
-  // Read the updated client data AFTER finishAuth (which saves tokens)
-  const updatedClientData = await getClientData(sessionId, store);
-
   // write to the store that the auth is complete
-  await store.write(`${SESSION_PREFIX}${sessionId}`, {
-    ...updatedClientData,
-    authComplete: true,
-  } as unknown as JsonSerializable);
+  clientData.authComplete = true;
+  await store.write(`${SESSION_PREFIX}${sessionId}`, toStoredJson(clientData));
 
   return { transport, sessionId };
 }
@@ -123,16 +135,10 @@ export async function validateAuthorizationResponseIss({
    */
   store: McpClientStore;
 }): Promise<void> {
-  const sessionId = await store.read(`${STATE_PREFIX}${state}`);
-
-  if (!sessionId || typeof sessionId !== 'string') {
-    throw new Error(`No session id associated with state "${state}" found in the store`);
-  }
+  const sessionId = await resolveSessionId(state, store);
 
   const client = await getClientData(sessionId, store);
-  const metadata = client.discoveryState?.authorizationServerMetadata as
-    | { issuer?: string; authorization_response_iss_parameter_supported?: boolean }
-    | undefined;
+  const metadata = client.discoveryState?.authorizationServerMetadata;
 
   validateAuthorizationResponseIssuer({
     iss,
@@ -682,9 +688,12 @@ function explicitApplicationType(redirectUris: string[]): 'native' | undefined {
  * intentional non-DRY between those covers phase-specific auth behavior, not
  * provider-agnostic storage.
  */
+type CredentialInvalidationScope = Parameters<
+  NonNullable<OAuthClientProvider['invalidateCredentials']>
+>[0];
+
 function sessionPersistence(client: ClientData, store: McpClientStore, sessionId: string) {
-  const persist = () =>
-    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+  const persist = () => store.write(`${SESSION_PREFIX}${sessionId}`, toStoredJson(client));
 
   const providerHooks = {
     saveDiscoveryState: async (discoveryState: OAuthDiscoveryState) => {
@@ -692,9 +701,7 @@ function sessionPersistence(client: ClientData, store: McpClientStore, sessionId
       await persist();
     },
     discoveryState: () => client.discoveryState,
-    invalidateCredentials: async (
-      scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery',
-    ) => {
+    invalidateCredentials: async (scope: CredentialInvalidationScope) => {
       applyCredentialInvalidation(client, scope);
       await persist();
     },
@@ -708,10 +715,7 @@ function sessionPersistence(client: ClientData, store: McpClientStore, sessionId
  * longer valid. The `verifier` scope is a no-op here because code verifiers
  * are keyed by OAuth state, not by session.
  */
-function applyCredentialInvalidation(
-  client: ClientData,
-  scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery',
-) {
+function applyCredentialInvalidation(client: ClientData, scope: CredentialInvalidationScope) {
   if (scope === 'all' || scope === 'client') {
     delete client.clientId;
     delete client.clientSecret;

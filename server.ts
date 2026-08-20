@@ -1,6 +1,6 @@
 import type { MachineAuthObject } from '@clerk/backend';
-import { validateOriginHeader } from '@modelcontextprotocol/server';
-import type { AuthInfo } from '@modelcontextprotocol/server';
+import { localhostAllowedOrigins, validateOriginHeader } from '@modelcontextprotocol/server';
+import type { AuthInfo, OriginValidationResult } from '@modelcontextprotocol/server';
 
 /**
  * Generates protected resource metadata for the given auth server url and
@@ -143,49 +143,53 @@ export function verifyClerkToken(
 }
 
 /**
+ * Options shared by the Express, Hono, and Next.js `streamableHttpHandler`
+ * Origin validation.
+ */
+export interface StreamableHttpHandlerOptions {
+  /**
+   * Allowed origin hostnames (no scheme, no port) for browser clients beyond
+   * the localhost-class defaults. For IPv6, include brackets (e.g. `[::1]`).
+   */
+  allowedOrigins?: string[];
+}
+
+/**
  * Validates a request's `Origin` header for the MCP endpoint, defending
  * browser-reachable servers against DNS rebinding and cross-site request
  * forgery (the MCP spec requires servers to validate Origin).
  *
  * Requests without an `Origin` header pass — non-browser MCP clients do not
- * send one. A present value must have a hostname matching the request's own
- * host (same-origin, port-agnostic) or one of `allowedOrigins`; anything
- * else, including the unparsable and the opaque `null` origin, is rejected.
+ * send one. A present value must have a localhost-class hostname
+ * (`localhost`, `127.0.0.1`, `[::1]`) or one listed in `allowedOrigins`;
+ * anything else, including the unparsable and the opaque `null` origin, is
+ * rejected. The allowlist is deliberately never derived from the request's
+ * own `Host` header: in a DNS rebinding attack the attacker controls both
+ * `Origin` and `Host`, so a same-host allowance would always pass.
  *
- * @returns `{ ok: true }` when the request may proceed, otherwise
- * `{ ok: false, message }` — answer those with a 403.
+ * @returns the SDK's validation result — answer `ok: false` with a 403.
  */
 export function validateOrigin({
   originHeader,
-  requestHost,
   allowedOrigins = [],
 }: {
   /** The raw `Origin` request header, if any */
   originHeader: string | null | undefined;
-  /** The raw `Host` request header (may include a port) */
-  requestHost: string | null | undefined;
-  /** Extra allowed origin hostnames (no scheme, no port) */
+  /** Allowed origin hostnames beyond the localhost-class defaults */
   allowedOrigins?: string[];
-}): { ok: true } | { ok: false; message: string } {
-  const allowedHostnames = [...allowedOrigins];
-
-  if (requestHost) {
-    try {
-      allowedHostnames.push(new URL(`http://${requestHost}`).hostname);
-    } catch {
-      // an unparsable Host header contributes no same-origin allowance
-    }
-  }
-
-  const result = validateOriginHeader(originHeader, allowedHostnames);
-  return result.ok ? { ok: true } : { ok: false, message: result.message };
+}): OriginValidationResult {
+  return validateOriginHeader(originHeader, [...localhostAllowedOrigins(), ...allowedOrigins]);
 }
 
 /**
  * The 403 JSON-RPC error body answered to requests with a disallowed
  * `Origin`, mirroring the MCP SDK's own origin-validation response.
  */
-export function invalidOriginResponseBody(message: string) {
+export function invalidOriginResponseBody(message: string): {
+  jsonrpc: '2.0';
+  error: { code: number; message: string };
+  id: null;
+} {
   return {
     jsonrpc: '2.0',
     error: { code: -32000, message },

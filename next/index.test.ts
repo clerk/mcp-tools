@@ -127,13 +127,27 @@ describe('streamableHttpHandler', () => {
     expect(verifyToken).not.toHaveBeenCalled();
   });
 
-  test('allows a same-origin request by default', async () => {
+  test('allows localhost-class origins by default', async () => {
     const handler = streamableHttpHandler(createMcpServer);
 
     const res = await handler(mcpRequest(initializeBody, { Origin: 'http://localhost' }));
 
     expect(res.status).toBe(200);
     await res.text();
+  });
+
+  test('rejects an origin matching the request host (DNS rebinding sends both)', async () => {
+    const handler = streamableHttpHandler(createMcpServer);
+
+    const res = await handler(
+      new Request('http://myapp.example/mcp', {
+        method: 'POST',
+        headers: { ...mcpHeaders, Origin: 'https://myapp.example' },
+        body: initializeBody,
+      }),
+    );
+
+    expect(res.status).toBe(403);
   });
 
   test('allows an allowlisted cross-origin request', async () => {
