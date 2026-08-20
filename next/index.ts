@@ -1,7 +1,11 @@
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuthInfo, McpServerFactory } from '@modelcontextprotocol/server';
 import type { NextRequest } from 'next/server';
-import { type McpClientStore, completeAuthWithCode } from '../client';
+import {
+  type McpClientStore,
+  completeAuthWithCode,
+  validateAuthorizationResponseIss,
+} from '../client';
 import {
   corsHeaders,
   fetchClerkAuthorizationServerMetadata,
@@ -29,9 +33,26 @@ export function completeOAuthHandler({
     const code = qs.get('code');
     const state = qs.get('state');
     const iss = qs.get('iss') ?? undefined;
+    const error = qs.get('error');
 
     if (!state) {
       return Response.json({ error: 'State missing' }, { status: 400 });
+    }
+
+    if (error) {
+      // RFC 9207 applies to error responses too: without a matching iss, the
+      // error and its description are attacker-controllable (AS mix-up) and
+      // must not be surfaced
+      try {
+        await validateAuthorizationResponseIss({ state, iss, store });
+      } catch {
+        return Response.json({ error: 'invalid_authorization_response' }, { status: 400 });
+      }
+
+      return Response.json(
+        { error, error_description: qs.get('error_description') ?? undefined },
+        { status: 400 },
+      );
     }
 
     if (!code) {

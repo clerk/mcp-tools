@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   Client,
   StreamableHTTPClientTransport,
+  validateAuthorizationResponseIssuer,
   validateClientMetadataUrl,
 } from '@modelcontextprotocol/client';
 import type {
@@ -86,6 +87,58 @@ export async function completeAuthWithCode({
   } as unknown as JsonSerializable);
 
   return { transport, sessionId };
+}
+
+/**
+ * Validates the `iss` parameter of an authorization response against the
+ * issuer recorded before the redirect, per RFC 9207: a present `iss` must
+ * match the recorded issuer, and an absent one is rejected when the server's
+ * metadata advertised `authorization_response_iss_parameter_supported`.
+ *
+ * The success path runs this check automatically inside
+ * {@link completeAuthWithCode}. Call this directly for **error responses**
+ * (`?error=...&state=...`), which RFC 9207 also covers — a mismatch means the
+ * error, including `error_description`, is attacker-controllable and must not
+ * be surfaced to the user.
+ *
+ * @throws an issuer mismatch error when the response fails the check
+ */
+export async function validateAuthorizationResponseIss({
+  state,
+  iss,
+  store,
+}: {
+  /**
+   * The state returned from the auth provider via querystring.
+   */
+  state: string;
+  /**
+   * The issuer identifier returned from the auth provider via querystring, if
+   * present.
+   */
+  iss?: string;
+  /**
+   * A persistent store for auth data
+   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
+   */
+  store: McpClientStore;
+}): Promise<void> {
+  const sessionId = await store.read(`${STATE_PREFIX}${state}`);
+
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new Error(`No session id associated with state "${state}" found in the store`);
+  }
+
+  const client = await getClientData(sessionId, store);
+  const metadata = client.discoveryState?.authorizationServerMetadata as
+    | { issuer?: string; authorization_response_iss_parameter_supported?: boolean }
+    | undefined;
+
+  validateAuthorizationResponseIssuer({
+    iss,
+    expectedIssuer: metadata?.issuer ?? client.discoveryState?.authorizationServerUrl,
+    issParameterSupported: metadata?.authorization_response_iss_parameter_supported === true,
+  });
 }
 
 /**

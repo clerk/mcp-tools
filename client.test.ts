@@ -49,6 +49,7 @@ import {
   createDynamicallyRegisteredMcpClient,
   createKnownCredentialsMcpClient,
   getClientBySessionId,
+  validateAuthorizationResponseIss,
 } from './client';
 import type { JsonSerializable, McpClientStore } from './client';
 
@@ -279,6 +280,57 @@ function memoryStore(): McpClientStore {
     },
   };
 }
+
+describe('validateAuthorizationResponseIss on error responses (RFC 9207)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function startFlow({ advertiseIss }: { advertiseIss: boolean }) {
+    vi.stubGlobal('fetch', mockOAuthServer({ advertiseIss }));
+    const store = memoryStore();
+    const { state } = await startAuthFlow(store);
+    return { store, state };
+  }
+
+  test('accepts a matching iss', async () => {
+    const { store, state } = await startFlow({ advertiseIss: true });
+
+    await expect(
+      validateAuthorizationResponseIss({ state, iss: BASE_URL, store }),
+    ).resolves.toBeUndefined();
+  });
+
+  test('rejects a mismatched iss', async () => {
+    const { store, state } = await startFlow({ advertiseIss: true });
+
+    await expect(
+      validateAuthorizationResponseIss({ state, iss: 'https://attacker.example', store }),
+    ).rejects.toThrow(/Issuer mismatch/);
+  });
+
+  test('rejects an omitted iss when the server advertises iss support', async () => {
+    const { store, state } = await startFlow({ advertiseIss: true });
+
+    await expect(validateAuthorizationResponseIss({ state, store })).rejects.toThrow(
+      /Issuer mismatch/,
+    );
+  });
+
+  test('accepts an omitted iss when the server does not advertise iss support', async () => {
+    const { store, state } = await startFlow({ advertiseIss: false });
+
+    await expect(validateAuthorizationResponseIss({ state, store })).resolves.toBeUndefined();
+  });
+
+  test('rejects an unknown state', async () => {
+    const { store } = await startFlow({ advertiseIss: true });
+
+    await expect(
+      validateAuthorizationResponseIss({ state: 'unknown-state', iss: BASE_URL, store }),
+    ).rejects.toThrow(/No session id/);
+  });
+});
 
 describe('DCR application_type (SEP-837)', () => {
   afterEach(() => {

@@ -1,6 +1,8 @@
 import type { AuthInfo } from '@modelcontextprotocol/server';
+import type { NextRequest } from 'next/server';
 import { describe, test, expect, vi } from 'vitest';
 
+import type { JsonSerializable, McpClientStore } from '../client';
 import {
   createMcpServer,
   discoverBody,
@@ -9,7 +11,7 @@ import {
   mcpHeaders,
   readJsonRpcMessage,
 } from '../test-helpers';
-import { streamableHttpHandler } from './index';
+import { completeOAuthHandler, streamableHttpHandler } from './index';
 
 function mcpRequest(body: string, headers: Record<string, string> = {}) {
   return new Request('http://localhost/mcp', {
@@ -112,5 +114,116 @@ describe('streamableHttpHandler', () => {
 
     expect(res.status).toBe(401);
     expect(verifyToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('completeOAuthHandler error responses', () => {
+  const AS_URL = 'https://as.example.com';
+
+  function memoryStore(): McpClientStore {
+    const data = new Map<string, JsonSerializable>();
+    return {
+      read: async (key) => data.get(key) ?? null,
+      write: async (key, value) => {
+        data.set(key, value);
+      },
+    };
+  }
+
+  // seeds the store with the state → session mapping and discovery state a
+  // real flow would have persisted before redirecting
+  async function seededStore(state: string) {
+    const store = memoryStore();
+    await store.write(`state_${state}`, 'session-1');
+    await store.write('session_session-1', {
+      oauthRedirectUrl: 'https://app.example.com/callback',
+      mcpEndpoint: 'https://rs.example.com/mcp',
+      mcpClientName: 'test-client',
+      mcpClientVersion: '1.0.0',
+      discoveryState: {
+        authorizationServerUrl: AS_URL,
+        authorizationServerMetadata: {
+          issuer: AS_URL,
+          authorization_response_iss_parameter_supported: true,
+        },
+      },
+    });
+    return store;
+  }
+
+  function callbackRequest(params: Record<string, string>) {
+    const url = new URL('https://app.example.com/callback');
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    return { nextUrl: url } as unknown as NextRequest;
+  }
+
+  test('surfaces an AS error response after its iss validates', async () => {
+    const callback = vi.fn();
+    const store = await seededStore('state-1');
+    const handler = completeOAuthHandler({ store, callback });
+
+    const res = (await handler(
+      callbackRequest({
+        state: 'state-1',
+        error: 'access_denied',
+        error_description: 'The user denied the request',
+        iss: AS_URL,
+      }),
+    )) as Response;
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe('access_denied');
+    expect(body.error_description).toBe('The user denied the request');
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('refuses an error response whose iss does not match the recorded issuer', async () => {
+    const callback = vi.fn();
+    const store = await seededStore('state-1');
+    const handler = completeOAuthHandler({ store, callback });
+
+    const res = (await handler(
+      callbackRequest({
+        state: 'state-1',
+        error: 'access_denied',
+        error_description: 'attacker-controlled text',
+        iss: 'https://attacker.example',
+      }),
+    )) as Response;
+
+    expect(res.status).toBe(400);
+    // a mix-up indication: nothing from the callback may be echoed
+    const text = await res.text();
+    expect(text).not.toContain('access_denied');
+    expect(text).not.toContain('attacker-controlled text');
+    expect(text).not.toContain('attacker.example');
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('refuses an error response omitting iss when the AS advertises iss support', async () => {
+    const callback = vi.fn();
+    const store = await seededStore('state-1');
+    const handler = completeOAuthHandler({ store, callback });
+
+    const res = (await handler(
+      callbackRequest({ state: 'state-1', error: 'access_denied' }),
+    )) as Response;
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).not.toContain('access_denied');
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when state is missing from an error response', async () => {
+    const callback = vi.fn();
+    const handler = completeOAuthHandler({ store: memoryStore(), callback });
+
+    const res = (await handler(callbackRequest({ error: 'access_denied' }))) as Response;
+
+    expect(res.status).toBe(400);
+    expect(callback).not.toHaveBeenCalled();
   });
 });
