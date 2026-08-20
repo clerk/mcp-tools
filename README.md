@@ -157,10 +157,13 @@ After the user completes the OAuth flow, you'll need to handle the callback:
 ```ts
 import { completeAuthWithCode } from '@clerk/mcp-tools/client';
 
-export async function handleOAuthCallback(code: string, state: string) {
+export async function handleOAuthCallback(code: string, state: string, iss?: string) {
   const result = await completeAuthWithCode({
     state,
     code,
+    // when the AS returns an iss parameter, pass it through — it is validated
+    // against the recorded issuer before the code is redeemed (RFC 9207)
+    iss,
     store,
   });
 
@@ -168,6 +171,21 @@ export async function handleOAuthCallback(code: string, state: string) {
   return result;
 }
 ```
+
+If the authorization server redirects back with an **error response**
+(`?error=...&state=...`) instead of a code, validate its `iss` before showing
+the error to anyone — without a matching `iss`, the error and its description
+may come from a mixed-up authorization server and are attacker-controllable:
+
+```ts
+import { validateAuthorizationResponseIss } from '@clerk/mcp-tools/client';
+
+// throws when iss is missing-but-advertised or does not match the recorded
+// issuer; only surface the error params when this passes
+await validateAuthorizationResponseIss({ state, iss, store });
+```
+
+The Next.js `completeOAuthHandler` does both of these automatically.
 
 #### Making MCP tool calls
 
@@ -371,6 +389,13 @@ The above examples are more of a _guide_ for how to implement the tools, but for
        */
       oauthRedirectUrl: string;
       /**
+       * Extra redirect URLs to register alongside `oauthRedirectUrl`. When the
+       * combined set mixes web and native-class (custom-scheme or loopback)
+       * URLs, `application_type` is set to `native` explicitly in the
+       * registration, since the derivation is ambiguous for mixed sets.
+       */
+      oauthAdditionalRedirectUrls?: string[];
+      /**
        * The name of the OAuth client to be created with the authorization server
        */
       oauthClientName?: string;
@@ -378,6 +403,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
        * The URI of the OAuth client to be created with the authorization server
        */
       oauthClientUri?: string;
+      /**
+       * HTTPS URL of a Client ID Metadata Document describing this OAuth
+       * client. When the authorization server supports CIMD, this URL is used
+       * directly as the client_id and dynamic registration is skipped.
+       */
+      oauthClientMetadataUrl?: string;
       /**
        * OAuth scopes that you'd like to request access to
        */
@@ -509,6 +540,13 @@ The above examples are more of a _guide_ for how to implement the tools, but for
        */
       state: string;
       /**
+       * The issuer identifier returned from the auth provider via querystring,
+       * if present. Validated against the recorded issuer before the code is
+       * redeemed, defending against authorization server mix-up attacks.
+       * @see https://datatracker.ietf.org/doc/html/rfc9207
+       */
+      iss?: string;
+      /**
        * A persistent store for auth data
        * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
        */
@@ -531,6 +569,31 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       sessionId: string;
     }
     ```
+
+- `validateAuthorizationResponseIss`
+  - **Description:** Validates the `iss` parameter of an authorization response against the issuer recorded before the redirect, per [RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207). The success path runs this automatically inside `completeAuthWithCode`; call it directly for error responses (`?error=...&state=...`) before surfacing the error — on a mismatch, the error and its description are attacker-controllable and must not be shown. Throws when a present `iss` does not match, or when `iss` is absent but the authorization server advertised `authorization_response_iss_parameter_supported`.
+  - **Arguments:**
+
+    ```ts
+    interface ValidateAuthorizationResponseIssParams {
+      /**
+       * The state returned from the auth provider via querystring.
+       */
+      state: string;
+      /**
+       * The issuer identifier returned from the auth provider via querystring,
+       * if present.
+       */
+      iss?: string;
+      /**
+       * A persistent store for auth data
+       * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
+       */
+      store: McpClientStore;
+    }
+    ```
+
+  - **Return Type:** `Promise<void>` — resolves when the response passes the check, throws otherwise.
 
 #### Scope: `@clerk/mcp-tools/server`
 

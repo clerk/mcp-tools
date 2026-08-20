@@ -275,6 +275,9 @@ Express handler that processes MCP requests using the streamable HTTP transport 
 **Parameters:**
 
 - `createServer: McpServerFactory` - A factory returning a fresh MCP server instance, called once per request (v2 transports are per-request and stateless)
+- `options.allowedOrigins?: string[]` - Extra allowed origin hostnames (no scheme, no port) for cross-origin browser clients
+
+Requests carrying an `Origin` header are rejected with a `403` unless the origin's hostname matches the request's own host or is listed in `allowedOrigins` — the Origin validation the MCP spec requires, protecting browser-reachable servers against DNS rebinding. Non-browser MCP clients send no `Origin` header and are unaffected.
 
 **Example:**
 

@@ -83,6 +83,8 @@ export { handler as GET, handler as POST, handler as DELETE };
 
 **Note**: Servers built with `streamableHttpHandler` answer both the modern `server/discover` handshake and the legacy `initialize` handshake, so existing MCP clients keep working. Export the handler as `DELETE` too — it answers the removed 2025-era session operations with a JSON-RPC `405 Method not allowed.` rather than letting Next return its own error page.
 
+Requests carrying an `Origin` header are rejected with a `403` unless the origin's hostname matches the request's own host or is listed in `options.allowedOrigins` (hostnames only, no scheme or port) — the Origin validation the MCP spec requires, protecting browser-reachable servers against DNS rebinding. Non-browser MCP clients send no `Origin` header and are unaffected.
+
 ### Building an MCP Client
 
 For a complete working example of an MCP client implementation, see the [MCP Demo](https://github.com/clerk/mcp-demo) which shows a full client/server setup.

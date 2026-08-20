@@ -108,6 +108,8 @@ Same as `protectedResourceHandler`, but derives `authServerUrl` automatically fr
 
 Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`.
 
-### `streamableHttpHandler(createServer)`
+### `streamableHttpHandler(createServer, options?)`
 
 Handler that creates a fresh `McpServer` and per-request stateless transport for each request. Servers built with it answer both the modern `server/discover` handshake and the legacy `initialize` handshake. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
+
+Requests carrying an `Origin` header are rejected with a `403` unless the origin's hostname matches the request's own host or is listed in `options.allowedOrigins` (hostnames only, no scheme or port) — the Origin validation the MCP spec requires, protecting browser-reachable servers against DNS rebinding. Non-browser MCP clients send no `Origin` header and are unaffected.
