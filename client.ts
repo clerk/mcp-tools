@@ -166,8 +166,7 @@ export async function getClientBySessionId({
   state?: string;
 }) {
   const client = await getClientData(sessionId, store);
-  const persist = () =>
-    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+  const { persist, providerHooks } = sessionPersistence(client, store, sessionId);
 
   const redirectUris = [client.oauthRedirectUrl, ...(client.oauthAdditionalRedirectUrls ?? [])];
 
@@ -220,15 +219,7 @@ export async function getClientBySessionId({
       });
       await persist();
     },
-    saveDiscoveryState: async (state: OAuthDiscoveryState) => {
-      client.discoveryState = state;
-      await persist();
-    },
-    discoveryState: () => client.discoveryState,
-    invalidateCredentials: async (scope) => {
-      applyCredentialInvalidation(client, scope);
-      await persist();
-    },
+    ...providerHooks,
     redirectToAuthorization: unexpectedFunctionCall(
       'redirectToAuthorization',
       'getting an existing client',
@@ -343,8 +334,7 @@ export async function createKnownCredentialsMcpClient({
   // client information, so we need this to resolve the session id
   await store.write(`${STATE_PREFIX}${state}`, sessionId);
 
-  const persist = () =>
-    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+  const { persist, providerHooks } = sessionPersistence(client, store, sessionId);
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
@@ -378,15 +368,7 @@ export async function createKnownCredentialsMcpClient({
     tokens: () => undefined,
     // called in the oauth callback route
     saveTokens: unexpectedFunctionCall('saveTokens', 'initializing a known credentials client'),
-    saveDiscoveryState: async (discoveryState: OAuthDiscoveryState) => {
-      client.discoveryState = discoveryState;
-      await persist();
-    },
-    discoveryState: () => client.discoveryState,
-    invalidateCredentials: async (scope) => {
-      applyCredentialInvalidation(client, scope);
-      await persist();
-    },
+    ...providerHooks,
     redirectToAuthorization: (url) => {
       redirect(url.toString());
     },
@@ -494,8 +476,7 @@ export async function createDynamicallyRegisteredMcpClient({
   // client information, so we need this to resolve the session id
   await store.write(`${STATE_PREFIX}${state}`, sessionId);
 
-  const persist = () =>
-    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+  const { persist, providerHooks } = sessionPersistence(client, store, sessionId);
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
@@ -560,15 +541,7 @@ export async function createDynamicallyRegisteredMcpClient({
       });
       await persist();
     },
-    saveDiscoveryState: async (discoveryState: OAuthDiscoveryState) => {
-      client.discoveryState = discoveryState;
-      await persist();
-    },
-    discoveryState: () => client.discoveryState,
-    invalidateCredentials: async (scope) => {
-      applyCredentialInvalidation(client, scope);
-      await persist();
-    },
+    ...providerHooks,
     redirectToAuthorization: (url) => {
       redirect(url.toString());
     },
@@ -700,6 +673,34 @@ function explicitApplicationType(redirectUris: string[]): 'native' | undefined {
   }
 
   return hasWeb && hasNative ? 'native' : undefined;
+}
+
+/**
+ * The persistence plumbing every provider phase shares verbatim: writing the
+ * session record, round-tripping discovery state across the redirect, and
+ * credential invalidation. Kept out of the per-phase provider literals — the
+ * intentional non-DRY between those covers phase-specific auth behavior, not
+ * provider-agnostic storage.
+ */
+function sessionPersistence(client: ClientData, store: McpClientStore, sessionId: string) {
+  const persist = () =>
+    store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+
+  const providerHooks = {
+    saveDiscoveryState: async (discoveryState: OAuthDiscoveryState) => {
+      client.discoveryState = discoveryState;
+      await persist();
+    },
+    discoveryState: () => client.discoveryState,
+    invalidateCredentials: async (
+      scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery',
+    ) => {
+      applyCredentialInvalidation(client, scope);
+      await persist();
+    },
+  } satisfies Partial<OAuthClientProvider>;
+
+  return { persist, providerHooks };
 }
 
 /**
