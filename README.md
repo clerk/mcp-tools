@@ -2,6 +2,8 @@
 
 A library built on top of the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that makes it easier to implement MCP with auth into your MCP client and/or server.
 
+MCP SDK v2 and the 2026-07-28 protocol require Node.js 20.9 or later. Server applications that define tools should also install `@modelcontextprotocol/server` and Zod 4.2 or later.
+
 ### What is MCP?
 
 It's a protocol that enables AI applications like Claude, ChatGPT, Cursor, etc to ask you for permission to access some of your private information that normally you'd need to sign in with your account to access. For example, your emails, or your private github repositories, etc.
@@ -30,6 +32,7 @@ For detailed implementation guides and examples specific to your framework, see:
 - **[Express.js Integration](./express/README.md)** - Complete guide for building MCP servers with Express.js
 - **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono and edge runtimes
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
+- **[Migration from SDK v1](./MIGRATING.md)** - Breaking API changes and v2 migration examples
 
 ### Table of Contents
 
@@ -72,9 +75,9 @@ const result = generateClerkProtectedResourceMetadata({
 
 For framework-specific implementations of protected resource metadata handlers, see:
 
-- [Express.js implementation](./express/README.md#protected-resource-metadata)
+- [Express.js implementation](./express/README.md)
 - [Hono implementation](./hono/README.md)
-- [Next.js implementation](./next/README.md#protectedresourcehandler)
+- [Next.js implementation](./next/README.md#protected-resource-metadata)
 
 #### Authorization server metadata
 
@@ -97,15 +100,27 @@ For framework-specific implementations, see:
 
 - [Express.js implementation](./express/README.md)
 - [Hono implementation](./hono/README.md)
-- [Next.js implementation](./next/README.md#authservermetadatahandlerclerk)
+- [Next.js implementation](./next/README.md#protected-resource-metadata)
+
+#### Verifying Clerk OAuth access tokens
+
+SDK v2 bearer authentication requires `AuthInfo.expiresAt`. Use the Clerk verifier helper with `requireBearerAuth` or a framework adapter. It verifies opaque and JWT access tokens through Clerk and maps the real token expiration into the MCP auth context.
+
+```ts
+import { createClerkClient } from '@clerk/backend';
+import { createClerkOAuthTokenVerifier } from '@clerk/mcp-tools/server';
+
+const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+const verifier = createClerkOAuthTokenVerifier(clerk);
+```
 
 #### Creating an MCP endpoint
 
 To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters, since each framework has its own way of handling request and response objects, which are critical parts of implementing the MCP protocol:
 
-- **Express.js**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/express` - see [Express.js guide](./express/README.md#mcp-request-handler)
+- **Express.js**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/express` - see [Express.js guide](./express/README.md)
 - **Hono**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/hono` - see [Hono guide](./hono/README.md)
-- **Next.js**: Use Vercel's MCP adapter with Next.js route handlers - see [Next.js guide](./next/README.md#building-an-mcp-server)
+- **Next.js**: Use the first-party `streamableHttpHandler` from `@clerk/mcp-tools/next` - see [Next.js guide](./next/README.md#building-an-mcp-server)
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
@@ -114,6 +129,8 @@ These adapters handle the MCP protocol details and integrate with your authentic
 The first step to building MCP compatibility into your AI application is allowing your users to connect with an MCP service. This can be kicked off simply with the URL of an MCP-compatible server, like `https://example.com/mcp`. Normally, your app would implement a text field where the user can enter an MCP endpoint, or have a pre-built integration where clicking a button would trigger an MCP connection flow with a baked-in endpoint URL.
 
 The process of actually making the MCP connection using the SDK, however, is fairly arduous, so we expose some tools that can help make this easier.
+
+The client helpers negotiate the 2026-07-28 protocol automatically and fall back to the legacy handshake when a server does not support it. They persist complete OAuth client credentials, token responses, issuer stamps, refresh tokens, granted scopes, and discovery state through the configured store.
 
 #### Framework-agnostic client creation
 
@@ -124,10 +141,10 @@ import { createDynamicallyRegisteredMcpClient } from '@clerk/mcp-tools/client';
 import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 
 // Create a persistent store (use appropriate store for your environment)
-const store = createRedisStore({ url: process.env.REDIS_URL });
+const store = createRedisStore({ host: process.env.REDIS_HOST });
 
 export async function initializeMCPConnection(mcpEndpoint: string) {
-  const { connect, sessionId } = createDynamicallyRegisteredMcpClient({
+  const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
     mcpEndpoint,
     oauthScopes: 'openid profile email',
     oauthRedirectUrl: 'https://yourapp.com/oauth_callback',
@@ -155,10 +172,9 @@ After the user completes the OAuth flow, you'll need to handle the callback:
 ```ts
 import { completeAuthWithCode } from '@clerk/mcp-tools/client';
 
-export async function handleOAuthCallback(code: string, state: string) {
+export async function handleOAuthCallback(callbackUrl: string) {
   const result = await completeAuthWithCode({
-    state,
-    code,
+    callbackParams: new URL(callbackUrl).searchParams,
     store,
   });
 
@@ -175,9 +191,12 @@ Once authentication is complete, you can call MCP tools:
 import { getClientBySessionId } from '@clerk/mcp-tools/client';
 
 export async function callMCPTool(sessionId: string, toolName: string, args: any) {
-  const { client, connect } = getClientBySessionId({
+  const { client, connect } = await getClientBySessionId({
     sessionId,
     store,
+    redirect: (url) => {
+      window.location.href = url;
+    },
   });
 
   await connect();
@@ -193,8 +212,7 @@ export async function callMCPTool(sessionId: string, toolName: string, args: any
 
 For complete framework-specific implementations with working examples, see:
 
-- [Express.js client guide](./express/README.md)
-- [Next.js client guide](./next/README.md#building-an-mcp-client)
+- [Next.js client guide](./next/README.md#completing-client-oauth)
 
 ### Stores
 
@@ -223,7 +241,7 @@ For production environments, use one of these persistent stores:
 import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 
 const store = createRedisStore({
-  url: process.env.REDIS_URL,
+  host: process.env.REDIS_HOST,
 });
 ```
 
@@ -243,7 +261,7 @@ const store = createPostgresStore({
 import { createSqliteStore } from '@clerk/mcp-tools/stores/sqlite';
 
 const store = createSqliteStore({
-  filename: './mcp-sessions.db',
+  dbPath: './mcp-sessions.db',
 });
 ```
 
@@ -334,7 +352,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       /**
        * Calling this function will initialize a connect to the MCP service.
        */
-      connect: () => void;
+      connect: () => Promise<void>;
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -418,7 +436,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       /**
        * Calling this function will initialize a connect to the MCP service.
        */
-      connect: () => void;
+      connect: () => Promise<void>;
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -457,6 +475,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
      * ensure that PKCE can run correctly.
      */
     state?: string;
+    /**
+     * Required when a restored client must redirect for a new OAuth grant,
+     * such as scope step-up after an insufficient_scope response.
+     */
+    redirect?: (url: string) => void | Promise<void>;
   }
   ```
 
@@ -471,7 +494,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       /**
        * Calling this function will initialize a connect to the MCP service.
        */
-      connect: () => void;
+      connect: () => Promise<void>;
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -491,21 +514,15 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `completeAuthWithCode`
-  - **Description:** Designed to be used in the OAuth callback route. Passing in the code, state, and your store will finish the auth process
+  - **Description:** Designed for the OAuth callback route. Pass the complete callback query so issuer validation and future OAuth response parameters are preserved. The existing code/state form remains supported.
   - **Arguments:**
 
     ```ts
     interface CompleteAuthWithCodeParams {
       /**
-       * The authorization code returned from the auth provider via querystring.
-       * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1
+       * The complete form-decoded OAuth callback query.
        */
-      code: string;
-      /**
-       * The state returned from the auth provider via querystring.
-       * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.1
-       */
-      state: string;
+      callbackParams: URLSearchParams;
       /**
        * A persistent store for auth data
        * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
@@ -531,6 +548,9 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 #### Scope: `@clerk/mcp-tools/server`
+
+- `createClerkOAuthTokenVerifier`
+  - **Description:** Creates an MCP SDK `OAuthTokenVerifier` from a Clerk client or its `idPOAuthAccessToken` API. The verifier supplies `expiresAt`, scopes, client ID, and `extra.userId` for SDK bearer authentication.
 
 - `generateProtectedResourceMetadata`
   - **Description:** Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). This metadata helps OAuth clients understand how to authenticate with your resource server.

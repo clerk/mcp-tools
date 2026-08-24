@@ -1,5 +1,85 @@
 import type { MachineAuthObject } from '@clerk/backend';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import {
+  OAuthError,
+  OAuthErrorCode,
+  type AuthInfo,
+  type OAuthTokenVerifier,
+} from '@modelcontextprotocol/server';
+
+export interface ClerkOAuthAccessToken {
+  clientId: string;
+  subject: string;
+  scopes: string[];
+  revoked: boolean;
+  expired: boolean;
+  expiration: number | null;
+}
+
+export interface ClerkOAuthAccessTokenClient {
+  verify(accessToken: string): Promise<ClerkOAuthAccessToken>;
+}
+
+export interface ClerkClientWithOAuthAccessTokens {
+  idPOAuthAccessToken: ClerkOAuthAccessTokenClient;
+}
+
+export type ClerkOAuthTokenVerifierSource =
+  | ClerkOAuthAccessTokenClient
+  | ClerkClientWithOAuthAccessTokens;
+
+/**
+ * Creates an MCP OAuth token verifier backed by Clerk's OAuth access token API.
+ */
+export function createClerkOAuthTokenVerifier(
+  source: ClerkOAuthTokenVerifierSource,
+): OAuthTokenVerifier {
+  const accessTokenClient =
+    (source as Partial<ClerkClientWithOAuthAccessTokens>).idPOAuthAccessToken ??
+    (source as ClerkOAuthAccessTokenClient);
+
+  return {
+    async verifyAccessToken(token) {
+      let clerkToken: ClerkOAuthAccessToken;
+
+      try {
+        clerkToken = await accessTokenClient.verify(token);
+      } catch (error) {
+        if (isClerkTokenNotFoundError(error)) {
+          throw invalidTokenError();
+        }
+
+        throw error;
+      }
+
+      if (clerkToken.revoked || clerkToken.expired || clerkToken.expiration === null) {
+        throw invalidTokenError();
+      }
+
+      return {
+        token,
+        clientId: clerkToken.clientId,
+        scopes: clerkToken.scopes,
+        expiresAt: Math.floor(clerkToken.expiration / 1000),
+        extra: { userId: clerkToken.subject },
+      };
+    },
+  };
+}
+
+function invalidTokenError() {
+  return new OAuthError(OAuthErrorCode.InvalidToken, 'Invalid OAuth access token');
+}
+
+function isClerkTokenNotFoundError(error: unknown) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'clerkError' in error &&
+    error.clerkError === true &&
+    'status' in error &&
+    error.status === 404
+  );
+}
 
 /**
  * Generates protected resource metadata for the given auth server url and
@@ -100,7 +180,10 @@ export async function fetchClerkAuthorizationServerMetadata({
  * as `authData to the MCP SDK.
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
  * @param token - The token to verify
- * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
+ * This compatibility helper cannot be used with MCP v2 bearer authentication
+ * because Clerk's middleware auth object does not include token expiration.
+ * @deprecated Use createClerkOAuthTokenVerifier with SDK bearer authentication.
+ * @returns AuthInfo type from `@modelcontextprotocol/server`
  */
 export function verifyClerkToken(
   auth: MachineAuthObject<'oauth_token'>,

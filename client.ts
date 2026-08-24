@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  type OAuthClientProvider,
+  type OAuthDiscoveryState,
+  type StoredOAuthClientInformation,
+  type StoredOAuthTokens,
+} from '@modelcontextprotocol/client';
 
 const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';
@@ -26,27 +30,34 @@ export interface McpClientStore {
  * This function is used to complete the OAuth flow. It is used in the OAuth
  * callback route to complete the OAuth flow given a state and auth code.
  */
-export async function completeAuthWithCode({
-  state,
-  code,
-  store,
-}: {
-  /**
-   * The authorization code returned from the auth provider via querystring.
-   * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1
-   */
-  code: string;
-  /**
-   * The state returned from the auth provider via querystring.
-   * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.1
-   */
-  state: string;
-  /**
-   * A persistent store for auth data
-   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
-   */
-  store: McpClientStore;
-}) {
+export type CompleteAuthWithCodeParams =
+  | {
+      callbackParams: URLSearchParams;
+      store: McpClientStore;
+      code?: never;
+      state?: never;
+      iss?: never;
+    }
+  | {
+      callbackParams?: never;
+      code: string;
+      state: string;
+      iss?: string;
+      store: McpClientStore;
+    };
+
+export async function completeAuthWithCode(params: CompleteAuthWithCodeParams) {
+  const { store } = params;
+  const callbackParams = params.callbackParams
+    ? new URLSearchParams(params.callbackParams)
+    : new URLSearchParams({ code: params.code, state: params.state });
+  if (!params.callbackParams && params.iss) callbackParams.set('iss', params.iss);
+
+  const state = callbackParams.get('state');
+  if (!state) {
+    throw new Error('No OAuth state found in the callback parameters');
+  }
+
   const sessionId = await store.read(`${STATE_PREFIX}${state}`);
 
   if (!sessionId || typeof sessionId !== 'string') {
@@ -59,13 +70,13 @@ export async function completeAuthWithCode({
     state,
   });
 
-  await transport.finishAuth(code);
+  await transport.finishAuth(callbackParams);
 
   // Read the updated client data AFTER finishAuth (which saves tokens)
   const updatedClientData = await getClientData(sessionId, store);
 
   // write to the store that the auth is complete
-  await store.write(`${SESSION_PREFIX}${sessionId}`, {
+  await writeClientData(sessionId, store, {
     ...updatedClientData,
     authComplete: true,
   });
@@ -81,6 +92,7 @@ export async function getClientBySessionId({
   sessionId,
   store,
   state,
+  redirect,
 }: {
   /**
    * The session id to retrieve the client details for
@@ -96,62 +108,13 @@ export async function getClientBySessionId({
    * ensure that PKCE can run correctly.
    */
   state?: string;
+  /**
+   * Redirects a restored session when OAuth needs a new authorization grant.
+   */
+  redirect?: (url: string) => void | Promise<void>;
 }) {
   const client = await getClientData(sessionId, store);
-
-  const authProvider: OAuthClientProvider = {
-    redirectUrl: client.oauthRedirectUrl,
-    clientMetadata: {
-      redirect_uris: [client.oauthRedirectUrl],
-      logo_uri: undefined,
-      tos_uri: undefined,
-    },
-    clientInformation: () => ({
-      client_id: client.clientId!,
-      client_secret: client.clientSecret!,
-    }),
-    saveClientInformation: async (newInfo: OAuthClientInformationFull) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        ...newInfo,
-      });
-    },
-    tokens: () => {
-      if (!client.accessToken) return undefined;
-      return { access_token: client.accessToken, token_type: 'Bearer' };
-    },
-    saveTokens: async ({ access_token, refresh_token }) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        accessToken: access_token,
-        refreshToken: refresh_token,
-      });
-
-      await store.read(`${SESSION_PREFIX}${sessionId}`);
-
-      return void 0;
-    },
-    redirectToAuthorization: unexpectedFunctionCall(
-      'redirectToAuthorization',
-      'getting an existing client',
-    ),
-    saveCodeVerifier: unexpectedFunctionCall('saveCodeVerifier', 'getting an existing client'),
-    codeVerifier: async (): Promise<string> => {
-      if (!state) {
-        throw new Error(
-          'The state argument is required to retrieve a code verifier for an already initialized client',
-        );
-      }
-
-      const storedVerifier = await store.read(`${CODE_VERIFIER_PREFIX}${state}`);
-
-      if (!storedVerifier || typeof storedVerifier !== 'string') {
-        throw new Error(`No code verifier found for state "${state}" in the store`);
-      }
-
-      return storedVerifier;
-    },
-  };
+  const authProvider = createOAuthProvider({ client, sessionId, store, state, redirect });
 
   return createReturnValue(client, authProvider, sessionId);
 }
@@ -165,7 +128,7 @@ export interface McpClientReturnType {
   /**
    * Calling this function will initialize a connect to the MCP service.
    */
-  connect: () => void;
+  connect: () => Promise<void>;
   /**
    * Lower level primitive, likely not necessary for use
    * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -237,6 +200,13 @@ export async function createKnownCredentialsMcpClient({
 }: CreateKnownCredentialsMcpClientParams): Promise<McpClientReturnType> {
   const state = randomUUID();
   const sessionId = randomUUID();
+  const clientData: ClientData = {
+    ...client,
+    oauthClientInformation: {
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+    },
+  };
 
   // associate state with session id
   // in the oauth callback, we only have the state, and will need to get the
@@ -245,44 +215,17 @@ export async function createKnownCredentialsMcpClient({
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client as JsonSerializable);
+  await writeClientData(sessionId, store, clientData);
 
-  // there's some non-dry code between this and the dynamically registered
-  // client, but this is on purpose for flexibility and clarity.
-  const authProvider: OAuthClientProvider = {
-    redirectUrl: client.oauthRedirectUrl,
-    clientMetadata: {
-      redirect_uris: [client.oauthRedirectUrl],
-      scope: client.oauthScopes,
-      logo_uri: undefined,
-      tos_uri: undefined,
-    },
-    state: () => state,
-    clientInformation: () => ({
-      client_id: client.clientId,
-      client_secret: client.clientSecret,
-    }),
-    // only should be used for dynamic client registration
-    saveClientInformation: unexpectedFunctionCall(
-      'saveClientInformation',
-      'initializing a known credentials client',
-    ),
-    // it's impossible that we have an access token at this point, so we always
-    // return undefined
-    tokens: () => undefined,
-    // called in the oauth callback route
-    saveTokens: unexpectedFunctionCall('saveTokens', 'initializing a known credentials client'),
-    redirectToAuthorization: (url) => {
-      redirect(url.toString());
-    },
-    saveCodeVerifier: async (verifier: string) => {
-      await store.write(`${CODE_VERIFIER_PREFIX}${state}`, verifier);
-    },
-    // called in the oauth callback route
-    codeVerifier: unexpectedFunctionCall('codeVerifier', 'initializing a known credentials client'),
-  };
+  const authProvider = createOAuthProvider({
+    client: clientData,
+    sessionId,
+    store,
+    state,
+    redirect,
+  });
 
-  return createReturnValue(client, authProvider, sessionId);
+  return createReturnValue(clientData, authProvider, sessionId);
 }
 
 export interface CreateDynamicallyRegisteredMcpClientParams {
@@ -345,12 +288,8 @@ export async function createDynamicallyRegisteredMcpClient({
   const state = randomUUID();
   const sessionId = randomUUID();
 
-  // this is our in-memory client object, we will update it with the client id
-  // and secret after dynamic registration is complete
-  let client = {
+  const client: ClientData = {
     ...clientParams,
-    clientId: undefined as string | undefined,
-    clientSecret: undefined as string | undefined,
   };
 
   // associate state with session id
@@ -360,78 +299,134 @@ export async function createDynamicallyRegisteredMcpClient({
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+  await writeClientData(sessionId, store, client);
 
-  const authProvider: OAuthClientProvider = {
+  const authProvider = createOAuthProvider({ client, sessionId, store, state, redirect });
+
+  return createReturnValue(client, authProvider, sessionId);
+}
+
+function createOAuthProvider({
+  client,
+  sessionId,
+  store,
+  state: initialState,
+  redirect,
+}: {
+  client: ClientData;
+  sessionId: string;
+  store: McpClientStore;
+  state?: string;
+  redirect?: (url: string) => void | Promise<void>;
+}): OAuthClientProvider {
+  let currentState = initialState;
+  let initialStateAvailable = initialState !== undefined;
+
+  const createState = async () => {
+    if (initialStateAvailable) {
+      initialStateAvailable = false;
+      return currentState!;
+    }
+
+    currentState = randomUUID();
+    await store.write(`${STATE_PREFIX}${currentState}`, sessionId);
+    return currentState;
+  };
+
+  const requireState = async () => {
+    if (currentState) return currentState;
+    return createState();
+  };
+
+  return {
     redirectUrl: client.oauthRedirectUrl,
-    // this information is used to create an oauth client via dynamic client
-    // registration
     clientMetadata: {
       redirect_uris: [client.oauthRedirectUrl],
       client_name: client.oauthClientName || client.mcpClientName,
       client_uri: client.oauthClientUri,
       scope: client.oauthScopes,
       token_endpoint_auth_method: client.oauthPublicClient ? 'none' : undefined,
+      response_types: ['code'],
+      grant_types: ['authorization_code', 'refresh_token'],
       logo_uri: undefined,
       tos_uri: undefined,
     },
-    state: () => state,
-    // this is called initially to see if there's an existing oauth client. if
-    // it returns undefined, the MCP SDK assumes that dynamic registration is
-    // needed. If dynamic registration is complete, we will have stored the
-    // oauth client credentials and will return them here, which the MCP SDK
-    // uses to construct the authorization url with the client id.
-    clientInformation: () => {
-      if (!client.clientId) {
-        return undefined;
+    state: createState,
+    clientInformation: async () => {
+      const latest = await getClientData(sessionId, store);
+      return getStoredClientInformation(latest);
+    },
+    saveClientInformation: async (clientInformation) => {
+      await updateClientData(sessionId, store, (latest) => ({
+        ...latest,
+        clientId: clientInformation.client_id,
+        clientSecret: clientInformation.client_secret,
+        oauthClientInformation: clientInformation,
+      }));
+    },
+    tokens: async () => {
+      const latest = await getClientData(sessionId, store);
+      return getStoredTokens(latest);
+    },
+    saveTokens: async (tokens) => {
+      await updateClientData(sessionId, store, (latest) => ({
+        ...latest,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        oauthTokens: tokens,
+      }));
+    },
+    redirectToAuthorization: async (url) => {
+      if (!redirect) {
+        throw new Error(
+          'A redirect function is required when a restored client needs OAuth authorization',
+        );
       }
-
-      return {
-        client_id: client.clientId,
-        client_secret: client.clientSecret,
-      };
+      await redirect(url.toString());
     },
-    // this is called after a new oauth client is created, so we now have a
-    // client id and secret
-    saveClientInformation: async (newInfo: OAuthClientInformationFull) => {
-      const newClientInfo = {
-        clientId: newInfo.client_id,
-        clientSecret: newInfo.client_secret,
-      };
-
-      // update the in-memory client object with the new client id and secret
-      client = { ...client, ...newClientInfo };
-
-      // persist the updated client object to the store
-      await store.write(`${SESSION_PREFIX}${sessionId}`, client);
-    },
-    // it's impossible that we have an access token at this point, so we always
-    // return undefined
-    tokens: () => undefined,
-    // called in the oauth callback route
-    saveTokens: async ({ access_token, refresh_token }) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        accessToken: access_token,
-        refreshToken: refresh_token,
-      });
-    },
-    redirectToAuthorization: (url) => {
-      redirect(url.toString());
-    },
-    // since the code verifier is saved before the client is registered, we
-    // store it using the state as the key
-    saveCodeVerifier: async (verifier: string) => {
+    saveCodeVerifier: async (verifier) => {
+      const state = await requireState();
       await store.write(`${CODE_VERIFIER_PREFIX}${state}`, verifier);
     },
-    // called in the oauth callback route
-    codeVerifier: unexpectedFunctionCall(
-      'codeVerifier',
-      'initializing a dynamically registered client',
-    ),
-  };
+    codeVerifier: async () => {
+      const state = await requireState();
+      const verifier = await store.read(`${CODE_VERIFIER_PREFIX}${state}`);
+      if (!verifier || typeof verifier !== 'string') {
+        throw new Error(`No code verifier found for state "${state}" in the store`);
+      }
+      return verifier;
+    },
+    saveDiscoveryState: async (discoveryState) => {
+      await updateClientData(sessionId, store, (latest) => ({
+        ...latest,
+        oauthDiscoveryState: discoveryState,
+      }));
+    },
+    discoveryState: async () => {
+      const latest = await getClientData(sessionId, store);
+      return latest.oauthDiscoveryState;
+    },
+    invalidateCredentials: async (scope) => {
+      await updateClientData(sessionId, store, (latest) => ({
+        ...latest,
+        ...(scope === 'all' || scope === 'client'
+          ? {
+              clientId: undefined,
+              clientSecret: undefined,
+              oauthClientInformation: undefined,
+            }
+          : {}),
+        ...(scope === 'all' || scope === 'tokens'
+          ? { accessToken: undefined, refreshToken: undefined, oauthTokens: undefined }
+          : {}),
+        ...(scope === 'all' || scope === 'discovery' ? { oauthDiscoveryState: undefined } : {}),
+      }));
 
-  return createReturnValue(client, authProvider, sessionId);
+      if ((scope === 'all' || scope === 'verifier') && currentState) {
+        await store.write(`${CODE_VERIFIER_PREFIX}${currentState}`, null);
+      }
+    },
+  };
 }
 
 /**
@@ -447,10 +442,15 @@ function createReturnValue(
     authProvider,
   });
 
-  const mcpClient = new Client({
-    name: client.mcpClientName,
-    version: client.mcpClientVersion,
-  });
+  const mcpClient = new Client(
+    {
+      name: client.mcpClientName,
+      version: client.mcpClientVersion,
+    },
+    {
+      versionNegotiation: { mode: 'auto' },
+    },
+  );
 
   return {
     sessionId,
@@ -470,19 +470,6 @@ function _connect(client: Client, transport: StreamableHTTPClientTransport) {
 }
 
 /**
- * The MCP SDK is designed as if the same AuthProvider can be stored in memory
- * and used across multiple different routes, but in production code this isn't
- * realistic. We know that during certain phases of the auth flow, certain
- * methods should not be called, so we use this function to throw a nice clear
- * error if they are.
- */
-function unexpectedFunctionCall(name: string, phase: string) {
-  return () => {
-    throw new Error(`Unexpected call to AuthProvider method "${name}" when ${phase}.`);
-  };
-}
-
-/**
  * The data that is stored in the store for a mcp client.
  */
 export interface ClientData {
@@ -494,6 +481,9 @@ export interface ClientData {
   clientSecret?: string;
   accessToken?: string;
   refreshToken?: string;
+  oauthClientInformation?: StoredOAuthClientInformation;
+  oauthTokens?: StoredOAuthTokens;
+  oauthDiscoveryState?: OAuthDiscoveryState;
   authComplete?: boolean;
   oauthClientName?: string;
   oauthClientUri?: string;
@@ -517,4 +507,38 @@ async function getClientData(sessionId: string, store: McpClientStore) {
   }
 
   return clientData as unknown as ClientData;
+}
+
+function getStoredClientInformation(client: ClientData) {
+  if (client.oauthClientInformation) return client.oauthClientInformation;
+  if (!client.clientId) return undefined;
+
+  return {
+    client_id: client.clientId,
+    client_secret: client.clientSecret,
+  } satisfies StoredOAuthClientInformation;
+}
+
+function getStoredTokens(client: ClientData) {
+  if (client.oauthTokens) return client.oauthTokens;
+  if (!client.accessToken) return undefined;
+
+  return {
+    access_token: client.accessToken,
+    refresh_token: client.refreshToken,
+    token_type: 'Bearer',
+  } satisfies StoredOAuthTokens;
+}
+
+async function writeClientData(sessionId: string, store: McpClientStore, client: ClientData) {
+  await store.write(`${SESSION_PREFIX}${sessionId}`, client as unknown as JsonSerializable);
+}
+
+async function updateClientData(
+  sessionId: string,
+  store: McpClientStore,
+  update: (client: ClientData) => ClientData,
+) {
+  const latest = await getClientData(sessionId, store);
+  await writeClientData(sessionId, store, update(latest));
 }

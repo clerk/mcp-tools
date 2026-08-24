@@ -22,8 +22,11 @@
   },
   "files": [
     "dist",
+    "express/README.md",
     "hono/README.md",
+    "next/README.md",
     "README.md",
+    "MIGRATING.md",
     "LICENSE"
   ],
   "type": "module",
@@ -86,7 +89,10 @@
     "version-packages": "changeset version && pnpm install --lockfile-only --engine-strict=false"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/express": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.4",
@@ -110,6 +116,7 @@
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
+    "@clerk/backend": "^3.2.13",
     "@clerk/express": "^2.1.5",
     "@clerk/hono": "^0.1.0",
     "@clerk/nextjs": "^7.2.3",
@@ -121,6 +128,9 @@
     "redis": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@clerk/backend": {
+      "optional": true
+    },
     "@clerk/express": {
       "optional": true
     },
@@ -148,6 +158,9 @@
     "better-sqlite3": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=20.9.0"
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }
