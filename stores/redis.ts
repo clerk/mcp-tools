@@ -2,6 +2,7 @@
 import Redis from 'redis';
 import type { JsonSerializable } from '../client.js';
 
+/** Configuration for the Redis MCP client store. */
 export interface RedisStoreConfig {
   /**
    * Redis host

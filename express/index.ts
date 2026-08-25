@@ -25,15 +25,36 @@ type RequestTokenVerifier = (
   request: express.Request,
 ) => Promise<AuthInfo | undefined>;
 
+/** Bearer-auth options for an MCP route. */
 export interface McpAuthOptions {
+  /** Scopes that every accepted access token must contain. */
   requiredScopes?: string[];
+  /** Protected Resource Metadata URL advertised in bearer challenges. */
   resourceMetadataUrl?: string;
 }
 
+/** Clerk bearer-auth options for an MCP route. */
 export interface ClerkMcpAuthOptions extends McpAuthOptions {
+  /** Clerk client override. By default, uses the `@clerk/express` client. */
   clerkClient?: ClerkClientWithOAuthAccessTokens;
 }
 
+/**
+ * Creates Express middleware that requires a valid MCP bearer token.
+ *
+ * An SDK `OAuthTokenVerifier` is preferred. A request-aware callback remains
+ * supported for custom token systems. Successful auth is attached to
+ * `request.auth` for the MCP Node adapter.
+ *
+ * @example
+ * ```ts
+ * app.all(
+ *   '/mcp',
+ *   mcpAuth(verifier, { requiredScopes: ['mcp:read'] }),
+ *   streamableHttpHandler(createServer),
+ * );
+ * ```
+ */
 export function mcpAuth(
   verifier: OAuthTokenVerifier | RequestTokenVerifier,
   options: McpAuthOptions = {},
@@ -50,6 +71,19 @@ export function mcpAuth(
   };
 }
 
+/**
+ * Creates bearer-auth middleware backed by Clerk's OAuth access-token API.
+ *
+ * @example
+ * ```ts
+ * app.use(express.json());
+ * app.all(
+ *   '/mcp',
+ *   mcpAuthClerk({ requiredScopes: ['mcp:read'] }),
+ *   streamableHttpHandler(createServer),
+ * );
+ * ```
+ */
 export function mcpAuthClerk(options: ClerkMcpAuthOptions = {}): express.RequestHandler {
   const verifier = createClerkOAuthTokenVerifier(
     (options.clerkClient ?? clerkClient).idPOAuthAccessToken,
@@ -57,6 +91,17 @@ export function mcpAuthClerk(options: ClerkMcpAuthOptions = {}): express.Request
   return mcpAuth(verifier, options);
 }
 
+/**
+ * Creates an RFC 9728 Protected Resource Metadata handler.
+ *
+ * @example
+ * ```ts
+ * app.get(
+ *   '/.well-known/oauth-protected-resource/mcp',
+ *   protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
+ * );
+ * ```
+ */
 export function protectedResourceHandler({
   authServerUrl,
   properties,
@@ -75,6 +120,7 @@ export function protectedResourceHandler({
   };
 }
 
+/** Serves Clerk Authorization Server Metadata from `CLERK_PUBLISHABLE_KEY`. */
 export async function authServerMetadataHandlerClerk(
   _: express.Request,
   response: express.Response,
@@ -88,6 +134,17 @@ export async function authServerMetadataHandlerClerk(
   response.json(metadata);
 }
 
+/**
+ * Creates Clerk Protected Resource Metadata from `CLERK_PUBLISHABLE_KEY`.
+ *
+ * @example
+ * ```ts
+ * app.get(
+ *   '/.well-known/oauth-protected-resource/mcp',
+ *   protectedResourceHandlerClerk({ scopes_supported: ['mcp:read'] }),
+ * );
+ * ```
+ */
 export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
   return (request: express.Request, response: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
@@ -105,6 +162,21 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
   };
 }
 
+/**
+ * Creates an Express handler for MCP 2026-07-28 and stateless legacy clients.
+ *
+ * The factory returns an isolated server for each request. Mount `express.json()`
+ * before this handler so the Node adapter can use the parsed request body.
+ *
+ * @example
+ * ```ts
+ * const createServer = () =>
+ *   new McpServer({ name: 'support-server', version: '1.0.0' });
+ *
+ * app.use(express.json());
+ * app.all('/mcp', streamableHttpHandler(createServer));
+ * ```
+ */
 export function streamableHttpHandler(
   factory: McpServerFactory,
   options?: CreateMcpHandlerOptions,

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { JsonSerializable } from '../client.js';
 
+/** Configuration for the file-system MCP client store. */
 export interface FsStoreConfig {
   /**
    * Path to the store file

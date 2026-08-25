@@ -40,7 +40,7 @@ afterEach(() => {
 
 describe('Next adapter', () => {
   test('forwards all OAuth callback parameters to the client', async () => {
-    const callback = vi.fn();
+    const callback = vi.fn(() => Response.json({ ok: true }));
     const store = {
       read: vi.fn(),
       write: vi.fn(),
@@ -60,7 +60,7 @@ describe('Next adapter', () => {
   });
 
   test('forwards OAuth error callbacks without requiring a code', async () => {
-    const callback = vi.fn();
+    const callback = vi.fn(() => Response.json({ ok: true }));
     const store = {
       read: vi.fn(),
       write: vi.fn(),

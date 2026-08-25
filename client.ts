@@ -12,6 +12,7 @@ const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';
 const SESSION_PREFIX = 'session_';
 
+/** Values accepted by an {@link McpClientStore}. */
 export type JsonSerializable =
   | null
   | undefined
@@ -21,14 +22,23 @@ export type JsonSerializable =
   | JsonSerializable[]
   | { [key: string]: JsonSerializable };
 
+/**
+ * Persistent storage used across the OAuth redirect and later MCP requests.
+ *
+ * Implementations must preserve nested objects and must not log stored OAuth
+ * credentials. The built-in Redis, PostgreSQL, and SQLite stores implement
+ * this interface. The file-system store is suitable for local development.
+ */
 export interface McpClientStore {
   write: (key: string, value: JsonSerializable) => Promise<void>;
   read: (key: string) => Promise<JsonSerializable>;
 }
 
 /**
- * This function is used to complete the OAuth flow. It is used in the OAuth
- * callback route to complete the OAuth flow given a state and auth code.
+ * Parameters for {@link completeAuthWithCode}.
+ *
+ * Pass `callbackParams` when possible. The legacy `code`, `state`, and `iss`
+ * fields remain available for callers that already parse the callback.
  */
 export type CompleteAuthWithCodeParams =
   | {
@@ -46,6 +56,20 @@ export type CompleteAuthWithCodeParams =
       store: McpClientStore;
     };
 
+/**
+ * Completes OAuth, saves the full token set, and returns the associated MCP
+ * session. The preferred form forwards all callback parameters to the SDK so
+ * it can validate the authorization-server issuer.
+ *
+ * @example
+ * ```ts
+ * const callbackUrl = new URL(request.url);
+ * const { sessionId } = await completeAuthWithCode({
+ *   callbackParams: callbackUrl.searchParams,
+ *   store,
+ * });
+ * ```
+ */
 export async function completeAuthWithCode(params: CompleteAuthWithCodeParams) {
   const { store } = params;
   const callbackParams = params.callbackParams
@@ -84,114 +108,148 @@ export async function completeAuthWithCode(params: CompleteAuthWithCodeParams) {
   return { transport, sessionId };
 }
 
+/** Options for restoring a persisted MCP client session. */
+export interface GetClientBySessionIdParams {
+  /** Session identifier returned by a client creation or OAuth callback helper. */
+  sessionId: string;
+  /** Persistent storage that contains the session. */
+  store: McpClientStore;
+  /** OAuth state used while completing a callback and reading its PKCE verifier. */
+  state?: string;
+  /** Sends the user agent to OAuth when a restored session needs authorization. */
+  redirect?: (url: string) => void | Promise<void>;
+}
+
 /**
- * Given a client ID and a store, retrieves the client details and returns a
- * transport and MCP client configured with an auth provider.
+ * Restores a persisted MCP session. Supply `redirect` when the restored
+ * session can require OAuth step-up or reauthorization.
+ *
+ * @example
+ * ```ts
+ * const session = await getClientBySessionId({
+ *   sessionId,
+ *   store,
+ *   redirect: url => response.redirect(url),
+ * });
+ *
+ * await session.connect();
+ * ```
  */
 export async function getClientBySessionId({
   sessionId,
   store,
   state,
   redirect,
-}: {
-  /**
-   * The session id to retrieve the client details for
-   */
-  sessionId: string;
-  /**
-   * A persistent store for auth data
-   * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
-   */
-  store: McpClientStore;
-  /**
-   * If using this function in the OAuth callback route, pass in the state to
-   * ensure that PKCE can run correctly.
-   */
-  state?: string;
-  /**
-   * Redirects a restored session when OAuth needs a new authorization grant.
-   */
-  redirect?: (url: string) => void | Promise<void>;
-}) {
+}: GetClientBySessionIdParams) {
   const client = await getClientData(sessionId, store);
   const authProvider = createOAuthProvider({ client, sessionId, store, state, redirect });
 
   return createReturnValue(client, authProvider, sessionId);
 }
 
-// Return type for known credentials and dynamically registered clients
+/**
+ * An MCP client session with automatic protocol negotiation.
+ *
+ * `connect()` first probes for MCP 2026-07-28 support and falls back to the
+ * legacy handshake when required. After connection, use
+ * `client.getProtocolEra()` to inspect the selected era.
+ *
+ * @example
+ * ```ts
+ * await session.connect();
+ * console.log(session.client.getProtocolEra()); // "modern" or "legacy"
+ * ```
+ */
 export interface McpClientReturnType {
   /**
    * Represents a session associated with the connected MCP service endpoint.
    */
   sessionId: string;
   /**
-   * Calling this function will initialize a connect to the MCP service.
+   * Connects to the MCP service and negotiates the protocol era.
    */
   connect: () => Promise<void>;
   /**
-   * Lower level primitive, likely not necessary for use
+   * Streamable HTTP transport used by `connect()`.
    * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
    */
   transport: StreamableHTTPClientTransport;
   /**
-   * Lower level primitive, likely not necessary for use
+   * MCP SDK client used to call tools and inspect the negotiated era.
    * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/index.ts#L81
    */
   client: Client;
   /**
-   * Lower level primitive, likely not necessary for use
+   * OAuth provider backed by the configured persistent store.
    * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/auth.ts#L13
    */
   authProvider: OAuthClientProvider;
 }
 
+/** Options for a pre-registered OAuth client. */
 export interface CreateKnownCredentialsMcpClientParams {
   /**
-   * OAuth client id, expected to be collected via user input
+   * Pre-registered OAuth client identifier.
    */
   clientId: string;
   /**
-   * OAuth client secret, expected to be collected via user input
+   * Pre-registered OAuth client secret.
    */
   clientSecret: string;
   /**
-   * The endpoint of the MCP service, expected to be collected via user input
+   * Absolute Streamable HTTP endpoint for the MCP service.
    */
   mcpEndpoint: string;
   /**
-   * OAuth redirect URL - after the user consents, this route will get
-   * back the authorization code and state.
+   * Registered callback URL that receives the OAuth response.
    */
   oauthRedirectUrl: string;
   /**
-   * OAuth scopes that you'd like to request access to
+   * Space-delimited OAuth scopes to request.
    */
   oauthScopes?: string;
   /**
-   * Name passed to the client created by the MCP SDK
+   * Client name sent during MCP protocol negotiation.
    * @see https://github.com/modelcontextprotocol/typescript-sdk?tab=readme-ov-file#writing-mcp-clients
    */
   mcpClientName: string;
   /**
-   * Version number passed to the client created by the MCP SDK
+   * Client version sent during MCP protocol negotiation.
    * @see https://github.com/modelcontextprotocol/typescript-sdk?tab=readme-ov-file#writing-mcp-clients
    */
   mcpClientVersion: string;
   /**
-   * A function that, when called with a url, will redirect to the given url
+   * Sends the user agent to the authorization URL.
    */
   redirect: (url: string) => void;
   /**
-   * A persistent store for auth data
+   * Persistent storage shared by connection and callback handlers.
    * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
    */
   store: McpClientStore;
 }
 
 /**
- * Creates a new MCP client and transport for the first time with a known
- * client id and secret for an existing oauth client.
+ * Creates an MCP session for an existing OAuth client registration.
+ * Connection state, PKCE data, discovery results, and tokens are persisted in
+ * `store` so the session can survive redirects and process restarts.
+ *
+ * @example
+ * ```ts
+ * const session = await createKnownCredentialsMcpClient({
+ *   clientId: process.env.OAUTH_CLIENT_ID!,
+ *   clientSecret: process.env.OAUTH_CLIENT_SECRET!,
+ *   mcpEndpoint: 'https://api.example.com/mcp',
+ *   oauthRedirectUrl: 'https://app.example.com/oauth/callback',
+ *   oauthScopes: 'read write',
+ *   mcpClientName: 'example-client',
+ *   mcpClientVersion: '1.0.0',
+ *   redirect: url => response.redirect(url),
+ *   store,
+ * });
+ *
+ * await session.connect();
+ * ```
  */
 export async function createKnownCredentialsMcpClient({
   redirect,
@@ -228,57 +286,72 @@ export async function createKnownCredentialsMcpClient({
   return createReturnValue(clientData, authProvider, sessionId);
 }
 
+/** Options for OAuth Dynamic Client Registration. */
 export interface CreateDynamicallyRegisteredMcpClientParams {
   /**
-   * The endpoint of the MCP service, expected to be collected via user input
+   * Absolute Streamable HTTP endpoint for the MCP service.
    */
   mcpEndpoint: string;
   /**
-   * OAuth redirect URL - after the user consents, this route will get
-   * back the authorization code and state.
+   * Callback URL advertised during dynamic registration.
    */
   oauthRedirectUrl: string;
   /**
-   * The name of the OAuth client to be created with the authorization server
+   * OAuth client name advertised during dynamic registration.
    */
   oauthClientName?: string;
   /**
-   * The URI of the OAuth client to be created with the authorization server
+   * Public URI for the OAuth client.
    */
   oauthClientUri?: string;
   /**
-   * OAuth scopes that you'd like to request access to
+   * Space-delimited OAuth scopes to request.
    */
   oauthScopes?: string;
   /**
-   * Whether the OAuth client is public or confidential
+   * Uses `token_endpoint_auth_method: "none"` when true.
    * @see https://datatracker.ietf.org/doc/html/rfc6749#section-2.1
    */
   oauthPublicClient?: boolean;
   /**
-   * Name passed to the client created by the MCP SDK
+   * Client name sent during MCP protocol negotiation.
    * @see https://github.com/modelcontextprotocol/typescript-sdk?tab=readme-ov-file#writing-mcp-clients
    */
   mcpClientName: string;
   /**
-   * Version number passed to the client created by the MCP SDK
+   * Client version sent during MCP protocol negotiation.
    * @see https://github.com/modelcontextprotocol/typescript-sdk?tab=readme-ov-file#writing-mcp-clients
    */
   mcpClientVersion: string;
   /**
-   * A function that, when called with a url, will redirect to the given url
+   * Sends the user agent to the authorization URL.
    */
   redirect: (url: string) => void;
   /**
-   * A persistent store for auth data
+   * Persistent storage shared by connection and callback handlers.
    * @see https://github.com/clerk/mcp-tools?tab=readme-ov-file#stores
    */
   store: McpClientStore;
 }
 
 /**
- * Creates a new MCP client and transport for the first time that is assumed
- * to need to be dynamically registered with an authorization server.
+ * Creates an MCP session that registers its OAuth client during the first
+ * connection.
+ *
+ * @example
+ * ```ts
+ * const session = await createDynamicallyRegisteredMcpClient({
+ *   mcpEndpoint: 'https://api.example.com/mcp',
+ *   oauthRedirectUrl: 'https://app.example.com/oauth/callback',
+ *   oauthClientName: 'Example MCP Client',
+ *   mcpClientName: 'example-client',
+ *   mcpClientVersion: '1.0.0',
+ *   redirect: url => response.redirect(url),
+ *   store,
+ * });
+ *
+ * await session.connect();
+ * ```
  */
 export async function createDynamicallyRegisteredMcpClient({
   redirect,
@@ -470,7 +543,11 @@ function _connect(client: Client, transport: StreamableHTTPClientTransport) {
 }
 
 /**
- * The data that is stored in the store for a mcp client.
+ * Persisted MCP client session data.
+ *
+ * `oauthClientInformation`, `oauthTokens`, and `oauthDiscoveryState` preserve
+ * the complete SDK values, including issuer bindings. The scalar credential
+ * fields remain for sessions written by earlier mcp-tools versions.
  */
 export interface ClientData {
   oauthRedirectUrl: string;
