@@ -1,120 +1,104 @@
-import { getAuth } from '@clerk/express';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { clerkClient } from '@clerk/express';
+import { requireBearerAuth } from '@modelcontextprotocol/express';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import {
+  createMcpHandler,
+  getOAuthProtectedResourceMetadataUrl,
+  OAuthError,
+  OAuthErrorCode,
+  type AuthInfo,
+  type CreateMcpHandlerOptions,
+  type McpServerFactory,
+  type OAuthTokenVerifier,
+} from '@modelcontextprotocol/server';
 import type express from 'express';
 import {
+  createClerkOAuthTokenVerifier,
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
-  verifyClerkToken,
+  type ClerkClientWithOAuthAccessTokens,
 } from '../server';
 
+type RequestTokenVerifier = (
+  token: string,
+  request: express.Request,
+) => Promise<AuthInfo | undefined>;
+
+/** Bearer-auth options for an MCP route. */
+export interface McpAuthOptions {
+  /** Scopes that every accepted access token must contain. */
+  requiredScopes?: string[];
+  /** Protected Resource Metadata URL advertised in bearer challenges. */
+  resourceMetadataUrl?: string;
+}
+
+/** Clerk bearer-auth options for an MCP route. */
+export interface ClerkMcpAuthOptions extends McpAuthOptions {
+  /** Clerk client override. By default, uses the `@clerk/express` client. */
+  clerkClient?: ClerkClientWithOAuthAccessTokens;
+}
+
 /**
- * Express middleware that enforces authentication for MCP requests.
- * @param verifyToken - A function that verifies a token and returns either the
- * auth data or false
+ * Creates Express middleware that requires a valid MCP bearer token.
+ *
+ * An SDK `OAuthTokenVerifier` is preferred. A request-aware callback remains
+ * supported for custom token systems. Successful auth is attached to
+ * `request.auth` for the MCP Node adapter.
+ *
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
- *
- * // define server tools, resources, etc...
- *
- * async function verifyToken(token, req) {
- *   const authData = // verify the token and return the auth data
- *   return authData;
- * }
- *
- * app.get("/mcp", mcpAuth(verifyToken), streamableHttpHandler(server));
+ * app.all(
+ *   '/mcp',
+ *   mcpAuth(verifier, { requiredScopes: ['mcp:read'] }),
+ *   streamableHttpHandler(createServer),
+ * );
  * ```
  */
-export async function mcpAuth(
-  verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
-) {
-  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const prmUrl = getPRMUrl(req);
-
-    if (!req.headers.authorization) {
-      return res
-        .status(401)
-        .set({
-          'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}`,
-        })
-        .send({
-          error: 'Unauthorized',
-        });
-    }
-
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.split(' ')[1];
-
-    if (!token) {
-      throw new Error(
-        `Invalid authorization header value, expected Bearer <token>, received ${authHeader}`,
-      );
-    }
-
-    const authData = await verifyToken(token, req);
-
-    if (!authData) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    // @ts-expect-error - we're monkey patching this on purpose
-    req.auth = authData;
-
-    next();
+export function mcpAuth(
+  verifier: OAuthTokenVerifier | RequestTokenVerifier,
+  options: McpAuthOptions = {},
+): express.RequestHandler {
+  return (request, response, next) => {
+    const middleware = requireBearerAuth({
+      verifier: toOAuthTokenVerifier(verifier, request),
+      requiredScopes: options.requiredScopes,
+      resourceMetadataUrl:
+        options.resourceMetadataUrl ??
+        getOAuthProtectedResourceMetadataUrl(getRequestUrl(request)).toString(),
+    });
+    return middleware(request, response, next);
   };
 }
 
 /**
- * Express middleware that enforces authentication for MCP requests and automatically verifies the OAuth access token using Clerk.
+ * Creates bearer-auth middleware backed by Clerk's OAuth access-token API.
+ *
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
- *
- * // define server tools, resources, etc...
- *
- * app.get("/mcp", mcpAuthClerk, streamableHttpHandler(server));
+ * app.use(express.json());
+ * app.all(
+ *   '/mcp',
+ *   mcpAuthClerk({ requiredScopes: ['mcp:read'] }),
+ *   streamableHttpHandler(createServer),
+ * );
  * ```
  */
-export async function mcpAuthClerk(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-): Promise<void> {
-  (
-    await mcpAuth(async (token, req: express.Request) => {
-      const authData = getAuth(req, { acceptsToken: 'oauth_token' });
-
-      if (!authData.isAuthenticated) return undefined;
-
-      return verifyClerkToken(authData, token);
-    })
-  )(req, res, next);
+export function mcpAuthClerk(options: ClerkMcpAuthOptions = {}): express.RequestHandler {
+  const verifier = createClerkOAuthTokenVerifier(
+    (options.clerkClient ?? clerkClient).idPOAuthAccessToken,
+  );
+  return mcpAuth(verifier, options);
 }
 
 /**
- * An express handler that returns OAuth protected resource metadata.
- * @see https://datatracker.ietf.org/doc/html/rfc9728#section-4.1
- * @param authServerUrl - The URL of the authorization server
- * @param properties - Additional properties to include in the metadata
+ * Creates an RFC 9728 Protected Resource Metadata handler.
+ *
  * @example
  * ```ts
  * app.get(
- *   "/.well-known/oauth-protected-resource",
- *   protectedResourceHandler({
- *     authServerUrl: "https://auth.example.com",
- *     properties: {
- *       service_documentation: "https://example.com/docs"
- *     }
- *   })
+ *   '/.well-known/oauth-protected-resource/mcp',
+ *   protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
  * );
  * ```
  */
@@ -125,43 +109,44 @@ export function protectedResourceHandler({
   authServerUrl: string;
   properties?: Record<string, unknown>;
 }) {
-  return async (req: express.Request, res: express.Response) => {
+  return (request: express.Request, response: express.Response) => {
     const metadata = generateProtectedResourceMetadata({
       authServerUrl,
-      resourceUrl: getResourceUrl(req),
+      resourceUrl: getResourceUrl(request),
       properties,
     });
 
-    res.json(metadata);
+    response.json(metadata);
   };
 }
 
-export async function authServerMetadataHandlerClerk(_: express.Request, res: express.Response) {
+/** Serves Clerk Authorization Server Metadata from `CLERK_PUBLISHABLE_KEY`. */
+export async function authServerMetadataHandlerClerk(
+  _: express.Request,
+  response: express.Response,
+) {
   const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
   if (!publishableKey) {
     throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
   }
 
-  const metadata = await fetchClerkAuthorizationServerMetadata({
-    publishableKey,
-  });
-
-  res.json(metadata);
+  const metadata = await fetchClerkAuthorizationServerMetadata({ publishableKey });
+  response.json(metadata);
 }
 
 /**
- * An express handler that will return OAuth protected resource metadata if you're using Clerk.
- * @see https://datatracker.ietf.org/doc/html/rfc9728#section-4.1
+ * Creates Clerk Protected Resource Metadata from `CLERK_PUBLISHABLE_KEY`.
+ *
  * @example
  * ```ts
  * app.get(
- *   "/.well-known/oauth-protected-resource",
- *   protectedResourceHandlerClerk
+ *   '/.well-known/oauth-protected-resource/mcp',
+ *   protectedResourceHandlerClerk({ scopes_supported: ['mcp:read'] }),
  * );
  * ```
  */
 export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
-  return (req: express.Request, res: express.Response) => {
+  return (request: express.Request, response: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
       throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
@@ -169,54 +154,74 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
 
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey,
-      resourceUrl: getResourceUrl(req),
+      resourceUrl: getResourceUrl(request),
       properties,
     });
 
-    res.json(metadata);
+    response.json(metadata);
   };
-}
-
-// Given a protected resource metadata url generate the url of the original
-// resource
-function getResourceUrl(req: express.Request) {
-  const url = new URL(`${req.protocol}://${req.get('host')}${req.originalUrl}`);
-  url.pathname = url.pathname.replace(/\.well-known\/oauth-protected-resource\/?/, '');
-  return url.toString();
-}
-
-// Get given a request, generate a protected resource metadata url for the
-// given resource url
-function getPRMUrl(req: express.Request) {
-  return `${req.protocol}://${req.get(
-    'host',
-  )}/.well-known/oauth-protected-resource${req.originalUrl}`;
 }
 
 /**
- * An express handler that will handle MCP requests using the streamable http
- * transport, given an MCP server object from the MCP SDK.
- * @param server - The MCP server object from the MCP SDK
+ * Creates an Express handler for MCP 2026-07-28 and stateless legacy clients.
+ *
+ * The factory returns an isolated server for each request. Mount `express.json()`
+ * before this handler so the Node adapter can use the parsed request body.
+ *
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * const createServer = () =>
+ *   new McpServer({ name: 'support-server', version: '1.0.0' });
  *
- * // define server tools, resources, etc...
- *
- * app.get("/mcp", streamableHttpHandler(server));
+ * app.use(express.json());
+ * app.all('/mcp', streamableHttpHandler(createServer));
  * ```
  */
-export function streamableHttpHandler(server: McpServer) {
-  return async (req: express.Request, res: express.Response) => {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+export function streamableHttpHandler(
+  factory: McpServerFactory,
+  options?: CreateMcpHandlerOptions,
+): express.RequestHandler {
+  const nodeHandler = toNodeHandler(createMcpHandler(factory, options));
 
-    await server.connect(transport);
-
-    await transport.handleRequest(req, res, req.body);
+  return async (request, response) => {
+    await nodeHandler(request, response, request.body);
   };
+}
+
+function toOAuthTokenVerifier(
+  verifier: OAuthTokenVerifier | RequestTokenVerifier,
+  request: express.Request,
+): OAuthTokenVerifier {
+  if (typeof verifier !== 'function') {
+    return verifier;
+  }
+
+  return {
+    async verifyAccessToken(token: string) {
+      const authInfo = await verifier(token, request);
+      if (!authInfo) {
+        throw new OAuthError(OAuthErrorCode.InvalidToken, 'The access token is invalid');
+      }
+      return authInfo;
+    },
+  };
+}
+
+function getRequestUrl(request: express.Request): URL {
+  return new URL(`${request.protocol}://${request.get('host')}${request.originalUrl}`);
+}
+
+function getResourceUrl(request: express.Request): string {
+  const url = getRequestUrl(request);
+  const metadataPath = '/.well-known/oauth-protected-resource';
+
+  if (url.pathname === metadataPath || url.pathname === `${metadataPath}/`) {
+    url.pathname = '/';
+  } else if (url.pathname.startsWith(`${metadataPath}/`)) {
+    url.pathname = url.pathname.slice(metadataPath.length);
+  }
+
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 }

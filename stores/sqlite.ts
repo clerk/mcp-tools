@@ -4,6 +4,7 @@ import type { JsonSerializable } from '../client.js';
 import path from 'node:path';
 import os from 'node:os';
 
+/** Configuration for the SQLite MCP client store. */
 export interface SqliteStoreConfig {
   /**
    * Path to the SQLite database file

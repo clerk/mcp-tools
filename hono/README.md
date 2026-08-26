@@ -1,111 +1,143 @@
-# MCP Tools - Hono Integration
+# MCP Tools for Hono
 
-Hono utilities for building MCP servers with authentication support.
+Use these helpers to serve MCP 2026-07-28 and stateless legacy clients from a Hono application.
 
-## Installation
+## Install
 
-```bash
-npm install @clerk/mcp-tools hono @modelcontextprotocol/sdk
-```
-
-If you're using Clerk for authentication, also install:
+Node.js 20.9 or later is required.
 
 ```bash
-npm install @clerk/hono
+npm install @clerk/mcp-tools @clerk/hono @modelcontextprotocol/server hono zod
 ```
 
-## Quick Start
+## Define the server once
 
-### With Clerk Authentication
+The adapter calls the factory for each request. Do not share one `McpServer` instance across requests.
 
 ```ts
-import { Hono } from 'hono';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+// server.ts
+import { McpServer, type McpServerFactory } from '@modelcontextprotocol/server';
+import { z } from 'zod';
+
+export const createServer: McpServerFactory = () => {
+  const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+
+  server.registerTool(
+    'get_user',
+    {
+      description: 'Gets the authenticated user ID',
+      inputSchema: z.object({}),
+    },
+    async (_input, context) => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            userId: context.http?.authInfo?.extra?.userId,
+          }),
+        },
+      ],
+    }),
+  );
+
+  return server;
+};
+```
+
+## Use Clerk authentication
+
+`mcpAuthClerk()` reads the Clerk client installed by `clerkMiddleware()`. It verifies the OAuth access token through Clerk so MCP receives its real expiration, client ID, scopes, and user ID.
+
+```ts
 import { clerkMiddleware } from '@clerk/hono';
 import {
+  authServerMetadataHandlerClerk,
   mcpAuthClerk,
   protectedResourceHandlerClerk,
-  authServerMetadataHandlerClerk,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/hono';
-
-const app = new Hono();
-app.use('*', clerkMiddleware());
-
-function createServer() {
-  const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-  server.tool('get_user', 'Gets the current user', {}, async (_, { authInfo }) => ({
-    content: [{ type: 'text', text: JSON.stringify(authInfo) }],
-  }));
-  return server;
-}
-
-app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
-app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
-
-export default app;
-```
-
-### With Custom Authentication
-
-```ts
 import { Hono } from 'hono';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/hono';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { createServer } from './server';
 
 const app = new Hono();
 
-function createServer() {
-  return new McpServer({ name: 'my-server', version: '1.0.0' });
-}
-
+app.use('*', clerkMiddleware());
 app.get(
-  '/.well-known/oauth-protected-resource',
-  protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
+  '/.well-known/oauth-protected-resource/mcp',
+  protectedResourceHandlerClerk({ scopes_supported: ['mcp:read'] }),
 );
-
-app.post(
+app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+app.all(
   '/mcp',
-  mcpAuth(async (token, c): Promise<AuthInfo | undefined> => {
-    const user = await verifyMyToken(token);
-    if (!user) return undefined;
-    return {
-      token,
-      scopes: user.scopes,
-      clientId: user.clientId,
-      extra: { userId: user.id },
-    };
-  }),
+  mcpAuthClerk({ requiredScopes: ['mcp:read'] }),
   streamableHttpHandler(createServer),
 );
 
 export default app;
 ```
 
-## Reference
+The Clerk middleware needs `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`.
 
-### `mcpAuth(verifyToken)`
+## Use a custom token verifier
 
-Middleware that enforces authentication for MCP requests. Extracts the bearer token from the `Authorization` header, calls `verifyToken`, and stores the result in Hono context for downstream handlers (`c.get('mcpAuth')`). Returns `401` with a `WWW-Authenticate` header if auth fails.
+SDK bearer authentication requires a real expiration in epoch seconds. Throw `OAuthError` with `OAuthErrorCode.InvalidToken` for an invalid or revoked token.
 
-### `mcpAuthClerk`
+```ts
+import { OAuthError, OAuthErrorCode, type OAuthTokenVerifier } from '@modelcontextprotocol/server';
+import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/hono';
 
-Pre-configured middleware that verifies tokens using Clerk. Requires `clerkMiddleware()` to be mounted and `CLERK_PUBLISHABLE_KEY` to be set.
+const verifier: OAuthTokenVerifier = {
+  async verifyAccessToken(token) {
+    const result = await verifyAccessToken(token);
+    if (!result) {
+      throw new OAuthError(OAuthErrorCode.InvalidToken, 'Invalid token');
+    }
 
-### `protectedResourceHandler({ authServerUrl, properties? })`
+    return {
+      token,
+      clientId: result.clientId,
+      scopes: result.scopes,
+      expiresAt: result.expiresAt,
+      extra: { userId: result.userId },
+    };
+  },
+};
 
-Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728). Derives the resource URL from the current request path.
+app.get(
+  '/.well-known/oauth-protected-resource/mcp',
+  protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
+);
+app.all(
+  '/mcp',
+  mcpAuth(verifier, { requiredScopes: ['mcp:read'] }),
+  streamableHttpHandler(createServer),
+);
+```
 
-### `protectedResourceHandlerClerk(properties?)`
+The `mcpAuth` callback form is also supported when verification needs the Hono context.
 
-Same as `protectedResourceHandler`, but derives `authServerUrl` automatically from `CLERK_PUBLISHABLE_KEY`.
+## Host and Origin validation
 
-### `authServerMetadataHandlerClerk`
+`createMcpHandler` does not validate `Host` or `Origin`. Add the SDK guards when the application does not already apply equivalent controls.
 
-Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`.
+```ts
+import {
+  hostHeaderValidationResponse,
+  originValidationResponse,
+} from '@modelcontextprotocol/server';
 
-### `streamableHttpHandler(createServer)`
+app.use('/mcp', async (context, next) => {
+  const rejected =
+    hostHeaderValidationResponse(context.req.raw, ['api.example.com']) ??
+    originValidationResponse(context.req.raw, ['app.example.com']);
 
-Handler that creates an `McpServer` and `WebStandardStreamableHTTPServerTransport` for each request. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
+  if (rejected) return rejected;
+  await next();
+});
+```
+
+Allowlist values are hostnames without schemes or ports.
+
+## Handler options
+
+The second `streamableHttpHandler` argument accepts the SDK `CreateMcpHandlerOptions`, including `legacy`, `responseMode`, `onerror`, event-bus, and keepalive settings. Legacy serving defaults to stateless fallback.

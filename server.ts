@@ -1,14 +1,129 @@
 import type { MachineAuthObject } from '@clerk/backend';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import {
+  OAuthError,
+  OAuthErrorCode,
+  type AuthInfo,
+  type OAuthTokenVerifier,
+} from '@modelcontextprotocol/server';
+
+/** Minimum Clerk OAuth access token shape required by the MCP verifier. */
+export interface ClerkOAuthAccessToken {
+  clientId: string;
+  subject: string;
+  scopes: string[];
+  revoked: boolean;
+  expired: boolean;
+  expiration: number | null;
+}
+
+/** Structural subset of Clerk's OAuth access token API. */
+export interface ClerkOAuthAccessTokenClient {
+  verify(accessToken: string): Promise<ClerkOAuthAccessToken>;
+}
+
+/** Structural subset of a Clerk client that exposes OAuth access token verification. */
+export interface ClerkClientWithOAuthAccessTokens {
+  idPOAuthAccessToken: ClerkOAuthAccessTokenClient;
+}
+
+/** A full Clerk client or its OAuth access token API. */
+export type ClerkOAuthTokenVerifierSource =
+  | ClerkOAuthAccessTokenClient
+  | ClerkClientWithOAuthAccessTokens;
 
 /**
- * Generates protected resource metadata for the given auth server url and
- * resource server url.
+ * Creates an MCP v2 token verifier backed by Clerk's OAuth access token API.
  *
- * @param authServerUrl - URL of the auth server
- * @param resourceServerUrl - URL of the resource server
- * @param properties - Additional properties to include in the metadata
+ * The verifier supplies the expiration that the MCP SDK bearer-auth gate requires.
+ * Confirmed invalid tokens become OAuth `invalid_token` errors. Service and
+ * configuration failures remain server errors.
+ *
+ * @param source - A Clerk client or its `idPOAuthAccessToken` API
+ * @returns A verifier for `requireBearerAuth`
+ *
+ * @example
+ * ```ts
+ * import { createClerkClient } from '@clerk/backend';
+ * import { requireBearerAuth } from '@modelcontextprotocol/server';
+ * import { createClerkOAuthTokenVerifier } from '@clerk/mcp-tools/server';
+ *
+ * const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+ * const requireAuth = requireBearerAuth({
+ *   verifier: createClerkOAuthTokenVerifier(clerk),
+ *   requiredScopes: ['mcp:read'],
+ * });
+ * ```
+ */
+export function createClerkOAuthTokenVerifier(
+  source: ClerkOAuthTokenVerifierSource,
+): OAuthTokenVerifier {
+  const accessTokenClient =
+    (source as Partial<ClerkClientWithOAuthAccessTokens>).idPOAuthAccessToken ??
+    (source as ClerkOAuthAccessTokenClient);
+
+  return {
+    async verifyAccessToken(token) {
+      let clerkToken: ClerkOAuthAccessToken;
+
+      try {
+        clerkToken = await accessTokenClient.verify(token);
+      } catch (error) {
+        if (isClerkTokenNotFoundError(error)) {
+          throw invalidTokenError();
+        }
+
+        throw error;
+      }
+
+      if (clerkToken.revoked || clerkToken.expired || clerkToken.expiration === null) {
+        throw invalidTokenError();
+      }
+
+      return {
+        token,
+        clientId: clerkToken.clientId,
+        scopes: clerkToken.scopes,
+        expiresAt: Math.floor(clerkToken.expiration / 1000),
+        extra: { userId: clerkToken.subject },
+      };
+    },
+  };
+}
+
+function invalidTokenError() {
+  return new OAuthError(OAuthErrorCode.InvalidToken, 'Invalid OAuth access token');
+}
+
+function isClerkTokenNotFoundError(error: unknown) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'clerkError' in error &&
+    error.clerkError === true &&
+    'status' in error &&
+    error.status === 404
+  );
+}
+
+/**
+ * Generates RFC 9728 Protected Resource Metadata for an MCP resource.
+ *
+ * Custom properties can add fields such as `scopes_supported` or override a
+ * generated default.
+ *
+ * @param authServerUrl - Authorization server URL
+ * @param resourceUrl - Full MCP resource URL, including its path
+ * @param properties - Additional metadata properties
  * @returns Protected resource metadata, serializable to JSON
+ *
+ * @example
+ * ```ts
+ * const metadata = generateProtectedResourceMetadata({
+ *   authServerUrl: 'https://auth.example.com',
+ *   resourceUrl: 'https://api.example.com/mcp',
+ *   properties: { scopes_supported: ['mcp:read'] },
+ * });
+ * ```
  */
 export function generateProtectedResourceMetadata({
   authServerUrl,
@@ -44,13 +159,24 @@ export function generateProtectedResourceMetadata({
 }
 
 /**
- * Generates protected resource metadata for the given Clerk publishable key
- * and resource origin.
+ * Generates Clerk Protected Resource Metadata without making a network request.
+ *
+ * The Clerk authorization server URL is derived from the publishable key.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  * @param publishableKey - Clerk publishable key
- * @param origin - Origin of the resource to which the metadata applies
+ * @param resourceUrl - Full MCP resource URL, including its path
+ * @param properties - Additional metadata properties
  * @returns Protected resource metadata, serializable to JSON
+ *
+ * @example
+ * ```ts
+ * const metadata = generateClerkProtectedResourceMetadata({
+ *   publishableKey: process.env.CLERK_PUBLISHABLE_KEY!,
+ *   resourceUrl: 'https://api.example.com/mcp',
+ *   properties: { scopes_supported: ['mcp:read'] },
+ * });
+ * ```
  */
 export function generateClerkProtectedResourceMetadata({
   publishableKey,
@@ -81,6 +207,19 @@ function deriveFapiUrl(publishableKey: string) {
   return `https://${decoded.replace(/\$/, '')}`;
 }
 
+/**
+ * Fetches Clerk's OAuth Authorization Server Metadata for a publishable key.
+ *
+ * @param publishableKey - Clerk publishable key
+ * @returns The JSON response from Clerk's discovery endpoint
+ *
+ * @example
+ * ```ts
+ * const metadata = await fetchClerkAuthorizationServerMetadata({
+ *   publishableKey: process.env.CLERK_PUBLISHABLE_KEY!,
+ * });
+ * ```
+ */
 export async function fetchClerkAuthorizationServerMetadata({
   publishableKey,
 }: {
@@ -96,11 +235,17 @@ export async function fetchClerkAuthorizationServerMetadata({
 }
 
 /**
- * Verifies a Clerk token and returns data in the format expected to be passed
- * as `authData to the MCP SDK.
+ * Converts an authenticated Clerk middleware result to MCP `AuthInfo`.
+ *
+ * This compatibility helper does not supply `expiresAt`, because Clerk's
+ * middleware auth object does not include token expiration. MCP v2 bearer
+ * authentication rejects its result. Use `createClerkOAuthTokenVerifier` for
+ * new servers.
+ *
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
  * @param token - The token to verify
- * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
+ * @deprecated Use createClerkOAuthTokenVerifier with SDK bearer authentication.
+ * @returns MCP AuthInfo, or `undefined` when authentication fails
  */
 export function verifyClerkToken(
   auth: MachineAuthObject<'oauth_token'>,
@@ -142,7 +287,7 @@ export function verifyClerkToken(
 }
 
 /**
- * CORS headers for OAuth metadata endpoints
+ * Permissive CORS headers for public OAuth discovery metadata endpoints.
  */
 export const corsHeaders = {
   'Access-Control-Allow-Origin': '*',

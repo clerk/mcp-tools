@@ -1,3 +1,11 @@
+import {
+  createMcpHandler,
+  getOAuthProtectedResourceMetadataUrl,
+  requireBearerAuth,
+  type BearerAuthOptions,
+  type CreateMcpHandlerOptions,
+  type McpServerFactory,
+} from '@modelcontextprotocol/server';
 import type { NextRequest } from 'next/server';
 import { type McpClientStore, completeAuthWithCode } from '../client';
 import {
@@ -5,84 +13,99 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
-  verifyClerkToken,
 } from '../server';
 
+/** Options for a Next.js MCP route handler. */
+export interface StreamableHttpHandlerOptions {
+  /** SDK bearer-auth options. Omit only for an intentionally public endpoint. */
+  auth?: BearerAuthOptions;
+  /** MCP HTTP handler options, including legacy and response-mode settings. */
+  mcp?: CreateMcpHandlerOptions;
+}
+
 /**
- * A request handler intended to be run at the OAuth callback endpoint.
- * It will complete the OAuth flow by exchanging the authorization code for a
- * token, store the token, then call the passed in callback fn when complete.
- * @param store - The client store to use for storing the token.
- * @param callback - A function to call once the OAuth flow is complete.
+ * Creates a Next.js OAuth callback handler for an MCP client session.
+ *
+ * The full callback query, including `iss` and OAuth error fields, is passed to
+ * the MCP SDK. The callback must return the final HTTP response.
+ *
+ * @example
+ * ```ts
+ * export const GET = completeOAuthHandler({
+ *   store,
+ *   callback: ({ sessionId }) => Response.json({ sessionId }),
+ * });
+ * ```
  */
 export function completeOAuthHandler({
   store,
   callback,
 }: {
   store: McpClientStore;
-  callback: (params: Awaited<ReturnType<typeof completeAuthWithCode>>) => void;
-}): (req: NextRequest) => Promise<Response | ReturnType<typeof callback>> {
-  return async (req: NextRequest): Promise<Response | ReturnType<typeof callback>> => {
-    const qs = req.nextUrl.searchParams;
-    const code = qs.get('code');
-    const state = qs.get('state');
+  callback: (
+    params: Awaited<ReturnType<typeof completeAuthWithCode>>,
+  ) => Response | Promise<Response>;
+}): (request: NextRequest) => Promise<Response> {
+  return async (request: NextRequest): Promise<Response> => {
+    const query = request.nextUrl.searchParams;
+    const state = query.get('state');
 
     if (!state) {
       return Response.json({ error: 'State missing' }, { status: 400 });
     }
 
-    if (!code) {
-      return Response.json({ error: 'Authorization code missing' }, { status: 400 });
-    }
+    const result = await completeAuthWithCode({ callbackParams: query, store });
 
-    // this function will run the state param check internally
-    const res = await completeAuthWithCode({ state, code, store });
-
-    return callback(res);
+    return callback(result);
   };
 }
 
 /**
- * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
- * @see https://datatracker.ietf.org/doc/html/rfc9728
- * @param authServerUrl - The URL of the OAuth 2.0 Authorization Server.
+ * Creates an RFC 9728 Protected Resource Metadata route handler.
+ *
+ * The metadata route suffix must match the MCP resource path.
+ *
+ * @example
+ * ```ts
+ * export const GET = protectedResourceHandler({
+ *   authServerUrl: 'https://auth.example.com',
+ *   properties: { scopes_supported: ['mcp:read'] },
+ * });
+ * ```
  */
 export function protectedResourceHandler({
   authServerUrl,
+  properties,
 }: {
   authServerUrl: string;
-}): (req: Request) => Response {
-  return (req: Request): Response => {
-    const origin = new URL(req.url).origin;
-
+  properties?: Record<string, unknown>;
+}): (request: Request) => Response {
+  return (request: Request): Response => {
     const metadata = generateProtectedResourceMetadata({
-      authServerUrl: authServerUrl,
-      resourceUrl: origin,
+      authServerUrl,
+      resourceUrl: getResourceUrl(request.url),
+      properties,
     });
 
-    return Response.json(metadata, {
-      headers: Object.assign(
-        {
-          'Cache-Control': 'max-age=3600',
-          'Content-Type': 'application/json',
-        },
-        corsHeaders,
-      ),
-    });
+    return metadataResponse(metadata);
   };
 }
 
 /**
- * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
- * @see https://datatracker.ietf.org/doc/html/rfc9728
+ * Creates Clerk Protected Resource Metadata from
+ * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.
  *
+ * @example
+ * ```ts
+ * export const GET = protectedResourceHandlerClerk({
+ *   scopes_supported: ['mcp:read'],
+ * });
+ * ```
  */
 export function protectedResourceHandlerClerk(
   properties?: Record<string, unknown>,
-): (req: Request) => Response {
-  return (req: Request): Response => {
-    const origin = new URL(req.url).origin;
-
+): (request: Request) => Response {
+  return (request: Request): Response => {
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
       throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
@@ -90,26 +113,15 @@ export function protectedResourceHandlerClerk(
 
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey,
-      resourceUrl: origin,
+      resourceUrl: getResourceUrl(request.url),
       properties,
     });
 
-    return Response.json(metadata, {
-      headers: Object.assign(
-        {
-          'Cache-Control': 'max-age=3600',
-          'Content-Type': 'application/json',
-        },
-        corsHeaders,
-      ),
-    });
+    return metadataResponse(metadata);
   };
 }
 
-/**
- * OAuth 2.0 Authorization Server Metadata endpoint based on RFC 8414
- * @see https://datatracker.ietf.org/doc/html/rfc8414
- */
+/** Serves Clerk Authorization Server Metadata for MCP OAuth discovery. */
 export function authServerMetadataHandlerClerk(): () => Promise<Response> {
   return async (): Promise<Response> => {
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -117,26 +129,12 @@ export function authServerMetadataHandlerClerk(): () => Promise<Response> {
       throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
     }
 
-    const metadata = await fetchClerkAuthorizationServerMetadata({
-      publishableKey,
-    });
-
-    return Response.json(metadata, {
-      headers: Object.assign(
-        {
-          'Cache-Control': 'max-age=3600',
-          'Content-Type': 'application/json',
-        },
-        corsHeaders,
-      ),
-    });
+    const metadata = await fetchClerkAuthorizationServerMetadata({ publishableKey });
+    return metadataResponse(metadata);
   };
 }
 
-/**
- * CORS options request handler for OAuth metadata endpoints. Necessary for MCP
- * clients that operate in web browsers.
- */
+/** Creates an OPTIONS handler with permissive CORS headers for OAuth metadata. */
 export function metadataCorsOptionsRequestHandler(): () => Response {
   return (): Response => {
     return new Response(null, {
@@ -146,5 +144,77 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
   };
 }
 
-// re-export the verifyClerkToken function for convenience
-export { verifyClerkToken };
+/**
+ * Creates a Next.js route handler for MCP 2026-07-28 and stateless legacy clients.
+ *
+ * The same handler can be exported for every Streamable HTTP method. The server
+ * factory receives the protocol era, request, and verified auth data and must
+ * return a new server instance for each request.
+ *
+ * @example
+ * ```ts
+ * const createServer = () =>
+ *   new McpServer({ name: 'support-server', version: '1.0.0' });
+ *
+ * const verifier = createClerkOAuthTokenVerifier({
+ *   verify: async (token) => (await clerkClient()).idPOAuthAccessToken.verify(token),
+ * });
+ *
+ * const handler = streamableHttpHandler(createServer, {
+ *   auth: { verifier, requiredScopes: ['mcp:read'] },
+ * });
+ *
+ * export { handler as GET, handler as POST, handler as DELETE };
+ * ```
+ */
+export function streamableHttpHandler(
+  factory: McpServerFactory,
+  options: StreamableHttpHandlerOptions = {},
+): (request: NextRequest) => Promise<Response> {
+  const handler = createMcpHandler(factory, options.mcp);
+
+  return async (request: NextRequest): Promise<Response> => {
+    if (!options.auth) {
+      return handler.fetch(request);
+    }
+
+    const gate = requireBearerAuth({
+      ...options.auth,
+      resourceMetadataUrl:
+        options.auth.resourceMetadataUrl ??
+        getOAuthProtectedResourceMetadataUrl(new URL(request.url)).toString(),
+    });
+    const authInfo = await gate(request);
+
+    if (authInfo instanceof Response) {
+      return authInfo;
+    }
+
+    return handler.fetch(request, { authInfo });
+  };
+}
+
+function metadataResponse(metadata: unknown): Response {
+  return Response.json(metadata, {
+    headers: {
+      'Cache-Control': 'max-age=3600',
+      'Content-Type': 'application/json',
+      ...corsHeaders,
+    },
+  });
+}
+
+function getResourceUrl(requestUrl: string): string {
+  const url = new URL(requestUrl);
+  const metadataPath = '/.well-known/oauth-protected-resource';
+
+  if (url.pathname === metadataPath || url.pathname === `${metadataPath}/`) {
+    url.pathname = '/';
+  } else if (url.pathname.startsWith(`${metadataPath}/`)) {
+    url.pathname = url.pathname.slice(metadataPath.length);
+  }
+
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}

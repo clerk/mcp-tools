@@ -4,6 +4,7 @@ import type { JsonSerializable } from '../client.js';
 
 const { Client } = pg;
 
+/** Configuration for the PostgreSQL MCP client store. */
 export interface PostgresStoreConfig {
   /**
    * PostgreSQL connection string

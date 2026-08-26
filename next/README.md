@@ -1,280 +1,132 @@
-# MCP Tools - Next.js Integration
+# MCP Tools for Next.js
 
-Next.js utilities for building both MCP servers and clients with authentication support. These tools make it easy to add MCP (Model Context Protocol) endpoints to your Next.js applications and build AI applications that can connect to MCP services.
+Use these helpers to serve MCP 2026-07-28, support stateless legacy clients, and complete MCP client OAuth flows with App Router handlers.
 
-## Installation
+## Install
 
-Make sure you have the required dependencies installed:
-
-```bash
-npm install @clerk/mcp-tools mcp-adapter next
-```
-
-If you're using Clerk for authentication, also install the Clerk Next.js SDK:
+Node.js 20.9 or later is required.
 
 ```bash
-npm install @clerk/nextjs
+npm install @clerk/mcp-tools @clerk/nextjs @modelcontextprotocol/server next zod
 ```
 
-## Quick Start
+## Building an MCP server
 
-### Building an MCP Server
-
-For a complete working example of an MCP server built with Next.js and Clerk authentication, see the [MCP Next.js Example](https://github.com/clerk/mcp-nextjs-example).
-
-Here's the basic structure you'll need:
-
-#### 1. Protected Resource Metadata
+Define a request-scoped server factory:
 
 ```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
+// lib/mcp-server.ts
+import { McpServer, type McpServerFactory } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 
-const handler = protectedResourceHandlerClerk();
+export const createServer: McpServerFactory = () => {
+  const server = new McpServer({ name: 'my-server', version: '1.0.0' });
 
-export { handler as GET };
+  server.registerTool('get_user', { inputSchema: z.object({}) }, async (_input, context) => ({
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          userId: context.http?.authInfo?.extra?.userId,
+        }),
+      },
+    ],
+  }));
+
+  return server;
+};
 ```
 
-#### 2. MCP Endpoint
+Create the MCP route with the Clerk verifier:
 
 ```ts
 // app/mcp/route.ts
-import { verifyClerkToken } from '@clerk/mcp-tools/next';
-import { auth, clerkClient } from '@clerk/nextjs/server';
-import { createMcpHandler, experimental_withMcpAuth as withMcpAuth } from 'mcp-adapter';
+import { createClerkOAuthTokenVerifier } from '@clerk/mcp-tools/server';
+import { streamableHttpHandler } from '@clerk/mcp-tools/next';
+import { clerkClient } from '@clerk/nextjs/server';
+import { createServer } from '@/lib/mcp-server';
 
 const clerk = await clerkClient();
-
-const handler = createMcpHandler((server) => {
-  server.tool(
-    'get-clerk-user-data',
-    'Gets data about the Clerk user that authorized this request',
-    {}, // tool parameters here if present
-    async (_, { authInfo }) => {
-      // non-null assertion is safe here, authHandler ensures presence
-      const userId = authInfo!.extra!.userId! as string;
-      const userData = await clerk.users.getUser(userId);
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(userData) }],
-      };
-    },
-  );
+const handler = streamableHttpHandler(createServer, {
+  auth: {
+    verifier: createClerkOAuthTokenVerifier(clerk),
+    requiredScopes: ['mcp:read'],
+  },
 });
 
-const authHandler = withMcpAuth(
-  handler,
-  async (_, token) => {
-    const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
-    // Note: OAuth tokens are machine tokens. Machine token usage is free
-    // during our public beta period but will be subject to pricing once
-    // generally available. Pricing is expected to be competitive and below
-    // market averages.
-    return verifyClerkToken(clerkAuth, token);
-  },
-  {
-    required: true,
-    resourceMetadataPath: '/.well-known/oauth-protected-resource/mcp',
-  },
-);
-
-export { authHandler as GET, authHandler as POST };
+export { handler as GET, handler as POST, handler as DELETE };
 ```
 
-**Note**: This implementation uses Vercel's `mcp-adapter` which is specifically designed for Next.js applications and provides seamless integration with Clerk authentication.
+## Protected Resource Metadata
 
-### Building an MCP Client
-
-For a complete working example of an MCP client implementation, see the [MCP Demo](https://github.com/clerk/mcp-demo) which shows a full client/server setup.
-
-The MCP client functionality uses the core `@clerk/mcp-tools/client` utilities. For detailed examples of client implementation patterns, see the [main README's client guide](../README.md#guide-building-a-client) and the working demo above.
-
-Key Next.js-specific patterns include:
-
-### `protectedResourceHandler`
-
-Generic Next.js route handler that returns OAuth protected resource metadata for any OAuth authorization server, as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728).
-
-**Parameters:**
-
-- `authServerUrl: string` - The URL of your OAuth authorization server
-
-**Example:**
+Use a path-aware route. The metadata advertises `https://host/mcp`, not only the origin.
 
 ```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/next';
-
-const handler = protectedResourceHandler({
-  authServerUrl: 'https://auth.example.com',
-});
-
-export { handler as GET };
-```
-
-### `protectedResourceHandlerClerk`
-
-Next.js route handler that returns OAuth protected resource metadata for Clerk integration.
-
-**Example:**
-
-```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
-
-const handler = protectedResourceHandlerClerk();
-
-export { handler as GET };
-```
-
-This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
-
-### `authServerMetadataHandlerClerk`
-
-Next.js route handler for OAuth 2.0 Authorization Server Metadata endpoint based on [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
-
-**Example:**
-
-```ts
-// app/.well-known/oauth-authorization-server/route.ts
-import { authServerMetadataHandlerClerk } from '@clerk/mcp-tools/next';
-
-const handler = authServerMetadataHandlerClerk();
-
-export { handler as GET };
-```
-
-### `metadataCorsOptionsRequestHandler`
-
-CORS options request handler for OAuth metadata endpoints. Necessary for MCP clients that operate in web browsers.
-
-**Example:**
-
-```ts
-// app/.well-known/oauth-protected-resource/route.ts
+// app/.well-known/oauth-protected-resource/mcp/route.ts
 import {
-  protectedResourceHandlerClerk,
   metadataCorsOptionsRequestHandler,
+  protectedResourceHandlerClerk,
 } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk();
-const corsHandler = metadataCorsOptionsRequestHandler();
+const metadata = protectedResourceHandlerClerk({
+  scopes_supported: ['mcp:read'],
+});
+const options = metadataCorsOptionsRequestHandler();
 
-export { handler as GET, corsHandler as OPTIONS };
+export { metadata as GET, options as OPTIONS };
 ```
 
-### `completeOAuthHandler`
+Set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` for the metadata handler and `CLERK_SECRET_KEY` for the Clerk server SDK.
 
-A request handler for OAuth callback endpoints that completes the OAuth flow by exchanging authorization codes for tokens.
+Custom authorization servers can use `protectedResourceHandler({ authServerUrl, properties? })`. `authServerMetadataHandlerClerk()` remains available for legacy clients that request the authorization-server metadata document from the resource origin.
 
-**Parameters:**
+## Host and Origin validation
 
-- `store: McpClientStore` - The client store for storing tokens
-- `callback: (params) => void` - Function to call when OAuth flow completes
-
-**Example:**
+`streamableHttpHandler` does not validate `Host` or `Origin`. Wrap it with the SDK guards unless equivalent controls already run before the route.
 
 ```ts
-// app/oauth_callback/route.ts
+import type { NextRequest } from 'next/server';
+import {
+  hostHeaderValidationResponse,
+  originValidationResponse,
+} from '@modelcontextprotocol/server';
+
+const mcp = streamableHttpHandler(createServer, { auth: { verifier } });
+
+async function handler(request: NextRequest) {
+  const rejected =
+    hostHeaderValidationResponse(request, ['api.example.com']) ??
+    originValidationResponse(request, ['app.example.com']);
+
+  return rejected ?? mcp(request);
+}
+
+export { handler as GET, handler as POST, handler as DELETE };
+```
+
+Allowlist values are hostnames without schemes or ports.
+
+## Completing client OAuth
+
+The callback helper forwards the complete query, including RFC 9207 `iss` and OAuth error responses, to the SDK.
+
+```ts
+// app/oauth/callback/route.ts
 import { completeOAuthHandler } from '@clerk/mcp-tools/next';
-import fsStore from '@clerk/mcp-tools/stores/fs';
+import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 import { redirect } from 'next/navigation';
 
+const store = createRedisStore({ host: process.env.REDIS_HOST });
 const handler = completeOAuthHandler({
-  store: fsStore,
+  store,
   callback: () => redirect('/dashboard'),
 });
 
 export { handler as GET };
 ```
 
-### MCP Tool Calling
+Use the same durable store when the connection starts, when the callback runs, and when later tool calls restore the client. Provide a `redirect` callback to `getClientBySessionId` when a restored connection may need OAuth scope step-up.
 
-For MCP tool calling in Next.js, use the framework-agnostic client utilities:
+## Handler options
 
-```ts
-// app/api/mcp-tools/route.ts
-import { getClientBySessionId } from '@clerk/mcp-tools/client';
-import { cookies } from 'next/headers';
-import fsStore from '@clerk/mcp-tools/stores/fs';
-
-export async function POST(request: Request) {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get('mcp-session')?.value;
-
-  if (!sessionId) {
-    return Response.json({ error: 'No MCP session found' }, { status: 401 });
-  }
-
-  const body = await request.json();
-
-  const { client, connect } = getClientBySessionId({
-    sessionId,
-    store: fsStore,
-  });
-
-  await connect();
-
-  const toolRes = await client.callTool({
-    name: body.toolName,
-    arguments: body.arguments,
-  });
-
-  return Response.json(toolRes);
-}
-```
-
-## Authentication Integration
-
-### With Clerk
-
-When using Clerk, your environment variables should include:
-
-```bash
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-CLERK_SECRET_KEY=sk_test_...
-```
-
-The protected resource handlers will automatically use these values.
-
-### With Custom Authentication
-
-For custom authentication systems, you'll need to implement your own token verification and use the generic handlers:
-
-```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/next';
-
-const handler = protectedResourceHandler({
-  authServerUrl: 'https://your-auth-server.com',
-});
-
-export { handler as GET };
-```
-
-## Session Management and Stores
-
-Next.js applications, especially when deployed to serverless environments, require persistent storage for MCP sessions.
-
-For detailed information about available stores and their configurations, see the [Stores section in the main README](../README.md#stores).
-
-The key consideration for Next.js applications is choosing a store that works well with serverless deployments:
-
-- **Development**: Use `fsStore` for local development
-- **Production**: Use Redis, Postgres, or SQLite stores for persistent session storage
-
-## App Router vs Pages Router
-
-All examples in this documentation use the App Router (app directory). If you're using the Pages Router, the concepts are the same but the file locations will be different:
-
-- `app/api/mcp/route.ts` → `pages/api/mcp.ts`
-- `app/.well-known/oauth-protected-resource/route.ts` → `pages/.well-known/oauth-protected-resource.ts`
-
-## Working Examples
-
-For complete working examples, see these repositories:
-
-- **[MCP Next.js Server Example](https://github.com/clerk/mcp-nextjs-example)** - A minimal example of an MCP server endpoint using Next.js and Clerk for authentication
-- **[MCP Demo](https://github.com/clerk/mcp-demo)** - Example implementation of a full MCP flow using the latest spec draft, including both client and server components
-
-These examples demonstrate real-world implementations and can serve as starting points for your own MCP integrations.
+Pass SDK bearer-auth options under `auth`. Pass `CreateMcpHandlerOptions` under `mcp`, including `legacy`, `responseMode`, `onerror`, event-bus, and keepalive settings.

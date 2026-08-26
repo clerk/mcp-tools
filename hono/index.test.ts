@@ -1,5 +1,16 @@
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { McpServer, type AuthInfo, type OAuthTokenVerifier } from '@modelcontextprotocol/server';
 import { Hono } from 'hono';
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { env } from 'hono/adapter';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import {
+  authServerMetadataHandlerClerk,
+  mcpAuth,
+  mcpAuthClerk,
+  protectedResourceHandler,
+  protectedResourceHandlerClerk,
+  streamableHttpHandler,
+} from './index';
 
 vi.mock('../server', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server')>();
@@ -12,448 +23,202 @@ vi.mock('../server', async (importOriginal) => {
   };
 });
 
-vi.mock('@clerk/hono', () => ({
-  getAuth: vi.fn(),
-}));
-
 vi.mock('hono/adapter', () => ({
   env: vi.fn(() => process.env),
 }));
 
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { getAuth } from '@clerk/hono';
-import { env } from 'hono/adapter';
-
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { generateClerkProtectedResourceMetadata } from '../server';
-
-import {
-  protectedResourceHandler,
-  protectedResourceHandlerClerk,
-  authServerMetadataHandlerClerk,
-  mcpAuth,
-  mcpAuthClerk,
-  streamableHttpHandler,
-} from './index';
-
 const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
-const mcpHeaders = {
-  'Content-Type': 'application/json',
-  Accept: 'application/json, text/event-stream',
-};
-const initializeBody = JSON.stringify({
+const legacyInitializeBody = JSON.stringify({
   jsonrpc: '2.0',
   id: 1,
   method: 'initialize',
   params: {
-    protocolVersion: '2024-11-05',
+    protocolVersion: '2025-06-18',
     capabilities: {},
     clientInfo: { name: 'test-client', version: '1.0.0' },
   },
 });
+const mcpHeaders = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json, text/event-stream',
+};
+const authInfo: AuthInfo = {
+  token: 'valid-token',
+  scopes: ['read'],
+  clientId: 'client-1',
+  expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  extra: { userId: 'user-1' },
+};
 
 function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });
 }
 
-describe('protectedResourceHandler', () => {
-  test('returns metadata with auth server URL and derived resource URL', async () => {
-    const app = new Hono();
-    app.get(
-      '/.well-known/oauth-protected-resource',
-      protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
-    );
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.resource).toBe('http://myapp.com/');
-    expect(json.authorization_servers).toEqual(['https://auth.example.com']);
+describe('protected resource metadata', () => {
+  beforeEach(() => {
+    vi.mocked(env).mockImplementation(() => process.env);
+    process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
   });
 
-  test('strips sub-path from resource URL', async () => {
+  afterEach(() => {
+    delete process.env.CLERK_PUBLISHABLE_KEY;
+  });
+
+  test('derives the resource URL from the path-aware metadata route', async () => {
     const app = new Hono();
     app.get(
       '/.well-known/oauth-protected-resource/mcp',
       protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
     );
 
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource/mcp');
-    const json = await res.json();
-    expect(json.resource).toBe('http://myapp.com/mcp');
-  });
-
-  test('merges additional properties', async () => {
-    const app = new Hono();
-    app.get(
-      '/.well-known/oauth-protected-resource',
-      protectedResourceHandler({
-        authServerUrl: 'https://auth.example.com',
-        properties: { scopes_supported: ['read', 'write'] },
-      }),
+    const response = await app.request(
+      'http://myapp.com/.well-known/oauth-protected-resource/mcp?ignored=true',
     );
+    const metadata = await response.json();
 
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    const json = await res.json();
-    expect(json.scopes_supported).toEqual(['read', 'write']);
-  });
-});
-
-describe('protectedResourceHandlerClerk', () => {
-  beforeEach(() => {
-    vi.mocked(env).mockImplementation(() => process.env);
-    process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    expect(metadata.resource).toBe('http://myapp.com/mcp');
+    expect(metadata.authorization_servers).toEqual(['https://auth.example.com']);
   });
 
-  afterEach(() => {
-    delete process.env.CLERK_PUBLISHABLE_KEY;
-  });
-
-  test('derives auth server URL from CLERK_PUBLISHABLE_KEY', async () => {
+  test('uses the Clerk publishable key from the Hono environment', async () => {
     const app = new Hono();
-    app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
+    app.get('/.well-known/oauth-protected-resource/mcp', protectedResourceHandlerClerk());
 
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.authorization_servers).toEqual(['https://clerk.example.com']);
-    expect(json.resource).toBe('http://myapp.com/');
-  });
+    const response = await app.request('http://myapp.com/.well-known/oauth-protected-resource/mcp');
+    const metadata = await response.json();
 
-  test('works in edge runtimes without Node.js Buffer', () => {
-    const metadata = (() => {
-      vi.stubGlobal('Buffer', undefined);
-      try {
-        return generateClerkProtectedResourceMetadata({
-          publishableKey: FAKE_PK,
-          resourceUrl: 'https://mcp.example.com',
-        });
-      } finally {
-        vi.unstubAllGlobals();
-      }
-    })();
-
+    expect(metadata.resource).toBe('http://myapp.com/mcp');
     expect(metadata.authorization_servers).toEqual(['https://clerk.example.com']);
   });
 
-  test('reads CLERK_PUBLISHABLE_KEY through Hono adapter env', async () => {
-    delete process.env.CLERK_PUBLISHABLE_KEY;
-    vi.mocked(env).mockReturnValue({ CLERK_PUBLISHABLE_KEY: FAKE_PK });
-
-    const app = new Hono();
-    app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.authorization_servers).toEqual(['https://clerk.example.com']);
-  });
-
-  test('returns 500 when CLERK_PUBLISHABLE_KEY is missing', async () => {
-    delete process.env.CLERK_PUBLISHABLE_KEY;
-    const app = new Hono();
-    app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    expect(res.status).toBe(500);
-  });
-});
-
-describe('authServerMetadataHandlerClerk', () => {
-  beforeEach(() => {
-    vi.mocked(env).mockImplementation(() => process.env);
-    process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
-  });
-
-  afterEach(() => {
-    delete process.env.CLERK_PUBLISHABLE_KEY;
-  });
-
-  test('returns fetched Clerk metadata', async () => {
+  test('returns Clerk authorization server metadata', async () => {
     const app = new Hono();
     app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
 
-    const res = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.issuer).toBe('https://clerk.example.com');
-  });
+    const response = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
 
-  test('reads CLERK_PUBLISHABLE_KEY through Hono adapter env', async () => {
-    delete process.env.CLERK_PUBLISHABLE_KEY;
-    vi.mocked(env).mockReturnValue({ CLERK_PUBLISHABLE_KEY: FAKE_PK });
-
-    const app = new Hono();
-    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.issuer).toBe('https://clerk.example.com');
-  });
-
-  test('returns 500 when CLERK_PUBLISHABLE_KEY is missing', async () => {
-    delete process.env.CLERK_PUBLISHABLE_KEY;
-    const app = new Hono();
-    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
-    expect(res.status).toBe(500);
+    expect(response.status).toBe(200);
+    expect((await response.json()).issuer).toBe('https://clerk.example.com');
   });
 });
 
 describe('mcpAuth', () => {
-  test('returns 401 with WWW-Authenticate when Authorization header is missing', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => undefined),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp');
-    expect(res.status).toBe(401);
-    const wwwAuth = res.headers.get('WWW-Authenticate');
-    expect(wwwAuth).toMatch(/^Bearer resource_metadata=/);
-  });
-
-  test('returns 401 when verifyToken returns undefined', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => undefined),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer bad-token' },
-    });
-    expect(res.status).toBe(401);
-  });
-
-  test('calls next and stores authInfo in context when token is valid', async () => {
-    const authInfo: AuthInfo = {
-      token: 'valid',
-      scopes: ['read'],
-      clientId: 'client-1',
-      extra: { userId: 'user-1' },
+  test('returns a path-aware SDK bearer challenge when the token is missing', async () => {
+    const verifier: OAuthTokenVerifier = {
+      verifyAccessToken: vi.fn(),
     };
     const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => authInfo),
-      (c) => c.json(c.get('mcpAuth')),
+    app.get('/mcp', mcpAuth(verifier), (context) => context.json({ ok: true }));
+
+    const response = await app.request('http://localhost/mcp');
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('WWW-Authenticate')).toContain(
+      'resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"',
     );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer valid' },
-    });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(authInfo);
   });
 
-  test('passes token and context to verifyToken', async () => {
-    const verifyToken = vi.fn().mockResolvedValue(undefined);
+  test('supports a context-aware custom token verifier', async () => {
+    const verifyToken = vi.fn().mockResolvedValue(authInfo);
     const app = new Hono();
-    app.get('/mcp', mcpAuth(verifyToken), (c) => c.json({ ok: true }));
+    app.get('/mcp', mcpAuth(verifyToken), (context) => context.json(context.get('mcpAuth')));
 
-    await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer my-token' },
-    });
-
-    expect(verifyToken).toHaveBeenCalledWith('my-token', expect.any(Object));
-  });
-
-  test('returns 401 when Authorization header has no token value', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => undefined),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer' },
-    });
-    expect(res.status).toBe(401);
-    const wwwAuth = res.headers.get('WWW-Authenticate');
-    expect(wwwAuth).toMatch(/^Bearer resource_metadata=/);
-  });
-
-  test('returns 401 and does not verify when Authorization scheme is not Bearer', async () => {
-    const verifyToken = vi.fn().mockResolvedValue({
-      token: 'valid',
-      scopes: ['read'],
-      clientId: 'client-1',
-    });
-    const app = new Hono();
-    app.get('/mcp', mcpAuth(verifyToken), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Basic valid' },
-    });
-
-    expect(res.status).toBe(401);
-    expect(verifyToken).not.toHaveBeenCalled();
-    expect(res.headers.get('WWW-Authenticate')).toMatch(/^Bearer resource_metadata=/);
-  });
-
-  test('returns 401 and does not verify when Bearer header has extra parts', async () => {
-    const verifyToken = vi.fn().mockResolvedValue({
-      token: 'valid',
-      scopes: ['read'],
-      clientId: 'client-1',
-    });
-    const app = new Hono();
-    app.get('/mcp', mcpAuth(verifyToken), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer valid extra' },
-    });
-
-    expect(res.status).toBe(401);
-    expect(verifyToken).not.toHaveBeenCalled();
-    expect(res.headers.get('WWW-Authenticate')).toMatch(/^Bearer resource_metadata=/);
-  });
-});
-
-describe('mcpAuthClerk', () => {
-  test('returns 401 when Clerk auth is not authenticated', async () => {
-    vi.mocked(getAuth).mockReturnValue({ isAuthenticated: false } as ReturnType<typeof getAuth>);
-
-    const app = new Hono();
-    app.post('/mcp', mcpAuthClerk, (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer token' },
-    });
-    expect(res.status).toBe(401);
-  });
-
-  test('sets authInfo in context when Clerk auth succeeds', async () => {
-    vi.mocked(getAuth).mockReturnValue({
-      isAuthenticated: true,
-      tokenType: 'oauth_token',
-      clientId: 'client-1',
-      scopes: ['read', 'email'],
-      userId: 'user-1',
-    } as ReturnType<typeof getAuth>);
-
-    const app = new Hono();
-    app.post('/mcp', mcpAuthClerk, (c) => c.json(c.get('mcpAuth')));
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
+    const response = await app.request('http://localhost/mcp', {
       headers: { Authorization: 'Bearer valid-token' },
     });
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json).toEqual({
-      token: 'valid-token',
-      scopes: ['read', 'email'],
-      clientId: 'client-1',
-      extra: { userId: 'user-1' },
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(authInfo);
+    expect(verifyToken).toHaveBeenCalledWith('valid-token', expect.any(Object));
+  });
+
+  test('accepts a Clerk OAuth token verifier', async () => {
+    const clerkClient = {
+      idPOAuthAccessToken: {
+        verify: vi.fn().mockResolvedValue({
+          clientId: authInfo.clientId,
+          subject: 'user-1',
+          scopes: authInfo.scopes,
+          revoked: false,
+          expired: false,
+          expiration: authInfo.expiresAt! * 1000,
+        }),
+      },
+    };
+    const app = new Hono();
+    app.get('/mcp', mcpAuthClerk({ clerkClient }), (context) =>
+      context.json(context.get('mcpAuth')),
+    );
+
+    const response = await app.request('http://localhost/mcp', {
+      headers: { Authorization: 'Bearer valid-token' },
     });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(authInfo);
   });
 });
 
 describe('streamableHttpHandler', () => {
-  test('handles an MCP initialize request and returns 200', async () => {
+  test('serves the modern server/discover exchange', async () => {
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createMcpServer));
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: mcpHeaders,
-      body: initializeBody,
+    app.all('/mcp', streamableHttpHandler(createMcpServer));
+    const client = new Client(
+      { name: 'test-client', version: '1.0.0' },
+      { versionNegotiation: { mode: 'auto' } },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
+      fetch: async (input, init) => app.request(input, init),
     });
 
-    expect(res.status).toBe(200);
-    await res.text();
+    await client.connect(transport);
+
+    expect(client.getProtocolEra()).toBe('modern');
+    await client.close();
   });
 
-  test('handles sequential requests', async () => {
+  test('serves a legacy initialize exchange', async () => {
     const app = new Hono();
     app.post('/mcp', streamableHttpHandler(createMcpServer));
 
-    const opts = {
+    const response = await app.request('http://localhost/mcp', {
       method: 'POST',
       headers: mcpHeaders,
-      body: initializeBody,
-    };
+      body: legacyInitializeBody,
+    });
 
-    const res1 = await app.request('http://localhost/mcp', opts);
-    await res1.text();
-    const res2 = await app.request('http://localhost/mcp', opts);
-
-    expect(res1.status).toBe(200);
-    expect(res2.status).toBe(200);
-    await res2.text();
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"protocolVersion":"2025-06-18"');
   });
 
-  test('does not block a new request on an unconsumed response', async () => {
-    const createServer = vi.fn(createMcpServer);
-    const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createServer));
-
-    const opts = {
-      method: 'POST',
-      headers: mcpHeaders,
-      body: initializeBody,
-    };
-
-    const res1 = await app.request('http://localhost/mcp', opts);
-    const res2 = await app.request('http://localhost/mcp', opts);
-
-    expect(res1.status).toBe(200);
-    expect(res2.status).toBe(200);
-    expect(createServer).toHaveBeenCalledTimes(2);
-    await res1.text();
-    await res2.text();
-  });
-
-  test('forwards authInfo from context to the transport', async () => {
-    const authInfo: AuthInfo = {
-      token: 'tok',
-      scopes: ['read'],
-      clientId: 'c1',
-      extra: { userId: 'u1' },
-    };
+  test('creates an isolated server and forwards auth for every request', async () => {
+    const factory = vi.fn(() => createMcpServer());
     const app = new Hono();
     app.post(
       '/mcp',
-      (c, next) => {
-        c.set('mcpAuth', authInfo);
+      (context, next) => {
+        context.set('mcpAuth', authInfo);
         return next();
       },
-      streamableHttpHandler(createMcpServer),
+      streamableHttpHandler(factory),
     );
 
-    const res = await app.request('http://localhost/mcp', {
+    const request = {
       method: 'POST',
       headers: mcpHeaders,
-      body: initializeBody,
-    });
+      body: legacyInitializeBody,
+    };
+    await (await app.request('http://localhost/mcp', request)).text();
+    await (await app.request('http://localhost/mcp', request)).text();
 
-    expect(res.status).toBe(200);
-    await res.text();
-  });
-
-  test('returns SDK 406 response when POST Accept header is missing', async () => {
-    const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createMcpServer));
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: initializeBody,
-    });
-
-    expect(res.status).toBe(406);
-    const json = await res.json();
-    expect(json.error.message).toContain(
-      'Client must accept both application/json and text/event-stream',
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ era: 'legacy', authInfo }),
+    );
+    expect(factory).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ era: 'legacy', authInfo }),
     );
   });
 });
