@@ -11,9 +11,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.27)
-      express:
-        specifier: ^5.0.0
-        version: 5.2.1
     devDependencies:
       '@changesets/cli':
         specifier: ^2.29.4
@@ -45,6 +42,9 @@ importers:
       better-sqlite3:
         specifier: ^11.10.0
         version: 11.10.0
+      express:
+        specifier: ^5
+        version: 5.2.1
       hono:
         specifier: ^4.12.14
         version: 4.12.14

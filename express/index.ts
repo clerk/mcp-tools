@@ -16,19 +16,23 @@ import {
  * auth data or false
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
  *
- * // define server tools, resources, etc...
+ *   // define server tools, resources, etc...
+ *
+ *   return server;
+ * }
  *
  * async function verifyToken(token, req) {
  *   const authData = // verify the token and return the auth data
  *   return authData;
  * }
  *
- * app.get("/mcp", mcpAuth(verifyToken), streamableHttpHandler(server));
+ * app.post("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuth(
@@ -74,14 +78,18 @@ export async function mcpAuth(
  * Express middleware that enforces authentication for MCP requests and automatically verifies the OAuth access token using Clerk.
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
  *
- * // define server tools, resources, etc...
+ *   // define server tools, resources, etc...
  *
- * app.get("/mcp", mcpAuthClerk, streamableHttpHandler(server));
+ *   return server;
+ * }
+ *
+ * app.post("/mcp", mcpAuthClerk, streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuthClerk(
@@ -195,28 +203,47 @@ function getPRMUrl(req: express.Request) {
 
 /**
  * An express handler that will handle MCP requests using the streamable http
- * transport, given an MCP server object from the MCP SDK.
- * @param server - The MCP server object from the MCP SDK
+ * transport, given a factory that creates an MCP server object from the MCP
+ * SDK. A fresh server and transport are created for each request so that
+ * concurrent requests don't share state.
+ * @param createServer - A factory that returns a new MCP server object. A
+ * plain server object is also accepted for backwards compatibility, but a
+ * shared server can only handle one request at a time, so passing a factory
+ * is strongly recommended.
  * @example
  * ```ts
- * const server = new McpServer({
- *   name: "test-server",
- *   version: "0.0.1",
- * });
+ * function createServer() {
+ *   const server = new McpServer({
+ *     name: "test-server",
+ *     version: "0.0.1",
+ *   });
  *
- * // define server tools, resources, etc...
+ *   // define server tools, resources, etc...
  *
- * app.get("/mcp", streamableHttpHandler(server));
+ *   return server;
+ * }
+ *
+ * app.post("/mcp", streamableHttpHandler(createServer));
  * ```
  */
-export function streamableHttpHandler(server: McpServer) {
+export function streamableHttpHandler(createServer: McpServer | (() => McpServer)) {
   return async (req: express.Request, res: express.Response) => {
+    const server = typeof createServer === 'function' ? createServer() : createServer;
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
 
-    await server.connect(transport);
+    // closing detaches the transport; otherwise the next connect() throws and kills the endpoint
+    res.on('close', () => {
+      void transport.close();
+    });
 
-    await transport.handleRequest(req, res, req.body);
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      await transport.close().catch(() => undefined);
+      throw error;
+    }
   };
 }
