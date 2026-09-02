@@ -233,16 +233,17 @@ export function streamableHttpHandler(createServer: McpServer | (() => McpServer
       sessionIdGenerator: undefined,
     });
 
+    // close() rejects if a consumer onclose hook throws; an unhandled rejection would kill the process
+    const closeTransport = () => transport.close().catch(() => undefined);
+
     // closing detaches the transport; otherwise the next connect() throws and kills the endpoint
-    res.on('close', () => {
-      void transport.close();
-    });
+    res.on('close', closeTransport);
 
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
-      await transport.close().catch(() => undefined);
+      await closeTransport();
       throw error;
     }
   };
