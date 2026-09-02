@@ -99,6 +99,7 @@
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.4",
     "better-sqlite3": "^11.10.0",
+    "express": "^5",
     "hono": "^4.12.14",
     "next": "^15.5.15",
     "oxfmt": "^0.45.0",

@@ -38,32 +38,36 @@ const app = express();
 app.use(clerkMiddleware());
 app.use(express.json());
 
-const server = new McpServer({
-  name: 'clerk-mcp-server',
-  version: '1.0.0',
-});
-
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY! });
 
-server.tool(
-  'get_clerk_user_data',
-  'Gets data about the Clerk user that authorized this request',
-  {},
-  async (_, { authInfo }) => {
-    const clerkAuthInfo = authInfo as unknown as MachineAuthObject<'oauth_token'>;
+function createServer() {
+  const server = new McpServer({
+    name: 'clerk-mcp-server',
+    version: '1.0.0',
+  });
 
-    if (!clerkAuthInfo?.userId) {
+  server.tool(
+    'get_clerk_user_data',
+    'Gets data about the Clerk user that authorized this request',
+    {},
+    async (_, { authInfo }) => {
+      const clerkAuthInfo = authInfo as unknown as MachineAuthObject<'oauth_token'>;
+
+      if (!clerkAuthInfo?.userId) {
+        return {
+          content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        };
+      }
+
+      const user = await clerk.users.getUser(clerkAuthInfo.userId);
       return {
-        content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        content: [{ type: 'text', text: JSON.stringify(user) }],
       };
-    }
+    },
+  );
 
-    const user = await clerk.users.getUser(clerkAuthInfo.userId);
-    return {
-      content: [{ type: 'text', text: JSON.stringify(user) }],
-    };
-  },
-);
+  return server;
+}
 
 app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
 app.get(
@@ -73,7 +77,7 @@ app.get(
   }),
 );
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(server));
+app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -92,11 +96,6 @@ import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk
 const app = express();
 app.use(express.json());
 
-const server = new McpServer({
-  name: 'custom-auth-server',
-  version: '1.0.0',
-});
-
 // Custom token verification
 async function verifyToken(token: string, req: express.Request) {
   try {
@@ -107,28 +106,37 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-server.tool(
-  'get_user_data',
-  'Gets data about the authenticated user',
-  {},
-  async (_, { authInfo }) => {
-    const { userId } = authInfo as any;
+function createServer() {
+  const server = new McpServer({
+    name: 'custom-auth-server',
+    version: '1.0.0',
+  });
 
-    if (!userId) {
+  server.tool(
+    'get_user_data',
+    'Gets data about the authenticated user',
+    {},
+    async (_, { authInfo }) => {
+      const { userId } = authInfo as any;
+
+      if (!userId) {
+        return {
+          content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        };
+      }
+
+      // Pseudo-code: Replace with your actual user data fetching logic
+      // This could be a database query, API call, etc. depending on your auth provider
+      const user = await fetchUserFromDatabase(userId);
+
       return {
-        content: [{ type: 'text', text: 'Error: user not authenticated' }],
+        content: [{ type: 'text', text: JSON.stringify(user) }],
       };
-    }
+    },
+  );
 
-    // Pseudo-code: Replace with your actual user data fetching logic
-    // This could be a database query, API call, etc. depending on your auth provider
-    const user = await fetchUserFromDatabase(userId);
-
-    return {
-      content: [{ type: 'text', text: JSON.stringify(user) }],
-    };
-  },
-);
+  return server;
+}
 
 // Protected resource metadata for your custom auth system
 app.get(
@@ -138,7 +146,7 @@ app.get(
   }),
 );
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(server));
+app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -168,7 +176,7 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(server));
+app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
 ```
 
 The middleware will:
@@ -189,7 +197,7 @@ Pre-configured authentication middleware for Clerk that automatically handles OA
 import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 // No additional configuration needed - uses Clerk's built-in token verification
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(server));
+app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
 ```
 
 This middleware automatically:
@@ -262,11 +270,11 @@ app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerCler
 
 ### `streamableHttpHandler`
 
-Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK.
+Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. A fresh server and transport are created for each request, so concurrent requests don't share state.
 
 **Parameters:**
 
-- `server: McpServer` - The MCP server instance from the MCP SDK
+- `createServer: () => McpServer` - A factory that returns a new MCP server instance. Passing a plain `McpServer` instance is also supported for backwards compatibility, but a shared server can only handle one request at a time, so a factory is strongly recommended.
 
 **Example:**
 
@@ -274,17 +282,21 @@ Express handler that processes MCP requests using the streamable HTTP transport 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { streamableHttpHandler } from '@clerk/mcp-tools/express';
 
-const server = new McpServer({
-  name: 'my-server',
-  version: '1.0.0',
-});
+function createServer() {
+  const server = new McpServer({
+    name: 'my-server',
+    version: '1.0.0',
+  });
 
-// Configure your server with tools, resources, etc.
-server.setRequestHandler('tools/list', async () => {
-  // Your tools implementation
-});
+  // Configure your server with tools, resources, etc.
+  server.setRequestHandler('tools/list', async () => {
+    // Your tools implementation
+  });
 
-app.post('/mcp', streamableHttpHandler(server));
+  return server;
+}
+
+app.post('/mcp', streamableHttpHandler(createServer));
 ```
 
 ## Accessing Authentication Data in Tools
@@ -377,6 +389,6 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 app.post(
   '/mcp',
   mcpAuthClerk, // MCP authentication
-  streamableHttpHandler(server), // MCP request handling
+  streamableHttpHandler(createServer), // MCP request handling
 );
 ```
