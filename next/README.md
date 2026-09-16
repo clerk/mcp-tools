@@ -64,13 +64,15 @@ const handler = createMcpHandler((server) => {
 
 const authHandler = withMcpAuth(
   handler,
-  async (_, token) => {
+  async (req, token) => {
     const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
     // Note: OAuth tokens are machine tokens. Machine token usage is free
     // during our public beta period but will be subject to pricing once
     // generally available. Pricing is expected to be competitive and below
     // market averages.
-    return verifyClerkToken(clerkAuth, token);
+    return verifyClerkToken(clerkAuth, token, {
+      resource: `${new URL(req.url).origin}/mcp`,
+    });
   },
   {
     required: true,
@@ -82,6 +84,8 @@ export { authHandler as GET, authHandler as POST };
 ```
 
 **Note**: This implementation uses Vercel's `mcp-adapter` which is specifically designed for Next.js applications and provides seamless integration with Clerk authentication.
+
+**Audience binding**: `resource` is the RFC 8707 identifier of this MCP server, the same value your protected resource metadata advertises. When it is set, `verifyClerkToken` rejects any token whose `aud` claim does not include it, so a token minted for another resource server on the same Clerk instance cannot be replayed here. This relies on the `aud` field of the OAuth auth object, available from the `@clerk/backend` release that enforces audience binding; with older versions every token is rejected once `resource` is set.
 
 ### Building an MCP Client
 

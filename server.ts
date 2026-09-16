@@ -100,11 +100,14 @@ export async function fetchClerkAuthorizationServerMetadata({
  * as `authData to the MCP SDK.
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
  * @param token - The token to verify
+ * @param options.resource - The RFC 8707 resource identifier of this MCP server. When set, tokens
+ * whose `aud` claim does not include it are rejected, for both JWT and opaque tokens.
  * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
  */
 export function verifyClerkToken(
   auth: MachineAuthObject<'oauth_token'>,
   token: string | undefined,
+  options: { resource?: string } = {},
 ): AuthInfo | undefined {
   if (!token) return undefined;
 
@@ -133,12 +136,35 @@ export function verifyClerkToken(
     return undefined;
   }
 
+  const { resource } = options;
+  if (resource) {
+    // `aud` is exposed by the OAuth auth object as of the @clerk/backend release
+    // that enforces audience binding. Older versions leave it undefined, which
+    // fails closed here rather than accepting a token bound to another server.
+    const aud = (auth as { aud?: string[] | null }).aud ?? [];
+    if (!aud.includes(resource)) {
+      console.error(
+        `OAuth access token audience ${JSON.stringify(aud)} does not include the resource ${resource}`,
+      );
+      return undefined;
+    }
+  }
+
   return {
     token,
     scopes: auth.scopes,
     clientId: auth.clientId,
     extra: { userId: auth.userId },
+    ...(resource ? { resource: parseUrl(resource) } : {}),
   };
+}
+
+function parseUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
