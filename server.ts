@@ -137,8 +137,15 @@ export function verifyClerkToken(
     token,
     scopes: auth.scopes,
     clientId: auth.clientId,
-    extra: { userId: auth.userId },
+    extra: { userId: auth.userId, verifiedBy: 'clerk' },
   };
+}
+
+/**
+ * Whether `authInfo` came from `verifyClerkToken`, so its `clientId` and `extra.userId` are Clerk ids.
+ */
+export function isClerkAuthInfo(authInfo: AuthInfo | undefined): boolean {
+  return authInfo?.extra?.verifiedBy === 'clerk';
 }
 
 /**

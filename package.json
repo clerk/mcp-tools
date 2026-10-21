@@ -33,6 +33,10 @@
       "import": "./dist/client.mjs",
       "types": "./dist/client.d.mts"
     },
+    "./feedback": {
+      "import": "./dist/feedback.mjs",
+      "types": "./dist/feedback.d.mts"
+    },
     "./server": {
       "import": "./dist/server.mjs",
       "types": "./dist/server.d.mts"
@@ -108,7 +112,8 @@
     "redis": "^5.5.6",
     "tsdown": "^0.21.9",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.4",
+    "zod": "^3.25.27"
   },
   "peerDependencies": {
     "@clerk/express": "^2.1.5",
@@ -119,7 +124,8 @@
     "hono": "^4.0.0",
     "next": "^15.2.8 || ^15.3.8 || ^15.4.10 || ^15.5.9 || ^15.6.0-0 || ^16.0.10 || ^16.1.0-0",
     "pg": "^8.11.0",
-    "redis": "^4.0.0"
+    "redis": "^4.0.0",
+    "zod": "^3.25 || ^4.0"
   },
   "peerDependenciesMeta": {
     "@clerk/express": {

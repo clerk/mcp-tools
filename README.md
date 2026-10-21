@@ -109,6 +109,29 @@ To create an MCP endpoint that handles the actual MCP protocol communication, yo
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
+#### Collecting feedback from agents
+
+Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `@clerk/mcp-tools/feedback` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
+
+```ts
+import { registerSubmitFeedbackTool } from '@clerk/mcp-tools/feedback';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
+function createServer() {
+  const server = new McpServer({ name: 'my-app', version: '1.0.0' });
+  registerSubmitFeedbackTool(server, { secretKey: process.env.CLERK_SECRET_KEY! });
+  // ...register your own tools
+  return server;
+}
+```
+
+- `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to.
+- When the request was authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`), the signed-in user's ID and the OAuth client ID are attached to each report. `verifyClerkToken` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
+- `registerSubmitFeedbackTool` throws if `secretKey` is empty, so a missing environment variable fails at startup.
+- Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.
+- If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`.
+- This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
+
 ### Guide: building a client
 
 The first step to building MCP compatibility into your AI application is allowing your users to connect with an MCP service. This can be kicked off simply with the URL of an MCP-compatible server, like `https://example.com/mcp`. Normally, your app would implement a text field where the user can enter an MCP endpoint, or have a pre-built integration where clicking a button would trigger an MCP connection flow with a baked-in endpoint URL.
@@ -627,6 +650,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       [key: string]: any; // Additional metadata from Clerk
     }>;
     ```
+
+- `isClerkAuthInfo`
+  - **Description:** Returns `true` when an `AuthInfo` object came from `verifyClerkToken`, which marks its result with `extra.verifiedBy: 'clerk'`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier.
+  - **Params:** `authInfo: AuthInfo | undefined`
+  - **Returns:** `boolean`
 
 - `corsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
