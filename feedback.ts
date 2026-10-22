@@ -7,6 +7,9 @@ import { isClerkAuthInfo } from './server';
 
 const DEFAULT_API_URL = 'https://api.clerk.com';
 
+// Well under MCP clients' own request timeouts, so a stalled API still gets the agent the "continue" message.
+const REQUEST_TIMEOUT_MS = 10_000;
+
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
 export const FEEDBACK_KINDS = ['missing', 'broken', 'confusing', 'idea'] as const;
@@ -130,6 +133,7 @@ export async function submitFeedback(
       'content-type': 'application/json',
     },
     body: JSON.stringify(report),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok || !isSubmittedFeedback(body)) {
@@ -235,7 +239,7 @@ function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
  * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
-  if (!options.secretKey) {
+  if (!options.secretKey?.trim()) {
     throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
   }
 

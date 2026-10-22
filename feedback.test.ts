@@ -101,6 +101,17 @@ describe('submitFeedback', () => {
     expect(JSON.parse(String(init?.body))).toEqual(report);
   });
 
+  test('gives up on the request after 10 seconds', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+    await submitFeedback(report, { secretKey: 'sk_test_123', fetch: fetchImpl });
+
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(fetchImpl.mock.calls[0]![1]?.signal).toBe(timeout.mock.results[0]!.value);
+    timeout.mockRestore();
+  });
+
   test('rejects a successful response that does not describe the stored feedback', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       Response.json({ created_at: 'x' }, { status: 201 }),
@@ -115,6 +126,7 @@ describe('submitFeedback', () => {
 describe('submitFeedbackTool', () => {
   test('requires a secret key', () => {
     expect(() => submitFeedbackTool({ secretKey: '' })).toThrow(/secretKey/);
+    expect(() => submitFeedbackTool({ secretKey: '  ' })).toThrow(/secretKey/);
   });
 
   test('lists the tool with its input schema', async () => {
@@ -284,6 +296,19 @@ describe('submitFeedbackTool', () => {
     expect(result.isError).toBe(true);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('(TypeError)'));
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('sk_test_123');
+  });
+
+  test('tells the agent to continue when the API does not answer in time', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+    const client = await connect(fetchImpl);
+
+    const result = await client.callTool({ name: 'submit_feedback', arguments: input });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('continue with the task');
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('(TimeoutError)'));
   });
 
   test('tells the agent not to retry when a stored response is malformed', async () => {
