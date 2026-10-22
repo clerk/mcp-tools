@@ -119,13 +119,17 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 function createServer() {
   const server = new McpServer({ name: 'my-app', version: '1.0.0' });
-  registerSubmitFeedbackTool(server, { secretKey: process.env.CLERK_SECRET_KEY! });
+  registerSubmitFeedbackTool(server, {
+    secretKey: process.env.CLERK_SECRET_KEY!,
+    server: { name: 'my-app', version: '1.0.0' },
+  });
   // ...register your own tools
   return server;
 }
 ```
 
-- `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to.
+- `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `server` is optional and labels where reports came from.
+- Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong. The connected agent's name and version are attached when the client sent them during initialization.
 - When the request was authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`), the signed-in user's ID and the OAuth client ID are attached to each report. `verifyClerkToken` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
 - `registerSubmitFeedbackTool` throws if `secretKey` is empty, so a missing environment variable fails at startup.
 - Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.

@@ -7,11 +7,13 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { registerSubmitFeedbackTool, submitFeedback } from './feedback';
 
 const input = {
-  goal: 'Create a user',
-  attempted: 'Called create_user',
-  outcome: 'blocked' as const,
-  issue: 'create_user returned 500',
+  kind: 'broken' as const,
+  task: 'Create a user',
+  description: 'Called create_user with an email. It returned a 500 error.',
+  impact: 'blocked' as const,
 };
+
+const report = { kind: 'broken', task: 'Create a user', description: 'Called create_user.' };
 
 const stored = { id: 'fbk_1', created_at: '2026-10-21T00:00:00.000Z' };
 
@@ -30,8 +32,9 @@ async function connect(fetchImpl: typeof fetch, authInfo?: AuthInfo) {
     secretKey: 'sk_test_123',
     apiUrl: 'https://api.clerk.test',
     fetch: fetchImpl,
+    server: { name: 'acme-mcp', version: '1.2.0' },
   });
-  const client = new Client({ name: 'client', version: '0.0.0' });
+  const client = new Client({ name: 'claude-code', version: '2.1.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   if (authInfo) {
@@ -51,7 +54,7 @@ describe('submitFeedback', () => {
   test('posts to the Backend API with the secret key', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
 
-    const result = await submitFeedback(input, {
+    const result = await submitFeedback(report, {
       secretKey: 'sk_test_123',
       apiUrl: 'https://api.clerk.test',
       fetch: fetchImpl,
@@ -59,10 +62,10 @@ describe('submitFeedback', () => {
 
     expect(result).toEqual(stored);
     const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(String(url)).toBe('https://api.clerk.test/v1/agent_feedback');
+    expect(String(url)).toBe('https://api.clerk.test/v1/feedback');
     expect(init?.method).toBe('POST');
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk_test_123');
-    expect(JSON.parse(String(init?.body))).toEqual(input);
+    expect(JSON.parse(String(init?.body))).toEqual(report);
   });
 
   test('rejects a successful response that does not describe the stored feedback', async () => {
@@ -71,7 +74,7 @@ describe('submitFeedback', () => {
     );
 
     await expect(
-      submitFeedback(input, { secretKey: 'sk_test_123', fetch: fetchImpl }),
+      submitFeedback(report, { secretKey: 'sk_test_123', fetch: fetchImpl }),
     ).rejects.toMatchObject({ name: 'FeedbackSubmissionError', status: 201 });
   });
 });
@@ -89,7 +92,7 @@ describe('registerSubmitFeedbackTool', () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name)).toEqual(['submit_feedback']);
-    expect(tools[0]!.inputSchema.required).toEqual(['goal', 'attempted', 'outcome', 'issue']);
+    expect(tools[0]!.inputSchema.required).toEqual(['kind', 'task', 'description', 'impact']);
   });
 
   test('returns the stored feedback id', async () => {
@@ -100,6 +103,28 @@ describe('registerSubmitFeedbackTool', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({ feedback_id: 'fbk_1', received: true });
+  });
+
+  test('sends the report with the server as source and the connected agent as reporter', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl);
+
+    await client.callTool({
+      name: 'submit_feedback',
+      arguments: {
+        ...input,
+        operation: 'mcp__acme_mcp__create_user, mcp__acme_mcp__list_users',
+        error: 'HTTP 500',
+      },
+    });
+
+    expect(sentBody(fetchImpl)).toEqual({
+      ...input,
+      operation: 'create_user, list_users',
+      error: 'HTTP 500',
+      source: { type: 'mcp', name: 'acme-mcp', version: '1.2.0' },
+      reporter: { type: 'agent', name: 'claude-code', version: '2.1.0' },
+    });
   });
 
   test('attaches the Clerk user and OAuth client from verifyClerkToken auth', async () => {
@@ -115,7 +140,7 @@ describe('registerSubmitFeedbackTool', () => {
 
     expect(sentBody(fetchImpl)).toMatchObject({
       user_id: 'user_123',
-      oauth_client_id: 'client_123',
+      client_id: 'client_123',
     });
   });
 
@@ -130,12 +155,12 @@ describe('registerSubmitFeedbackTool', () => {
 
     await client.callTool({
       name: 'submit_feedback',
-      arguments: { ...input, user_id: 'user_spoofed', oauth_client_id: 'client_spoofed' },
+      arguments: { ...input, user_id: 'user_spoofed', client_id: 'client_spoofed' },
     });
 
     const body = sentBody(fetchImpl);
     expect(body).not.toHaveProperty('user_id');
-    expect(body).not.toHaveProperty('oauth_client_id');
+    expect(body).not.toHaveProperty('client_id');
   });
 
   test('tells the agent not to retry when the API rejects the feedback', async () => {
@@ -182,7 +207,7 @@ describe('registerSubmitFeedbackTool', () => {
 
     const result = await client.callTool({
       name: 'submit_feedback',
-      arguments: { ...input, outcome: 'fine' },
+      arguments: { ...input, impact: 'fine' },
     });
 
     expect(result.isError).toBe(true);
