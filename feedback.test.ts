@@ -1,10 +1,16 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { MessageExtraInfo, RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { registerSubmitFeedbackTool, submitFeedback } from './feedback';
+import {
+  submitFeedback,
+  type SubmitFeedbackTool,
+  submitFeedbackTool,
+  type SubmitFeedbackToolOptions,
+} from './feedback';
 
 const input = {
   kind: 'broken' as const,
@@ -26,52 +32,51 @@ function sentBody(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
   return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }
 
-async function connect(fetchImpl: typeof fetch, authInfo?: AuthInfo) {
+type ConnectOptions = {
+  authInfo?: AuthInfo;
+  requestInfo?: RequestInfo;
+  server?: SubmitFeedbackToolOptions['server'];
+};
+
+// Customers spread the tuple into registerTool (checked against the packed package). Compiling feedback.ts from
+// source infers much deeper zod types than its declarations, so here the generics are passed explicitly.
+function register(server: McpServer, [name, config, callback]: SubmitFeedbackTool) {
+  server.registerTool<typeof config.outputSchema, typeof config.inputSchema>(
+    name,
+    config,
+    callback,
+  );
+}
+
+async function connect(fetchImpl: typeof fetch, options: ConnectOptions = {}) {
   const server = new McpServer({ name: 'test', version: '0.0.0' });
-  registerSubmitFeedbackTool(server, {
-    secretKey: 'sk_test_123',
-    apiUrl: 'https://api.clerk.test',
-    fetch: fetchImpl,
-    server: { name: 'acme-mcp', version: '1.2.0' },
-  });
+  register(
+    server,
+    submitFeedbackTool({
+      secretKey: 'sk_test_123',
+      apiUrl: 'https://api.clerk.test',
+      fetch: fetchImpl,
+      server: 'server' in options ? options.server : { name: 'acme-mcp', version: '1.2.0' },
+    }),
+  );
   const client = new Client({ name: 'claude-code', version: '2.1.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
-  if (authInfo) {
-    const handleMessage = serverTransport.onmessage;
-    serverTransport.onmessage = (message, extra) =>
-      handleMessage?.(message, { ...extra, authInfo });
-  }
+  const handleMessage = serverTransport.onmessage as
+    | ((message: unknown, extra?: MessageExtraInfo) => void)
+    | undefined;
+  serverTransport.onmessage = (message, extra) =>
+    handleMessage?.(message, {
+      ...extra,
+      authInfo: options.authInfo,
+      requestInfo: options.requestInfo,
+    });
   await client.connect(clientTransport);
   return client;
 }
 
-function sharedServer(fetchImpl: typeof fetch) {
-  const server = new McpServer({ name: 'test', version: '0.0.0' });
-  registerSubmitFeedbackTool(server, {
-    secretKey: 'sk_test_123',
-    apiUrl: 'https://api.clerk.test',
-    fetch: fetchImpl,
-  });
-  return server;
-}
-
-async function callOnNewConnection(
-  server: McpServer,
-  params: Record<string, unknown>,
-  { sendInitializedFirst = false } = {},
-) {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  const response = new Promise((resolve) => {
-    clientTransport.onmessage = resolve;
-  });
-  await clientTransport.start();
-  if (sendInitializedFirst) {
-    await clientTransport.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
-  }
-  await clientTransport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params });
-  return response;
+function clientInfoMeta(name: string, version: string) {
+  return { 'io.modelcontextprotocol/clientInfo': { name, version } };
 }
 
 beforeEach(() => {
@@ -107,11 +112,9 @@ describe('submitFeedback', () => {
   });
 });
 
-describe('registerSubmitFeedbackTool', () => {
-  test('requires a secret key at registration', () => {
-    const server = new McpServer({ name: 'test', version: '0.0.0' });
-
-    expect(() => registerSubmitFeedbackTool(server, { secretKey: '' })).toThrow(/secretKey/);
+describe('submitFeedbackTool', () => {
+  test('requires a secret key', () => {
+    expect(() => submitFeedbackTool({ secretKey: '' })).toThrow(/secretKey/);
   });
 
   test('lists the tool with its input schema', async () => {
@@ -133,10 +136,14 @@ describe('registerSubmitFeedbackTool', () => {
     expect(result.structuredContent).toEqual({ feedback_id: 'fbk_1', received: true });
   });
 
-  test('sends the report with the server as source and the connected agent as reporter', async () => {
+  test('sends the configured server as source and the client info sent with the request as reporter', async () => {
+    // GIVEN a request that carries its client info and also has a User-Agent
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
-    const client = await connect(fetchImpl);
+    const client = await connect(fetchImpl, {
+      requestInfo: { headers: { 'user-agent': 'node' }, url: new URL('https://mcp.acme.test/mcp') },
+    });
 
+    // WHEN
     await client.callTool({
       name: 'submit_feedback',
       arguments: {
@@ -144,71 +151,84 @@ describe('registerSubmitFeedbackTool', () => {
         operation: 'mcp__acme_mcp__create_user, mcp__acme_mcp__list_users',
         error: 'HTTP 500',
       },
+      _meta: clientInfoMeta('cursor', '1.7.0'),
     });
 
+    // THEN the request's client info wins over the User-Agent, and the server option over the host
     expect(sentBody(fetchImpl)).toEqual({
       ...input,
       operation: 'create_user, list_users',
       error: 'HTTP 500',
       source: { type: 'mcp', name: 'acme-mcp', version: '1.2.0' },
-      reporter: { type: 'agent', name: 'claude-code', version: '2.1.0' },
+      reporter: { type: 'agent', name: 'cursor', version: '1.7.0' },
     });
   });
 
-  test.each([
-    { case: 'without initializing', sendInitializedFirst: false },
-    { case: 'after only an initialized notification', sendInitializedFirst: true },
-  ])(
-    'does not attribute a report to a client that initialized an earlier connection ($case)',
-    async ({ sendInitializedFirst }) => {
-      // GIVEN one server, as an Express app shares it across stateless requests, and a client that initialized it
-      const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
-      const server = sharedServer(fetchImpl);
-      const firstClient = new Client({ name: 'claude-code', version: '2.1.0' });
-      const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
-      await server.connect(firstServerTransport);
-      await firstClient.connect(firstClientTransport);
-      await server.close();
-
-      // WHEN a different client's tool call arrives on a new connection without its own initialize
-      await callOnNewConnection(
-        server,
-        { name: 'submit_feedback', arguments: input },
-        { sendInitializedFirst },
-      );
-
-      // THEN the report names no agent rather than the client that initialized earlier
-      expect(sentBody(fetchImpl).reporter).toEqual({ type: 'agent' });
-    },
-  );
-
-  test('uses client info sent with the request when the connection never initialized', async () => {
-    // GIVEN a shared server and a request that carries its client info, as newer MCP clients send it
+  test('names the agent from the User-Agent product when the request has no client info', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
-    const server = sharedServer(fetchImpl);
-
-    // WHEN
-    await callOnNewConnection(server, {
-      name: 'submit_feedback',
-      arguments: input,
-      _meta: { 'io.modelcontextprotocol/clientInfo': { name: 'cursor', version: '1.7.0' } },
+    const client = await connect(fetchImpl, {
+      requestInfo: { headers: { 'user-agent': 'claude-code/2.1.0 (darwin; arm64)' } },
     });
 
-    // THEN
+    await client.callTool({ name: 'submit_feedback', arguments: input });
+
     expect(sentBody(fetchImpl).reporter).toEqual({
       type: 'agent',
-      name: 'cursor',
-      version: '1.7.0',
+      name: 'claude-code',
+      version: '2.1.0',
+    });
+  });
+
+  test('names no agent when the client identified itself only during initialize', async () => {
+    // GIVEN a stdio-style connection: no per-request client info and no HTTP headers
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl);
+
+    await client.callTool({ name: 'submit_feedback', arguments: input });
+
+    // THEN the initialize client info ("claude-code") is not used
+    expect(sentBody(fetchImpl).reporter).toEqual({ type: 'agent' });
+  });
+
+  test("defaults the source name to the request's host", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl, {
+      server: undefined,
+      requestInfo: { headers: {}, url: new URL('https://mcp.acme.test/mcp') },
+    });
+
+    await client.callTool({ name: 'submit_feedback', arguments: input });
+
+    expect(sentBody(fetchImpl).source).toEqual({ type: 'mcp', name: 'mcp.acme.test' });
+  });
+
+  test('caps agent and server labels at the Backend API limits', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl, {
+      server: { name: 's'.repeat(150), version: 'v'.repeat(80) },
+    });
+
+    await client.callTool({
+      name: 'submit_feedback',
+      arguments: input,
+      _meta: clientInfoMeta('a'.repeat(150), '1'.repeat(80)),
+    });
+
+    expect(sentBody(fetchImpl)).toMatchObject({
+      source: { name: 's'.repeat(100), version: 'v'.repeat(50) },
+      reporter: { name: 'a'.repeat(100), version: '1'.repeat(50) },
     });
   });
 
   test('attaches the Clerk user and OAuth client from verifyClerkToken auth', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
     const client = await connect(fetchImpl, {
-      token: 'oat_test',
-      clientId: 'client_123',
-      scopes: ['profile'],
-      extra: { userId: 'user_123', verifiedBy: 'clerk' },
+      authInfo: {
+        token: 'oat_test',
+        clientId: 'client_123',
+        scopes: ['profile'],
+        extra: { userId: 'user_123', verifiedBy: 'clerk' },
+      },
     });
 
     await client.callTool({ name: 'submit_feedback', arguments: input });
@@ -222,10 +242,12 @@ describe('registerSubmitFeedbackTool', () => {
   test('does not forward identity from other auth providers or from the agent', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
     const client = await connect(fetchImpl, {
-      token: 'external',
-      clientId: 'external-client',
-      scopes: [],
-      extra: { userId: 'user_01HEXTERNALPROVIDER' },
+      authInfo: {
+        token: 'external',
+        clientId: 'external-client',
+        scopes: [],
+        extra: { userId: 'user_01HEXTERNALPROVIDER' },
+      },
     });
 
     await client.callTool({

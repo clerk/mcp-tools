@@ -1,7 +1,6 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { Implementation, RequestMeta } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { RequestMeta, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
 import { isClerkAuthInfo } from './server';
@@ -100,8 +99,8 @@ export type SubmitFeedbackOptions = {
   fetch?: typeof fetch;
 };
 
-export type RegisterSubmitFeedbackToolOptions = SubmitFeedbackOptions & {
-  /** Name and version of your MCP server, shown with each report. */
+export type SubmitFeedbackToolOptions = SubmitFeedbackOptions & {
+  /** Name and version of your MCP server, shown with each report. The name defaults to the request's host. */
   server?: { name?: string; version?: string };
 };
 
@@ -156,40 +155,67 @@ function bareToolNames(operation: string) {
   return operation.replace(/\bmcp__[^_\s,/]+(?:_[^_\s,/]+)*?__/g, '');
 }
 
+type SubmitFeedbackToolCallback = ToolCallback<typeof submitFeedbackInputSchema>;
+type ToolExtra = Parameters<SubmitFeedbackToolCallback>[1];
+
+/** Arguments for `McpServer.registerTool`. */
+export type SubmitFeedbackTool = [
+  name: typeof SUBMIT_FEEDBACK_TOOL_NAME,
+  config: {
+    title: string;
+    description: string;
+    inputSchema: typeof submitFeedbackInputSchema;
+    outputSchema: typeof submitFeedbackOutputSchema;
+    annotations: ToolAnnotations;
+  },
+  callback: SubmitFeedbackToolCallback,
+];
+
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 
-function clientInfoFromMeta(meta: RequestMeta | undefined): Implementation | undefined {
-  const info = meta?.[CLIENT_INFO_META_KEY];
-  if (!info || typeof info !== 'object' || !('name' in info) || typeof info.name !== 'string') {
-    return undefined;
-  }
-  const version = 'version' in info && typeof info.version === 'string' ? info.version : '';
-  return { name: info.name, version };
+// The Backend API rejects longer labels, which would lose the whole report.
+const MAX_NAME_LENGTH = 100;
+const MAX_VERSION_LENGTH = 50;
+
+function label(value: unknown, maxLength: number) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, maxLength) : undefined;
 }
 
-// A server shared across stateless HTTP requests keeps the client info of whichever client initialized last.
-// Connections to one server are sequential, so that info belongs to the current connection only if it changed
-// after this connection opened.
-function trackInitializingClients(server: McpServer) {
-  const lowLevel = server.server;
-  const clientBeforeConnect = new WeakMap<Transport, Implementation | undefined>();
-  const connect = lowLevel.connect.bind(lowLevel);
-  lowLevel.connect = (transport) => {
-    clientBeforeConnect.set(transport, lowLevel.getClientVersion());
-    return connect(transport);
-  };
-  return function currentClient(meta: RequestMeta | undefined): Implementation | undefined {
-    const fromRequest = clientInfoFromMeta(meta);
-    if (fromRequest) {
-      return fromRequest;
-    }
-    const transport = lowLevel.transport;
-    if (!transport || !clientBeforeConnect.has(transport)) {
-      return undefined;
-    }
-    const client = lowLevel.getClientVersion();
-    return client === clientBeforeConnect.get(transport) ? undefined : client;
-  };
+function origin(type: string, name: unknown, version: unknown): FeedbackOrigin {
+  return { type, name: label(name, MAX_NAME_LENGTH), version: label(version, MAX_VERSION_LENGTH) };
+}
+
+function clientInfoFromMeta(meta: RequestMeta | undefined) {
+  const info = meta?.[CLIENT_INFO_META_KEY];
+  if (!info || typeof info !== 'object' || !('name' in info)) {
+    return undefined;
+  }
+  return { name: info.name, version: 'version' in info ? info.version : undefined };
+}
+
+// Clients that don't send their info with each request are named by their User-Agent product token,
+// such as "claude-code/2.1.0".
+function clientInfoFromUserAgent(
+  headers: NonNullable<ToolExtra['requestInfo']>['headers'] | undefined,
+) {
+  const header = headers?.['user-agent'];
+  const userAgent = Array.isArray(header) ? header[0] : header;
+  const product = userAgent?.trim().split(/\s+/)[0];
+  if (!product) {
+    return undefined;
+  }
+  const [name, version] = product.split('/', 2);
+  return { name, version };
+}
+
+function reporter(extra: ToolExtra): FeedbackOrigin {
+  const client =
+    clientInfoFromMeta(extra._meta) ?? clientInfoFromUserAgent(extra.requestInfo?.headers);
+  return origin('agent', client?.name, client?.version);
+}
+
+function source(extra: ToolExtra, server: SubmitFeedbackToolOptions['server']): FeedbackOrigin {
+  return origin('mcp', server?.name || extra.requestInfo?.url?.host, server?.version);
 }
 
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
@@ -203,22 +229,58 @@ function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
 }
 
 /**
- * Registers a `submit_feedback` tool that agents call when they hit friction. Feedback is stored on the
- * Clerk instance that owns `secretKey` and is visible in the Clerk Dashboard. When the request was
- * authenticated with `verifyClerkToken`, the user and OAuth client ids are attached automatically, and the
- * connected agent's name and version are attached when the client sent them.
+ * Builds a `submit_feedback` tool that agents call when they hit friction. Register it with
+ * `server.registerTool(...submitFeedbackTool({ secretKey }))`. Feedback is stored on the Clerk instance that
+ * owns `secretKey` and is visible in the Clerk Dashboard. When the request was authenticated with
+ * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
  */
-export function registerSubmitFeedbackTool(
-  server: McpServer,
-  options: RegisterSubmitFeedbackToolOptions,
-) {
+export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
   if (!options.secretKey) {
-    throw new Error(
-      'Clerk error: registerSubmitFeedbackTool requires the secretKey of a Clerk instance',
-    );
+    throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
   }
-  const currentClient = trackInitializingClients(server);
-  return server.registerTool<typeof submitFeedbackOutputSchema, typeof submitFeedbackInputSchema>(
+
+  const callback: SubmitFeedbackToolCallback = async (input, extra) => {
+    try {
+      const { id } = await submitFeedback(
+        {
+          ...input,
+          operation: input.operation && bareToolNames(input.operation),
+          source: source(extra, options.server),
+          reporter: reporter(extra),
+          ...identityFromAuthInfo(extra.authInfo),
+        },
+        options,
+      );
+      const result = { feedback_id: id, received: true };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        structuredContent: result,
+      };
+    } catch (error) {
+      const status = error instanceof FeedbackSubmissionError ? error.status : undefined;
+      // Only the status or error name: a custom fetch's error message could echo the Authorization header.
+      const reason = status
+        ? `status ${status}`
+        : error instanceof Error
+          ? error.name
+          : 'unknown error';
+      console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text:
+              status === 429
+                ? 'Feedback limit reached for now. Do not retry; continue with the task.'
+                : 'Feedback could not be sent. Do not retry; continue with the task.',
+          },
+        ],
+      };
+    }
+  };
+
+  return [
     SUBMIT_FEEDBACK_TOOL_NAME,
     {
       title: 'Send feedback',
@@ -232,46 +294,6 @@ export function registerSubmitFeedbackTool(
         openWorldHint: true,
       },
     },
-    async (input, extra) => {
-      try {
-        const client = currentClient(extra._meta);
-        const { id } = await submitFeedback(
-          {
-            ...input,
-            operation: input.operation && bareToolNames(input.operation),
-            source: { type: 'mcp', ...options.server },
-            reporter: { type: 'agent', name: client?.name, version: client?.version || undefined },
-            ...identityFromAuthInfo(extra.authInfo),
-          },
-          options,
-        );
-        const result = { feedback_id: id, received: true };
-        return {
-          content: [{ type: 'text', text: JSON.stringify(result) }],
-          structuredContent: result,
-        };
-      } catch (error) {
-        const status = error instanceof FeedbackSubmissionError ? error.status : undefined;
-        // Only the status or error name: a custom fetch's error message could echo the Authorization header.
-        const reason = status
-          ? `status ${status}`
-          : error instanceof Error
-            ? error.name
-            : 'unknown error';
-        console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text:
-                status === 429
-                  ? 'Feedback limit reached for now. Do not retry; continue with the task.'
-                  : 'Feedback could not be sent. Do not retry; continue with the task.',
-            },
-          ],
-        };
-      }
-    },
-  );
+    callback,
+  ];
 }
