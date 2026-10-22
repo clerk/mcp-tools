@@ -128,10 +128,11 @@ function createServer() {
 - `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `submitFeedbackTool` throws if it's empty, so a missing environment variable fails at startup.
 - Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong.
 - Each report names your server as its source: the request's host by default, or pass `server: { name, version }` to label it yourself.
-- Each report names the agent from the client info its MCP client sends with the request, or otherwise from the HTTP `User-Agent` header. Clients that identify themselves only when they connect (common over stdio) appear without a name.
+- Each report names the agent from the client info its MCP client sends with the request, or otherwise from the HTTP `User-Agent` header. Generic HTTP libraries and browsers (such as `node` or `Mozilla`) aren't used as names, and clients that identify themselves only when they connect (common over stdio) appear without a name.
 - When the request was authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`), the signed-in user's ID and the OAuth client ID are attached to each report. `verifyClerkToken` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
+- Agents file reports without asking the user first. A report contains the agent's summary of what the user asked for, the tool calls it made, and any errors, and is linked to the user's ID when one is attached. Cover this in the privacy information you give your users.
 - Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.
-- If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`.
+- If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`. Requests to Clerk time out after 10 seconds.
 - This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
 
 ### Guide: building a client

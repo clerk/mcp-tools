@@ -54,7 +54,7 @@ export const submitFeedbackInputSchema = {
   operation: z
     .string()
     .trim()
-    .max(200)
+    .max(1000)
     .optional()
     .describe(
       'Name of the tool the problem is about, such as create_user. Omit it when no tool was involved.',
@@ -154,9 +154,11 @@ function isSubmittedFeedback(body: unknown): body is SubmittedFeedback {
 }
 
 // MCP clients often show agents namespaced tool names (Claude Code uses mcp__<server>__<tool>), and agents
-// sometimes list several; store the names this server registered.
+// sometimes list several; store the names this server registered, within the Backend API's limit.
 function bareToolNames(operation: string) {
-  return operation.replace(/\bmcp__[^_\s,/]+(?:_[^_\s,/]+)*?__/g, '');
+  return operation
+    .replace(/\bmcp__[^_\s,/]+(?:_[^_\s,/]+)*?__/g, '')
+    .slice(0, MAX_OPERATION_LENGTH);
 }
 
 type SubmitFeedbackToolCallback = ToolCallback<typeof submitFeedbackInputSchema>;
@@ -177,9 +179,27 @@ export type SubmitFeedbackTool = [
 
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 
-// The Backend API rejects longer labels, which would lose the whole report.
+// The Backend API rejects longer values, which would lose the whole report.
 const MAX_NAME_LENGTH = 100;
 const MAX_VERSION_LENGTH = 50;
+const MAX_OPERATION_LENGTH = 200;
+
+// HTTP libraries and browsers, which say nothing about which agent is calling.
+const GENERIC_USER_AGENTS = new Set([
+  'axios',
+  'bun',
+  'curl',
+  'deno',
+  'go-http-client',
+  'mozilla',
+  'node',
+  'node-fetch',
+  'okhttp',
+  'python-httpx',
+  'python-requests',
+  'python-urllib',
+  'undici',
+]);
 
 function label(value: unknown, maxLength: number) {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, maxLength) : undefined;
@@ -214,6 +234,9 @@ function clientInfoFromUserAgent(
     return undefined;
   }
   const [name, version] = product.split('/', 2);
+  if (!name || GENERIC_USER_AGENTS.has(name.toLowerCase())) {
+    return undefined;
+  }
   return { name, version };
 }
 
@@ -224,7 +247,11 @@ function reporter(extra: ToolExtra): FeedbackOrigin {
 }
 
 function source(extra: ToolExtra, server: SubmitFeedbackToolOptions['server']): FeedbackOrigin {
-  return origin('mcp', server?.name || extra.requestInfo?.url?.host, server?.version);
+  return origin(
+    'mcp',
+    label(server?.name, MAX_NAME_LENGTH) ?? extra.requestInfo?.url?.host,
+    server?.version,
+  );
 }
 
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
@@ -237,6 +264,34 @@ function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
   return { user_id: userId, client_id: authInfo?.clientId || undefined };
 }
 
+function isHttpUrl(value: string) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+// After a timeout, a lost connection, or an unreadable 2xx response, Clerk may already have stored the report.
+function wasRejected(error: unknown): error is FeedbackSubmissionError {
+  return error instanceof FeedbackSubmissionError && (error.status < 200 || error.status >= 300);
+}
+
+// Only the status or error name: a custom fetch's error message could echo the Authorization header.
+function failureReason(error: unknown) {
+  if (error instanceof FeedbackSubmissionError) {
+    return `status ${error.status}`;
+  }
+  return error instanceof Error ? error.name : 'unknown error';
+}
+
+function toolError(text: string) {
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text: `${text} Do not retry; continue with the task.` }],
+  };
+}
+
 /**
  * Builds a `submit_feedback` tool that agents call when they hit friction. Register it with
  * `server.registerTool(...submitFeedbackTool({ secretKey }))`. Feedback is stored on the Clerk instance that
@@ -246,6 +301,11 @@ function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
   if (!options.secretKey?.trim()) {
     throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
+  }
+  if (options.apiUrl !== undefined && !isHttpUrl(options.apiUrl)) {
+    throw new Error(
+      'Clerk error: submitFeedbackTool apiUrl must be an http(s) URL, such as https://api.clerk.com',
+    );
   }
 
   const callback: SubmitFeedbackToolCallback = async (input, extra) => {
@@ -266,26 +326,18 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
         structuredContent: result,
       };
     } catch (error) {
-      const status = error instanceof FeedbackSubmissionError ? error.status : undefined;
-      // Only the status or error name: a custom fetch's error message could echo the Authorization header.
-      const reason = status
-        ? `status ${status}`
-        : error instanceof Error
-          ? error.name
-          : 'unknown error';
+      const reason = failureReason(error);
+      if (!wasRejected(error)) {
+        console.error(
+          `Clerk error: submit_feedback could not confirm the feedback was stored (${reason})`,
+        );
+        return toolError('Feedback may not have been received.');
+      }
       console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text:
-              status === 429
-                ? 'Feedback limit reached for now. Do not retry; continue with the task.'
-                : 'Feedback could not be sent. Do not retry; continue with the task.',
-          },
-        ],
-      };
+      if (error.status === 429) {
+        return toolError('Feedback limit reached for now.');
+      }
+      return toolError('Feedback could not be sent.');
     }
   };
 

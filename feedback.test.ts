@@ -129,6 +129,18 @@ describe('submitFeedbackTool', () => {
     expect(() => submitFeedbackTool({ secretKey: '  ' })).toThrow(/secretKey/);
   });
 
+  test('rejects an apiUrl that is not an http(s) URL', () => {
+    expect(() =>
+      submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'api.clerk.test' }),
+    ).toThrow(/apiUrl/);
+    expect(() =>
+      submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'localhost:3000' }),
+    ).toThrow(/apiUrl/);
+    expect(() =>
+      submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'http://localhost:3000' }),
+    ).not.toThrow();
+  });
+
   test('lists the tool with its input schema', async () => {
     const client = await connect(vi.fn<typeof fetch>());
 
@@ -191,6 +203,20 @@ describe('submitFeedbackTool', () => {
     });
   });
 
+  test.each(['node', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'python-httpx/0.28.1'])(
+    'names no agent from the generic User-Agent %s',
+    async (userAgent) => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+      const client = await connect(fetchImpl, {
+        requestInfo: { headers: { 'user-agent': userAgent } },
+      });
+
+      await client.callTool({ name: 'submit_feedback', arguments: input });
+
+      expect(sentBody(fetchImpl).reporter).toEqual({ type: 'agent' });
+    },
+  );
+
   test('falls back to the User-Agent when the request carries a malformed client name', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
     const client = await connect(fetchImpl, {
@@ -231,6 +257,60 @@ describe('submitFeedbackTool', () => {
     await client.callTool({ name: 'submit_feedback', arguments: input });
 
     expect(sentBody(fetchImpl).source).toEqual({ type: 'mcp', name: 'mcp.acme.test' });
+  });
+
+  test("uses the request's host when the configured server name is blank", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl, {
+      server: { name: '  ', version: '1.2.0' },
+      requestInfo: { headers: {}, url: new URL('https://mcp.acme.test/mcp') },
+    });
+
+    await client.callTool({ name: 'submit_feedback', arguments: input });
+
+    expect(sentBody(fetchImpl).source).toEqual({
+      type: 'mcp',
+      name: 'mcp.acme.test',
+      version: '1.2.0',
+    });
+  });
+
+  test('strips client prefixes before applying the Backend API limit to operation', async () => {
+    // GIVEN prefixed tool names: over 200 characters as sent, under it once stripped
+    const tools = [
+      'create_organization_membership',
+      'update_organization',
+      'list_users',
+      'get_user',
+      'list_organization_memberships',
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl);
+    const operation = tools.map((tool) => `mcp__claude_ai_Acme_Projects__${tool}`).join(', ');
+    expect(operation.length).toBeGreaterThan(200);
+
+    // WHEN
+    const result = await client.callTool({
+      name: 'submit_feedback',
+      arguments: { ...input, operation },
+    });
+
+    // THEN
+    expect(result.isError).toBeFalsy();
+    expect(sentBody(fetchImpl).operation).toBe(tools.join(', '));
+  });
+
+  test('truncates operation to the Backend API limit instead of losing the report', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl);
+
+    const result = await client.callTool({
+      name: 'submit_feedback',
+      arguments: { ...input, operation: 'x'.repeat(300) },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentBody(fetchImpl).operation).toBe('x'.repeat(200));
   });
 
   test('caps agent and server labels at the Backend API limits', async () => {
@@ -300,8 +380,23 @@ describe('submitFeedbackTool', () => {
     const result = await client.callTool({ name: 'submit_feedback', arguments: input });
 
     expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('Feedback limit reached for now.');
     expect(JSON.stringify(result.content)).toContain('Do not retry');
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('status 429'));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not store feedback (status 429)'),
+    );
+  });
+
+  test('tells the agent the feedback was not sent when the API rejects it', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ errors: [] }, { status: 422 }),
+    );
+    const client = await connect(fetchImpl);
+
+    const result = await client.callTool({ name: 'submit_feedback', arguments: input });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('Feedback could not be sent.');
   });
 
   test('never logs the error message of a failed request', async () => {
@@ -317,7 +412,8 @@ describe('submitFeedbackTool', () => {
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('sk_test_123');
   });
 
-  test('tells the agent to continue when the API does not answer in time', async () => {
+  test('says the feedback may not have arrived when the API does not answer in time', async () => {
+    // GIVEN a timeout, after which Clerk may already have stored the report
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
     });
@@ -326,11 +422,14 @@ describe('submitFeedbackTool', () => {
     const result = await client.callTool({ name: 'submit_feedback', arguments: input });
 
     expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('Feedback may not have been received.');
     expect(JSON.stringify(result.content)).toContain('continue with the task');
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('(TimeoutError)'));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not confirm the feedback was stored (TimeoutError)'),
+    );
   });
 
-  test('tells the agent not to retry when a stored response is malformed', async () => {
+  test('says the feedback may not have arrived when a successful response is malformed', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       Response.json({ created_at: 'x' }, { status: 201 }),
     );
@@ -339,6 +438,7 @@ describe('submitFeedbackTool', () => {
     const result = await client.callTool({ name: 'submit_feedback', arguments: input });
 
     expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('Feedback may not have been received.');
     expect(JSON.stringify(result.content)).toContain('Do not retry');
   });
 
