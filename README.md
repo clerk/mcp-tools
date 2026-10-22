@@ -129,7 +129,7 @@ function createServer() {
 ```
 
 - `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `server` is optional and labels where reports came from.
-- Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong. The connected agent's name and version are attached when the client sent them during initialization.
+- Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong. The agent's name and version are attached when its client sent them with the request, or during initialization on the same connection. A server that handles each HTTP request on a new connection, as stateless Streamable HTTP does, only gets them from the request.
 - When the request was authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`), the signed-in user's ID and the OAuth client ID are attached to each report. `verifyClerkToken` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
 - `registerSubmitFeedbackTool` throws if `secretKey` is empty, so a missing environment variable fails at startup.
 - Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.

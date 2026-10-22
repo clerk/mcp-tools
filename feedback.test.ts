@@ -46,6 +46,27 @@ async function connect(fetchImpl: typeof fetch, authInfo?: AuthInfo) {
   return client;
 }
 
+function sharedServer(fetchImpl: typeof fetch) {
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerSubmitFeedbackTool(server, {
+    secretKey: 'sk_test_123',
+    apiUrl: 'https://api.clerk.test',
+    fetch: fetchImpl,
+  });
+  return server;
+}
+
+async function callOnNewConnection(server: McpServer, params: Record<string, unknown>) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const response = new Promise((resolve) => {
+    clientTransport.onmessage = resolve;
+  });
+  await clientTransport.start();
+  await clientTransport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params });
+  return response;
+}
+
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -124,6 +145,43 @@ describe('registerSubmitFeedbackTool', () => {
       error: 'HTTP 500',
       source: { type: 'mcp', name: 'acme-mcp', version: '1.2.0' },
       reporter: { type: 'agent', name: 'claude-code', version: '2.1.0' },
+    });
+  });
+
+  test('does not attribute a report to another client when a server is shared across connections', async () => {
+    // GIVEN one server, as an Express app shares it across stateless requests, and a client that initialized it
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const server = sharedServer(fetchImpl);
+    const firstClient = new Client({ name: 'claude-code', version: '2.1.0' });
+    const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(firstServerTransport);
+    await firstClient.connect(firstClientTransport);
+    await server.close();
+
+    // WHEN a different client's tool call arrives on a new connection without its own initialize
+    await callOnNewConnection(server, { name: 'submit_feedback', arguments: input });
+
+    // THEN the report names no agent rather than the client that initialized earlier
+    expect(sentBody(fetchImpl).reporter).toEqual({ type: 'agent' });
+  });
+
+  test('uses client info sent with the request when the connection never initialized', async () => {
+    // GIVEN a shared server and a request that carries its client info, as newer MCP clients send it
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const server = sharedServer(fetchImpl);
+
+    // WHEN
+    await callOnNewConnection(server, {
+      name: 'submit_feedback',
+      arguments: input,
+      _meta: { 'io.modelcontextprotocol/clientInfo': { name: 'cursor', version: '1.7.0' } },
+    });
+
+    // THEN
+    expect(sentBody(fetchImpl).reporter).toEqual({
+      type: 'agent',
+      name: 'cursor',
+      version: '1.7.0',
     });
   });
 

@@ -1,5 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { Implementation, RequestMeta } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
 import { isClerkAuthInfo } from './server';
@@ -154,6 +156,35 @@ function bareToolNames(operation: string) {
   return operation.replace(/\bmcp__[^_\s,/]+(?:_[^_\s,/]+)*?__/g, '');
 }
 
+const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
+
+function clientInfoFromMeta(meta: RequestMeta | undefined): Implementation | undefined {
+  const info = meta?.[CLIENT_INFO_META_KEY];
+  if (!info || typeof info !== 'object' || !('name' in info) || typeof info.name !== 'string') {
+    return undefined;
+  }
+  const version = 'version' in info && typeof info.version === 'string' ? info.version : '';
+  return { name: info.name, version };
+}
+
+// A server shared across stateless HTTP requests keeps the client info of whichever client initialized last,
+// so trust it only on the connection that completed initialization (stdio, or one server per session).
+function trackInitializingClients(server: McpServer) {
+  const lowLevel = server.server;
+  const clientsByTransport = new WeakMap<Transport, Implementation>();
+  const previous = lowLevel.oninitialized;
+  lowLevel.oninitialized = () => {
+    const transport = lowLevel.transport;
+    const client = lowLevel.getClientVersion();
+    if (transport && client) clientsByTransport.set(transport, client);
+    previous?.();
+  };
+  return function currentClient(meta: RequestMeta | undefined): Implementation | undefined {
+    const transport = lowLevel.transport;
+    return clientInfoFromMeta(meta) ?? (transport ? clientsByTransport.get(transport) : undefined);
+  };
+}
+
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
 // identity that verifyClerkToken produced.
 function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
@@ -179,6 +210,7 @@ export function registerSubmitFeedbackTool(
       'Clerk error: registerSubmitFeedbackTool requires the secretKey of a Clerk instance',
     );
   }
+  const currentClient = trackInitializingClients(server);
   return server.registerTool<typeof submitFeedbackOutputSchema, typeof submitFeedbackInputSchema>(
     SUBMIT_FEEDBACK_TOOL_NAME,
     {
@@ -195,14 +227,13 @@ export function registerSubmitFeedbackTool(
     },
     async (input, extra) => {
       try {
-        // Only known after the client's initialize request, so stateless HTTP servers report the agent without a name.
-        const client = server.server.getClientVersion();
+        const client = currentClient(extra._meta);
         const { id } = await submitFeedback(
           {
             ...input,
             operation: input.operation && bareToolNames(input.operation),
             source: { type: 'mcp', ...options.server },
-            reporter: { type: 'agent', name: client?.name, version: client?.version },
+            reporter: { type: 'agent', name: client?.name, version: client?.version || undefined },
             ...identityFromAuthInfo(extra.authInfo),
           },
           options,
