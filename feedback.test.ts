@@ -191,6 +191,25 @@ describe('submitFeedbackTool', () => {
     });
   });
 
+  test('falls back to the User-Agent when the request carries a malformed client name', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl, {
+      requestInfo: { headers: { 'user-agent': 'claude-code/2.1.0' } },
+    });
+
+    await client.callTool({
+      name: 'submit_feedback',
+      arguments: input,
+      _meta: { 'io.modelcontextprotocol/clientInfo': { name: 42, version: '1.0.0' } },
+    });
+
+    expect(sentBody(fetchImpl).reporter).toEqual({
+      type: 'agent',
+      name: 'claude-code',
+      version: '2.1.0',
+    });
+  });
+
   test('names no agent when the client identified itself only during initialize', async () => {
     // GIVEN a stdio-style connection: no per-request client info and no HTTP headers
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());

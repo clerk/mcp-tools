@@ -191,7 +191,12 @@ function origin(type: string, name: unknown, version: unknown): FeedbackOrigin {
 
 function clientInfoFromMeta(meta: RequestMeta | undefined) {
   const info = meta?.[CLIENT_INFO_META_KEY];
-  if (!info || typeof info !== 'object' || !('name' in info)) {
+  if (
+    !info ||
+    typeof info !== 'object' ||
+    !('name' in info) ||
+    !label(info.name, MAX_NAME_LENGTH)
+  ) {
     return undefined;
   }
   return { name: info.name, version: 'version' in info ? info.version : undefined };
