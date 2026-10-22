@@ -126,6 +126,9 @@ export async function submitFeedback(
   report: FeedbackReport,
   { secretKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = fetch }: SubmitFeedbackOptions,
 ): Promise<SubmittedFeedback> {
+  if (!isAllowedApiUrl(apiUrl)) {
+    throw new Error('Clerk error: apiUrl must use HTTPS or loopback HTTP');
+  }
   const response = await fetchImpl(new URL('/v1/feedback', apiUrl), {
     method: 'POST',
     headers: {
@@ -264,9 +267,13 @@ function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
   return { user_id: userId, client_id: authInfo?.clientId || undefined };
 }
 
-function isHttpUrl(value: string) {
+function isAllowedApiUrl(value: string) {
   try {
-    return ['http:', 'https:'].includes(new URL(value).protocol);
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' ||
+      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+    );
   } catch {
     return false;
   }
@@ -302,10 +309,8 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
   if (!options.secretKey?.trim()) {
     throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
   }
-  if (options.apiUrl !== undefined && !isHttpUrl(options.apiUrl)) {
-    throw new Error(
-      'Clerk error: submitFeedbackTool apiUrl must be an http(s) URL, such as https://api.clerk.com',
-    );
+  if (options.apiUrl !== undefined && !isAllowedApiUrl(options.apiUrl)) {
+    throw new Error('Clerk error: submitFeedbackTool apiUrl must use HTTPS or loopback HTTP');
   }
 
   const callback: SubmitFeedbackToolCallback = async (input, extra) => {

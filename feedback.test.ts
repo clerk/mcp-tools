@@ -101,6 +101,29 @@ describe('submitFeedback', () => {
     expect(JSON.parse(String(init?.body))).toEqual(report);
   });
 
+  test.each(['http://example.com', 'http://192.0.2.1', 'file:///tmp/feedback', 'api.clerk.test'])(
+    'does not send credentials to an invalid API URL: %s',
+    async (apiUrl) => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+      await expect(
+        submitFeedback(report, { secretKey: 'sk_test_123', apiUrl, fetch: fetchImpl }),
+      ).rejects.toThrow(/apiUrl/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(['http://localhost:3000', 'http://127.0.0.1:3000', 'http://[::1]:3000'])(
+    'allows loopback HTTP for local development: %s',
+    async (apiUrl) => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+      await submitFeedback(report, { secretKey: 'sk_test_123', apiUrl, fetch: fetchImpl });
+
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
+
   test('gives up on the request after 10 seconds', async () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout');
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
@@ -129,13 +152,19 @@ describe('submitFeedbackTool', () => {
     expect(() => submitFeedbackTool({ secretKey: '  ' })).toThrow(/secretKey/);
   });
 
-  test('rejects an apiUrl that is not an http(s) URL', () => {
+  test('rejects an apiUrl that is neither HTTPS nor loopback HTTP', () => {
     expect(() =>
       submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'api.clerk.test' }),
     ).toThrow(/apiUrl/);
     expect(() =>
       submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'localhost:3000' }),
     ).toThrow(/apiUrl/);
+    expect(() =>
+      submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'http://example.com' }),
+    ).toThrow(/apiUrl/);
+    expect(() =>
+      submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'https://api.clerk.test' }),
+    ).not.toThrow();
     expect(() =>
       submitFeedbackTool({ secretKey: 'sk_test_123', apiUrl: 'http://localhost:3000' }),
     ).not.toThrow();
