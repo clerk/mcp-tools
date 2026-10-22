@@ -56,13 +56,20 @@ function sharedServer(fetchImpl: typeof fetch) {
   return server;
 }
 
-async function callOnNewConnection(server: McpServer, params: Record<string, unknown>) {
+async function callOnNewConnection(
+  server: McpServer,
+  params: Record<string, unknown>,
+  { sendInitializedFirst = false } = {},
+) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const response = new Promise((resolve) => {
     clientTransport.onmessage = resolve;
   });
   await clientTransport.start();
+  if (sendInitializedFirst) {
+    await clientTransport.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  }
   await clientTransport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params });
   return response;
 }
@@ -148,22 +155,32 @@ describe('registerSubmitFeedbackTool', () => {
     });
   });
 
-  test('does not attribute a report to another client when a server is shared across connections', async () => {
-    // GIVEN one server, as an Express app shares it across stateless requests, and a client that initialized it
-    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
-    const server = sharedServer(fetchImpl);
-    const firstClient = new Client({ name: 'claude-code', version: '2.1.0' });
-    const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
-    await server.connect(firstServerTransport);
-    await firstClient.connect(firstClientTransport);
-    await server.close();
+  test.each([
+    { case: 'without initializing', sendInitializedFirst: false },
+    { case: 'after only an initialized notification', sendInitializedFirst: true },
+  ])(
+    'does not attribute a report to a client that initialized an earlier connection ($case)',
+    async ({ sendInitializedFirst }) => {
+      // GIVEN one server, as an Express app shares it across stateless requests, and a client that initialized it
+      const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+      const server = sharedServer(fetchImpl);
+      const firstClient = new Client({ name: 'claude-code', version: '2.1.0' });
+      const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(firstServerTransport);
+      await firstClient.connect(firstClientTransport);
+      await server.close();
 
-    // WHEN a different client's tool call arrives on a new connection without its own initialize
-    await callOnNewConnection(server, { name: 'submit_feedback', arguments: input });
+      // WHEN a different client's tool call arrives on a new connection without its own initialize
+      await callOnNewConnection(
+        server,
+        { name: 'submit_feedback', arguments: input },
+        { sendInitializedFirst },
+      );
 
-    // THEN the report names no agent rather than the client that initialized earlier
-    expect(sentBody(fetchImpl).reporter).toEqual({ type: 'agent' });
-  });
+      // THEN the report names no agent rather than the client that initialized earlier
+      expect(sentBody(fetchImpl).reporter).toEqual({ type: 'agent' });
+    },
+  );
 
   test('uses client info sent with the request when the connection never initialized', async () => {
     // GIVEN a shared server and a request that carries its client info, as newer MCP clients send it

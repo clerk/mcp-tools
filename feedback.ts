@@ -167,21 +167,28 @@ function clientInfoFromMeta(meta: RequestMeta | undefined): Implementation | und
   return { name: info.name, version };
 }
 
-// A server shared across stateless HTTP requests keeps the client info of whichever client initialized last,
-// so trust it only on the connection that completed initialization (stdio, or one server per session).
+// A server shared across stateless HTTP requests keeps the client info of whichever client initialized last.
+// Connections to one server are sequential, so that info belongs to the current connection only if it changed
+// after this connection opened.
 function trackInitializingClients(server: McpServer) {
   const lowLevel = server.server;
-  const clientsByTransport = new WeakMap<Transport, Implementation>();
-  const previous = lowLevel.oninitialized;
-  lowLevel.oninitialized = () => {
-    const transport = lowLevel.transport;
-    const client = lowLevel.getClientVersion();
-    if (transport && client) clientsByTransport.set(transport, client);
-    previous?.();
+  const clientBeforeConnect = new WeakMap<Transport, Implementation | undefined>();
+  const connect = lowLevel.connect.bind(lowLevel);
+  lowLevel.connect = (transport) => {
+    clientBeforeConnect.set(transport, lowLevel.getClientVersion());
+    return connect(transport);
   };
   return function currentClient(meta: RequestMeta | undefined): Implementation | undefined {
+    const fromRequest = clientInfoFromMeta(meta);
+    if (fromRequest) {
+      return fromRequest;
+    }
     const transport = lowLevel.transport;
-    return clientInfoFromMeta(meta) ?? (transport ? clientsByTransport.get(transport) : undefined);
+    if (!transport || !clientBeforeConnect.has(transport)) {
+      return undefined;
+    }
+    const client = lowLevel.getClientVersion();
+    return client === clientBeforeConnect.get(transport) ? undefined : client;
   };
 }
 
