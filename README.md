@@ -109,6 +109,33 @@ To create an MCP endpoint that handles the actual MCP protocol communication, yo
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
+#### Collecting feedback from agents
+
+Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `@clerk/mcp-tools/feedback` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
+
+```ts
+import { submitFeedbackTool } from '@clerk/mcp-tools/feedback';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
+function createServer() {
+  const server = new McpServer({ name: 'my-app', version: '1.0.0' });
+  server.registerTool(...submitFeedbackTool({ secretKey: process.env.CLERK_SECRET_KEY! }));
+  // ...register your own tools
+  return server;
+}
+```
+
+- `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `submitFeedbackTool` throws if it's empty, so a missing environment variable fails at startup.
+- Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong.
+- Each report names your server as its source: the request's host by default, or pass `server: { name, version }` to label it yourself.
+- Each report names the agent from the client info its MCP client sends with the request, or otherwise from the HTTP `User-Agent` header. Generic HTTP libraries and browsers (such as `node` or `Mozilla`) aren't used as names, and clients that identify themselves only when they connect (common over stdio) appear without a name.
+- When the request was authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`), the signed-in user's ID and the OAuth client ID are attached to each report. `verifyClerkToken` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
+- Agents file reports without asking the user first. A report contains the agent's summary of what the user asked for, the tool calls it made, and any errors, and is linked to the user's ID when one is attached. Cover this in the privacy information you give your users.
+- Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.
+- On a public MCP endpoint without authentication, anyone can call this tool, submit misleading reports, and exhaust the instance's 100-report-per-hour limit. Protect it with authentication or other access controls where possible.
+- If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`. Requests to Clerk time out after 10 seconds.
+- This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
+
 ### Guide: building a client
 
 The first step to building MCP compatibility into your AI application is allowing your users to connect with an MCP service. This can be kicked off simply with the URL of an MCP-compatible server, like `https://example.com/mcp`. Normally, your app would implement a text field where the user can enter an MCP endpoint, or have a pre-built integration where clicking a button would trigger an MCP connection flow with a baked-in endpoint URL.
@@ -627,6 +654,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       [key: string]: any; // Additional metadata from Clerk
     }>;
     ```
+
+- `isClerkAuthInfo`
+  - **Description:** Returns `true` when an `AuthInfo` object came from `verifyClerkToken`, which marks its result with `extra.verifiedBy: 'clerk'`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier.
+  - **Params:** `authInfo: AuthInfo | undefined`
+  - **Returns:** `boolean`
 
 - `corsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.

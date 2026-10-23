@@ -353,7 +353,7 @@ describe('mcpAuthClerk', () => {
       token: 'valid-token',
       scopes: ['read', 'email'],
       clientId: 'client-1',
-      extra: { userId: 'user-1' },
+      extra: { userId: 'user-1', verifiedBy: 'clerk' },
     });
   });
 });
