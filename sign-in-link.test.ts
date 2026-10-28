@@ -10,6 +10,7 @@ import {
   DEFAULT_SIGN_IN_LINK_TASK_DESCRIPTION,
   resolveRedirectUrl,
   SignInLinkError,
+  signInLinkErrorMessage,
   signInLinkTool,
   type SignInLinkTool,
   validateSignInLinkOptions,
@@ -101,6 +102,12 @@ describe('createSignInLink', () => {
       task_description: 'Check billing',
       redirect_url: 'https://app.example.com/settings?tab=a#b',
     });
+  });
+
+  test.each(['', '   '])('falls back to the default agent name for %j', async (agentName) => {
+    const fetchImpl = okFetch();
+    await createSignInLink(options(fetchImpl, { agentName }), { authInfo });
+    expect(sentBody(fetchImpl).agent_name).toBe('mcp:client_1');
   });
 
   test('falls back to the default task description when blank', async () => {
@@ -330,6 +337,34 @@ function textOf(result: Awaited<ReturnType<Client['callTool']>>) {
   return content.map((part) => part.text).join('\n');
 }
 
+describe('signInLinkErrorMessage', () => {
+  test.each([
+    ['not_authenticated', 'reconnect this MCP server'],
+    ['invalid_path', 'Use an absolute path such as /settings'],
+    ['insufficient_scope', 'approve those scopes'],
+    ['unauthorized', 'Do not retry'],
+    ['rate_limited', 'Wait'],
+    ['unavailable', 'Try again in a moment'],
+  ] as const)('tells the agent what to do for %s', (code, hint) => {
+    expect(signInLinkErrorMessage(new SignInLinkError(code, 'detail'))).toContain(hint);
+  });
+
+  test('tells the agent not to retry a rejected request without a path', () => {
+    const message = signInLinkErrorMessage(new SignInLinkError('rejected', 'detail'));
+    expect(message).toContain('Do not retry');
+    expect(message).toContain('Tell the user');
+    expect(message).not.toContain('different path');
+  });
+
+  test('suggests a different path for a rejected request with a path', () => {
+    const message = signInLinkErrorMessage(
+      new SignInLinkError('rejected', 'detail', { pathGiven: true }),
+    );
+    expect(message).toContain('different path');
+    expect(message).not.toContain('Do not retry');
+  });
+});
+
 describe('signInLinkTool', () => {
   test('returns the link as structured content', async () => {
     const client = await connect(okFetch());
@@ -379,10 +414,17 @@ describe('signInLinkTool', () => {
     ],
     [
       'rejected',
-      'Try again',
+      'Do not retry',
       authInfo,
       vi.fn<typeof fetch>(async () => new Response('', { status: 422 })),
       {},
+    ],
+    [
+      'rejected',
+      'different path',
+      authInfo,
+      vi.fn<typeof fetch>(async () => new Response('', { status: 422 })),
+      { path: '/settings' },
     ],
     [
       'unauthorized',

@@ -140,9 +140,18 @@ function createServer() {
 
 When an agent drives a browser for your user and lands on your app's sign-in page, `@clerk/mcp-tools/sign-in-link` lets it get a one-time link that opens your app already signed in as that user. The `create_sign_in_link` tool takes the user from the verified MCP access token, never from tool input.
 
+The link starts a session with the full permissions of the user, so the access token check in front of this tool must be strict. Verify the token with `authenticateRequest` and an `audience` equal to your MCP server's resource URL. Here is a Next.js route handler (see [Building an MCP Server](./next/README.md#building-an-mcp-server) for the rest of the Next.js setup):
+
 ```ts
+// app/mcp/route.ts
+import { verifyClerkToken } from '@clerk/mcp-tools/next';
 import { signInLinkTool } from '@clerk/mcp-tools/sign-in-link';
+import { clerkClient } from '@clerk/nextjs/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+
+// The OAuth resource this server accepts. Tokens must carry it in their `aud` claim.
+const MCP_RESOURCE_URL = 'https://app.example.com/mcp';
 
 function createServer() {
   const server = new McpServer({ name: 'my-app', version: '1.0.0' });
@@ -150,21 +159,49 @@ function createServer() {
     ...signInLinkTool({
       secretKey: process.env.CLERK_SECRET_KEY!,
       destinationUrl: 'https://app.example.com/dashboard',
+      requiredScopes: ['profile'],
     }),
   );
   // ...register your own tools
   return server;
 }
+
+async function handler(req: Request) {
+  const token = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+  const clerk = await clerkClient();
+  const requestState = await clerk.authenticateRequest(req, {
+    acceptsToken: 'oauth_token',
+    audience: MCP_RESOURCE_URL,
+  });
+  const authInfo = verifyClerkToken(requestState.toAuth(), token);
+  if (!authInfo) {
+    return new Response('Unauthorized', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate': `Bearer resource_metadata="https://app.example.com/.well-known/oauth-protected-resource/mcp"`,
+      },
+    });
+  }
+
+  const server = createServer();
+  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  await server.connect(transport);
+  return transport.handleRequest(req, { authInfo });
+}
+
+export { handler as GET, handler as POST, handler as DELETE };
 ```
 
+- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool and get a session with the full permissions of the user. Your Clerk instance must issue the `aud` claim in its OAuth access tokens, so that `authenticateRequest` can compare it with your resource URL.
+- Set `requiredScopes`. It lists OAuth scopes the access token must carry, so only tokens the user approved for this use can create a link. If one is missing, the tool refuses before calling Clerk and tells the agent which scopes the user needs to approve when they reconnect. Default: none.
 - Your MCP server and your app must use the same Clerk instance. `secretKey` is that instance's secret key (`sk_...`), and `destinationUrl` must be on a domain of that instance.
-- Requests must be authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`). Without a Clerk-verified user, the tool returns an error and makes no API call.
+- Requests must be authenticated with `verifyClerkToken`. Without a Clerk-verified user, the tool returns an error and makes no API call. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add the audience check yourself before you register this tool behind them.
 - The agent can pass an absolute `path` such as `/settings` (with optional query and hash). It replaces the path of `destinationUrl`, and anything that would leave the app is refused.
 - The link is a bearer credential: anyone who has it before it is used or expires (about 1 hour) can sign in as the user. Never log it. The tool never puts it in error messages.
+- The tool's text result contains the link, so that the agent can open it. MCP clients and gateways that log tool results therefore log the link too. Treat those logs as credentials.
 - The session the link starts carries the full permissions of the user. Set `sessionMaxDurationInSeconds` to shorten it.
-- `requiredScopes` lists OAuth scopes the access token must carry. If one is missing, the tool refuses before calling Clerk and tells the agent which scopes the user needs to approve when they reconnect. Default: none.
 - `agentName`, `apiUrl`, and `fetch` are optional. Requests to Clerk time out after 10 seconds.
-- Use `createSignInLink(options, { authInfo, path })` from the same module to create a link outside of an MCP tool.
+- Use `createSignInLink(options, { authInfo, path })` from the same module to create a link outside of an MCP tool. When it throws a `SignInLinkError`, `signInLinkErrorMessage(error)` returns the message the tool gives the agent.
 - This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
 
 ### Guide: building a client

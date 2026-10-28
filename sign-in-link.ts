@@ -24,7 +24,7 @@ export type SignInLinkOptions = {
   secretKey: string;
   /** Default landing page for the link. HTTPS, or HTTP on loopback. */
   destinationUrl: string;
-  /** Name recorded for the agent. Defaults to `mcp:<client id>`, or `mcp`. */
+  /** Name recorded for the agent. Defaults to `mcp:<client id>`, or `mcp`, when unset or blank. */
   agentName?: string;
   /** Lifetime of the browser session the link starts. Must be a positive integer. */
   sessionMaxDurationInSeconds?: number;
@@ -64,12 +64,17 @@ export type SignInLinkErrorCode =
   | 'unavailable';
 
 export class SignInLinkError extends Error {
+  /** True when the failed request named a `path`. */
+  readonly pathGiven: boolean;
+
   constructor(
     readonly code: SignInLinkErrorCode,
     message: string,
+    { pathGiven = false }: { pathGiven?: boolean } = {},
   ) {
     super(message);
     this.name = 'SignInLinkError';
+    this.pathGiven = pathGiven;
   }
 }
 
@@ -123,7 +128,7 @@ export function resolveRedirectUrl(destinationUrl: string, path: string | undefi
   return resolved.href;
 }
 
-function errorForStatus(status: number): SignInLinkError {
+function errorForStatus(status: number, pathGiven: boolean): SignInLinkError {
   if (status === 401 || status === 403) {
     return new SignInLinkError('unauthorized', 'Clerk rejected the server credentials');
   }
@@ -131,7 +136,9 @@ function errorForStatus(status: number): SignInLinkError {
     return new SignInLinkError('rate_limited', 'Too many sign-in links were requested');
   }
   if (status >= 400 && status < 500) {
-    return new SignInLinkError('rejected', 'Clerk rejected the sign-in link request');
+    return new SignInLinkError('rejected', 'Clerk rejected the sign-in link request', {
+      pathGiven,
+    });
   }
   return new SignInLinkError('unavailable', 'Clerk could not create a sign-in link');
 }
@@ -173,7 +180,8 @@ export async function createSignInLink(
   const body = {
     on_behalf_of: { user_id: userId },
     permissions: '*',
-    agent_name: options.agentName ?? (authInfo?.clientId ? `mcp:${authInfo.clientId}` : 'mcp'),
+    agent_name:
+      options.agentName?.trim() || (authInfo?.clientId ? `mcp:${authInfo.clientId}` : 'mcp'),
     task_description: request.taskDescription?.trim() || DEFAULT_SIGN_IN_LINK_TASK_DESCRIPTION,
     redirect_url: redirectUrl,
     ...(options.sessionMaxDurationInSeconds !== undefined && {
@@ -199,7 +207,7 @@ export async function createSignInLink(
   if (!response.ok) {
     // Release the connection without reading the body; the body is never used.
     await response.body?.cancel().catch(() => {});
-    throw errorForStatus(response.status);
+    throw errorForStatus(response.status, request.path !== undefined);
   }
 
   const result: unknown = await response.json().catch(() => undefined);
@@ -272,11 +280,11 @@ function toolError(text: string) {
   return { isError: true, content: [{ type: 'text' as const, text }] };
 }
 
-// Messages tell the agent what to do next. They never include the link, the response body, or the secret key.
-function messageForError(error: unknown): string {
-  if (!(error instanceof SignInLinkError)) {
-    return 'The sign-in link could not be created. Continue without it, or ask the user to sign in.';
-  }
+/**
+ * Tells the agent what to do next after a failed `createSignInLink`. The message never includes the link,
+ * the response body, or the secret key.
+ */
+export function signInLinkErrorMessage(error: SignInLinkError): string {
   switch (error.code) {
     case 'not_authenticated':
       return 'No signed-in user is available for this request. Ask the user to reconnect this MCP server and sign in, then try again.';
@@ -285,7 +293,9 @@ function messageForError(error: unknown): string {
     case 'insufficient_scope':
       return `${error.message}. Ask the user to reconnect this MCP server and approve those scopes, then try again.`;
     case 'rejected':
-      return 'Clerk rejected the request. Try again with a different path, or omit the path to open the default page.';
+      return error.pathGiven
+        ? 'Clerk rejected the request. Try again with a different path, or omit the path to open the default page.'
+        : 'Clerk rejected the request. Do not retry. Tell the user the sign-in link could not be created.';
     case 'unauthorized':
       return 'The server is not authorized to create sign-in links. Tell the user the server owner must check the Clerk configuration. Do not retry.';
     case 'rate_limited':
@@ -324,7 +334,11 @@ export function signInLinkTool(options: SignInLinkToolOptions): SignInLinkTool {
         structuredContent: link,
       };
     } catch (error) {
-      return toolError(messageForError(error));
+      return toolError(
+        error instanceof SignInLinkError
+          ? signInLinkErrorMessage(error)
+          : 'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
+      );
     }
   };
 
