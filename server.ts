@@ -144,8 +144,11 @@ export function verifyClerkToken(
 /**
  * Whether `authInfo` came from `verifyClerkToken`, so its `clientId` and `extra.userId` are Clerk ids.
  */
-export function isClerkAuthInfo(authInfo: AuthInfo | undefined): boolean {
-  return authInfo?.extra?.verifiedBy === 'clerk';
+export function isClerkAuthInfo(
+  authInfo: AuthInfo | undefined,
+): authInfo is AuthInfo & { extra: { userId: string; verifiedBy: 'clerk' } } {
+  const userId = authInfo?.extra?.userId;
+  return authInfo?.extra?.verifiedBy === 'clerk' && typeof userId === 'string' && userId !== '';
 }
 
 /**

@@ -1,16 +1,9 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { MessageExtraInfo, RequestInfo } from '@modelcontextprotocol/sdk/types.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import {
-  submitFeedback,
-  type SubmitFeedbackTool,
-  submitFeedbackTool,
-  type SubmitFeedbackToolOptions,
-} from './feedback';
+import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './feedback';
+import { connectTool } from './test/mcp-harness';
 
 const input = {
   kind: 'broken' as const,
@@ -38,41 +31,16 @@ type ConnectOptions = {
   server?: SubmitFeedbackToolOptions['server'];
 };
 
-// Customers spread the tuple into registerTool (checked against the packed package). Compiling feedback.ts from
-// source infers much deeper zod types than its declarations, so here the generics are passed explicitly.
-function register(server: McpServer, [name, config, callback]: SubmitFeedbackTool) {
-  server.registerTool<typeof config.outputSchema, typeof config.inputSchema>(
-    name,
-    config,
-    callback,
-  );
-}
-
-async function connect(fetchImpl: typeof fetch, options: ConnectOptions = {}) {
-  const server = new McpServer({ name: 'test', version: '0.0.0' });
-  register(
-    server,
+function connect(fetchImpl: typeof fetch, options: ConnectOptions = {}) {
+  return connectTool(
     submitFeedbackTool({
       secretKey: 'sk_test_123',
       apiUrl: 'https://api.clerk.test',
       fetch: fetchImpl,
       server: 'server' in options ? options.server : { name: 'acme-mcp', version: '1.2.0' },
     }),
+    { authInfo: options.authInfo, requestInfo: options.requestInfo },
   );
-  const client = new Client({ name: 'claude-code', version: '2.1.0' });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  const handleMessage = serverTransport.onmessage as
-    | ((message: unknown, extra?: MessageExtraInfo) => void)
-    | undefined;
-  serverTransport.onmessage = (message, extra) =>
-    handleMessage?.(message, {
-      ...extra,
-      authInfo: options.authInfo,
-      requestInfo: options.requestInfo,
-    });
-  await client.connect(clientTransport);
-  return client;
 }
 
 function clientInfoMeta(name: string, version: string) {

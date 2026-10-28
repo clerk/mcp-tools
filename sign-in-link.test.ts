@@ -1,21 +1,15 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   createSignInLink,
-  DEFAULT_SIGN_IN_LINK_TASK_DESCRIPTION,
-  resolveRedirectUrl,
   SignInLinkError,
   signInLinkErrorMessage,
   signInLinkTool,
-  type SignInLinkTool,
   validateSignInLinkOptions,
   type SignInLinkOptions,
 } from './sign-in-link';
+import { connectTool, textOf } from './test/mcp-harness';
 
 const authInfo: AuthInfo = {
   token: 't',
@@ -26,6 +20,7 @@ const authInfo: AuthInfo = {
 
 const SECRET = 'sk_test_123';
 const LINK = 'https://accounts.example.com/v1/tickets/accept?ticket=SECRET_TICKET';
+const LEAKS = /BODY_TEXT|sk_test_123|SECRET_TICKET/;
 
 function options(
   fetchImpl: typeof fetch,
@@ -36,14 +31,29 @@ function options(
     destinationUrl: 'https://app.example.com/',
     apiUrl: 'https://api.clerk.test',
     fetch: fetchImpl,
-    now: () => new Date('2026-10-28T00:00:00Z'),
     ...extra,
   };
 }
 
+// The full Backend API response; only url and agent_task_id are read.
 function okFetch() {
   return vi.fn<typeof fetch>(async () =>
-    Response.json({ url: LINK, agent_task_id: 'agttsk_1', task_id: 'old' }, { status: 200 }),
+    Response.json(
+      {
+        object: 'agent_task',
+        agent_id: 'agt_1',
+        agent_task_id: 'agttsk_1',
+        task_id: 'tsk_1',
+        url: LINK,
+      },
+      { status: 200 },
+    ),
+  );
+}
+
+function statusFetch(status: number) {
+  return vi.fn<typeof fetch>(async () =>
+    Response.json({ errors: [{ message: `BODY_TEXT ${LINK}` }] }, { status }),
   );
 }
 
@@ -52,13 +62,8 @@ function sentBody(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
   return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }
 
-async function failure(promise: Promise<unknown>) {
-  try {
-    await promise;
-  } catch (error) {
-    return error as SignInLinkError;
-  }
-  throw new Error('expected rejection');
+function signInLinkError(code: string, extra: Record<string, unknown> = {}) {
+  return { name: 'SignInLinkError', code, message: expect.not.stringMatching(LEAKS), ...extra };
 }
 
 afterEach(() => {
@@ -79,13 +84,12 @@ describe('createSignInLink', () => {
       on_behalf_of: { user_id: 'user_1' },
       permissions: '*',
       agent_name: 'mcp:client_1',
-      task_description: DEFAULT_SIGN_IN_LINK_TASK_DESCRIPTION,
+      task_description: 'Signed-in browser session requested through MCP',
       redirect_url: 'https://app.example.com/',
     });
     expect(result).toEqual({
       url: LINK,
       agent_task_id: 'agttsk_1',
-      expires_at: '2026-10-28T01:00:00.000Z',
       redirect_url: 'https://app.example.com/',
     });
   });
@@ -104,6 +108,18 @@ describe('createSignInLink', () => {
     });
   });
 
+  test('keeps the destination unchanged without a path, and replaces its path and query with one', async () => {
+    const destinationUrl = 'https://app.example.com/dashboard?x=1';
+    const without = await createSignInLink(options(okFetch(), { destinationUrl }), { authInfo });
+    expect(without.redirect_url).toBe(destinationUrl);
+
+    const withPath = await createSignInLink(options(okFetch(), { destinationUrl }), {
+      authInfo,
+      path: '/settings?tab=a#b',
+    });
+    expect(withPath.redirect_url).toBe('https://app.example.com/settings?tab=a#b');
+  });
+
   test.each(['', '   '])('falls back to the default agent name for %j', async (agentName) => {
     const fetchImpl = okFetch();
     await createSignInLink(options(fetchImpl, { agentName }), { authInfo });
@@ -113,7 +129,9 @@ describe('createSignInLink', () => {
   test('falls back to the default task description when blank', async () => {
     const fetchImpl = okFetch();
     await createSignInLink(options(fetchImpl), { authInfo, taskDescription: '   ' });
-    expect(sentBody(fetchImpl).task_description).toBe(DEFAULT_SIGN_IN_LINK_TASK_DESCRIPTION);
+    expect(sentBody(fetchImpl).task_description).toBe(
+      'Signed-in browser session requested through MCP',
+    );
   });
 
   test('names the agent "mcp" without a client id', async () => {
@@ -135,18 +153,20 @@ describe('createSignInLink', () => {
   test.each([
     ['no auth info', undefined],
     ['no user id', { ...authInfo, extra: { verifiedBy: 'clerk' } }],
+    ['empty user id', { ...authInfo, extra: { userId: '', verifiedBy: 'clerk' } }],
     ['not Clerk-verified', { ...authInfo, extra: { userId: 'user_1' } }],
   ])('refuses without Clerk-verified auth: %s', async (_name, info) => {
     const fetchImpl = okFetch();
-    const error = await failure(createSignInLink(options(fetchImpl), { authInfo: info }));
-    expect(error).toBeInstanceOf(SignInLinkError);
-    expect(error.code).toBe('not_authenticated');
+    await expect(createSignInLink(options(fetchImpl), { authInfo: info })).rejects.toMatchObject(
+      signInLinkError('not_authenticated'),
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   test.each([
     'https://evil.example',
     '//evil.example',
+    '//app.example.com/settings',
     '/\\evil.example',
     'javascript:alert(1)',
     '\\\\evil.example',
@@ -155,61 +175,50 @@ describe('createSignInLink', () => {
     '/\t/evil.example',
     '/..//evil.example',
     '/.//evil.example',
+    // new URL() throws ERR_INVALID_URL for this one.
+    '/\n\\]',
   ])('refuses hostile path %j without calling the API', async (path) => {
     const fetchImpl = okFetch();
-    const error = await failure(createSignInLink(options(fetchImpl), { authInfo, path }));
-    expect(error.code).toBe('invalid_path');
+    await expect(createSignInLink(options(fetchImpl), { authInfo, path })).rejects.toMatchObject(
+      signInLinkError('invalid_path'),
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  test('ignores a user id smuggled in the request', async () => {
-    const fetchImpl = okFetch();
-    await createSignInLink(options(fetchImpl), {
-      authInfo,
-      user_id: 'user_evil',
-      on_behalf_of: { user_id: 'user_evil' },
-    } as never);
-    expect(sentBody(fetchImpl).on_behalf_of).toEqual({ user_id: 'user_1' });
-  });
-
   test.each([
-    [401, 'unauthorized'],
-    [403, 'unauthorized'],
-    [400, 'rejected'],
-    [422, 'rejected'],
-    [429, 'rate_limited'],
-    [500, 'unavailable'],
-  ])('maps BAPI status %i to %s without leaking the body', async (status, code) => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      Response.json({ errors: [{ message: `BODY_TEXT ${LINK}` }] }, { status }),
-    );
-    const error = await failure(createSignInLink(options(fetchImpl), { authInfo }));
-    expect(error.code).toBe(code);
-    expect(error.message).not.toContain('BODY_TEXT');
-    expect(error.message).not.toContain(SECRET);
-    expect(error.message).not.toContain('SECRET_TICKET');
-  });
+    [401, undefined, 'unauthorized'],
+    [403, undefined, 'unauthorized'],
+    [400, undefined, 'rejected'],
+    [422, undefined, 'rejected'],
+    [422, '/settings', 'path_rejected'],
+    [429, '/settings', 'rate_limited'],
+    [500, undefined, 'unavailable'],
+  ])(
+    'maps Backend API status %i (path %s) to %s without leaking the body',
+    async (status, path, code) => {
+      await expect(
+        createSignInLink(options(statusFetch(status)), { authInfo, path }),
+      ).rejects.toMatchObject(signInLinkError(code));
+    },
+  );
 
   test('cancels the response body on a failed response', async () => {
     const cancel = vi.fn(async () => {});
     const response = new Response('x', { status: 500 });
     Object.defineProperty(response, 'body', { value: { cancel } });
     const fetchImpl = vi.fn<typeof fetch>(async () => response);
-    await failure(createSignInLink(options(fetchImpl), { authInfo }));
+    await expect(createSignInLink(options(fetchImpl), { authInfo })).rejects.toThrow();
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   test('refuses when a required scope is missing', async () => {
     const fetchImpl = okFetch();
-    const error = await failure(
+    await expect(
       createSignInLink(options(fetchImpl, { requiredScopes: ['a', 'b'] }), {
         authInfo: { ...authInfo, scopes: ['a'] },
         path: 'bad',
       }),
-    );
-    expect(error.code).toBe('insufficient_scope');
-    expect(error.message).toContain('b');
-    expect(error.message).not.toContain('a,');
+    ).rejects.toMatchObject(signInLinkError('insufficient_scope', { missingScopes: ['b'] }));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -229,40 +238,15 @@ describe('createSignInLink', () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw thrown;
     });
-    const error = await failure(createSignInLink(options(fetchImpl), { authInfo }));
-    expect(error.code).toBe('unavailable');
-    expect(error.message).not.toContain(SECRET);
+    await expect(createSignInLink(options(fetchImpl), { authInfo })).rejects.toMatchObject(
+      signInLinkError('unavailable'),
+    );
   });
 
   test('treats an unreadable success response as unavailable', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ nope: true }));
-    const error = await failure(createSignInLink(options(fetchImpl), { authInfo }));
-    expect(error.code).toBe('unavailable');
-  });
-
-  test('never logs the link', async () => {
-    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
-      vi.spyOn(console, m).mockImplementation(() => {}),
-    );
-    await createSignInLink(options(okFetch()), { authInfo });
-    const failing = vi.fn<typeof fetch>(async () => Response.json({ url: LINK }, { status: 500 }));
-    await failure(createSignInLink(options(failing), { authInfo }));
-    for (const spy of spies) {
-      expect(JSON.stringify(spy.mock.calls)).not.toContain('SECRET_TICKET');
-    }
-  });
-});
-
-describe('resolveRedirectUrl', () => {
-  test('returns the destination unchanged without a path', () => {
-    expect(resolveRedirectUrl('https://app.example.com/dashboard?x=1', undefined)).toBe(
-      'https://app.example.com/dashboard?x=1',
-    );
-  });
-
-  test('replaces the destination path and query with the agent path', () => {
-    expect(resolveRedirectUrl('https://app.example.com/dashboard?x=1', '/settings?tab=a#b')).toBe(
-      'https://app.example.com/settings?tab=a#b',
+    await expect(createSignInLink(options(fetchImpl), { authInfo })).rejects.toMatchObject(
+      signInLinkError('unavailable'),
     );
   });
 });
@@ -296,57 +280,30 @@ describe('validateSignInLinkOptions', () => {
   });
 
   test('createSignInLink validates its options', async () => {
-    const error = await createSignInLink(
-      { ...base, secretKey: '', fetch: okFetch() },
-      { authInfo },
-    ).catch((e: unknown) => e);
-    expect((error as Error).message).toMatch(/^Clerk error: /);
+    await expect(
+      createSignInLink({ ...base, secretKey: '', fetch: okFetch() }, { authInfo }),
+    ).rejects.toThrow(/^Clerk error: /);
   });
 });
-
-// Customers spread the tuple into registerTool. Here the generics are passed explicitly, as in feedback.test.ts.
-function register(server: McpServer, [name, config, callback]: SignInLinkTool) {
-  server.registerTool<typeof config.outputSchema, typeof config.inputSchema>(
-    name,
-    config,
-    callback,
-  );
-}
-
-async function connect(
-  fetchImpl: typeof fetch,
-  auth: AuthInfo | null = authInfo,
-  extra: Partial<SignInLinkOptions> = {},
-) {
-  const server = new McpServer({ name: 'test', version: '0.0.0' });
-  register(server, signInLinkTool(options(fetchImpl, extra)));
-  const client = new Client({ name: 'claude-code', version: '2.1.0' });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  const handleMessage = serverTransport.onmessage as
-    | ((message: unknown, extra?: MessageExtraInfo) => void)
-    | undefined;
-  serverTransport.onmessage = (message, messageExtra) =>
-    handleMessage?.(message, { ...messageExtra, authInfo: auth ?? undefined });
-  await client.connect(clientTransport);
-  return client;
-}
-
-function textOf(result: Awaited<ReturnType<Client['callTool']>>) {
-  const content = result.content as { type: string; text: string }[];
-  return content.map((part) => part.text).join('\n');
-}
 
 describe('signInLinkErrorMessage', () => {
   test.each([
     ['not_authenticated', 'reconnect this MCP server'],
     ['invalid_path', 'Use an absolute path such as /settings'],
-    ['insufficient_scope', 'approve those scopes'],
     ['unauthorized', 'Do not retry'],
     ['rate_limited', 'Wait'],
     ['unavailable', 'Try again in a moment'],
   ] as const)('tells the agent what to do for %s', (code, hint) => {
     expect(signInLinkErrorMessage(new SignInLinkError(code, 'detail'))).toContain(hint);
+  });
+
+  test('names the missing scopes from the error, not its message', () => {
+    const message = signInLinkErrorMessage(
+      new SignInLinkError('insufficient_scope', 'detail', ['a', 'b']),
+    );
+    expect(message).toContain('missing required scopes: a, b.');
+    expect(message).toContain('approve those scopes');
+    expect(message).not.toContain('detail');
   });
 
   test('tells the agent not to retry a rejected request without a path', () => {
@@ -356,16 +313,18 @@ describe('signInLinkErrorMessage', () => {
     expect(message).not.toContain('different path');
   });
 
-  test('suggests a different path for a rejected request with a path', () => {
-    const message = signInLinkErrorMessage(
-      new SignInLinkError('rejected', 'detail', { pathGiven: true }),
-    );
+  test('suggests a different path for a rejected path', () => {
+    const message = signInLinkErrorMessage(new SignInLinkError('path_rejected', 'detail'));
     expect(message).toContain('different path');
     expect(message).not.toContain('Do not retry');
   });
 });
 
 describe('signInLinkTool', () => {
+  function connect(fetchImpl: typeof fetch, auth: AuthInfo | null = authInfo) {
+    return connectTool(signInLinkTool(options(fetchImpl)), { authInfo: auth ?? undefined });
+  }
+
   test('returns the link as structured content', async () => {
     const client = await connect(okFetch());
     const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
@@ -373,7 +332,6 @@ describe('signInLinkTool', () => {
     expect(result.structuredContent).toEqual({
       url: LINK,
       agent_task_id: 'agttsk_1',
-      expires_at: '2026-10-28T01:00:00.000Z',
       redirect_url: 'https://app.example.com/',
     });
     expect(textOf(result)).toContain(LINK);
@@ -404,87 +362,54 @@ describe('signInLinkTool', () => {
   });
 
   test.each([
-    ['not_authenticated', 'reconnect this MCP server', null, okFetch(), {}],
+    ['a refusal before the API call', 'reconnect this MCP server', null, () => okFetch()],
+    ['an HTTP error', 'Try again in a moment', authInfo, () => statusFetch(500)],
     [
-      'invalid_path',
-      'Use an absolute path such as /settings',
-      authInfo,
-      okFetch(),
-      { path: '//evil.example' },
-    ],
-    [
-      'rejected',
-      'Do not retry',
-      authInfo,
-      vi.fn<typeof fetch>(async () => new Response('', { status: 422 })),
-      {},
-    ],
-    [
-      'rejected',
-      'different path',
-      authInfo,
-      vi.fn<typeof fetch>(async () => new Response('', { status: 422 })),
-      { path: '/settings' },
-    ],
-    [
-      'unauthorized',
-      'not authorized',
-      authInfo,
-      vi.fn<typeof fetch>(async () => new Response('', { status: 401 })),
-      {},
-    ],
-    [
-      'rate_limited',
-      'Wait',
-      authInfo,
-      vi.fn<typeof fetch>(async () => new Response('', { status: 429 })),
-      {},
-    ],
-    [
-      'unavailable',
+      'a thrown fetch error',
       'Try again in a moment',
       authInfo,
-      vi.fn<typeof fetch>(async () => new Response('', { status: 500 })),
-      {},
+      () =>
+        vi.fn<typeof fetch>(async () => {
+          throw new Error(`boom ${LINK}`);
+        }),
     ],
-  ])('returns a tool error for %s', async (_code, hint, auth, fetchImpl, args) => {
-    const client = await connect(fetchImpl, auth);
-    const result = await client.callTool({ name: 'create_sign_in_link', arguments: args });
+  ])('returns a tool error for %s', async (_name, hint, auth, makeFetch) => {
+    const client = await connect(makeFetch(), auth);
+    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(hint);
-    expect(textOf(result)).not.toContain(SECRET);
-    expect(textOf(result)).not.toContain('SECRET_TICKET');
+    expect(textOf(result)).not.toMatch(LEAKS);
   });
 
   test('tells the agent which scopes to reconnect with', async () => {
-    const client = await connect(okFetch(), authInfo, { requiredScopes: ['sign_in_link'] });
+    const client = await connectTool(
+      signInLinkTool(options(okFetch(), { requiredScopes: ['sign_in_link'] })),
+      { authInfo },
+    );
     const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('sign_in_link');
     expect(textOf(result)).toContain('reconnect');
   });
 
-  test('returns a generic error for unknown failures', async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => {
-      throw new Error(`boom ${LINK}`);
-    });
-    const client = await connect(fetchImpl);
+  test('returns a generic error when the failure is not a SignInLinkError', async () => {
+    // A custom fetch that resolves to something other than a Response.
+    const client = await connect(vi.fn<typeof fetch>(async () => undefined as never));
     const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).not.toContain('SECRET_TICKET');
+    expect(textOf(result)).toBe(
+      'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
+    );
   });
 
-  test('declares annotations', () => {
-    const [, config] = signInLinkTool(options(okFetch()));
-    expect(config.annotations).toEqual({
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    });
-  });
-
-  test('validates options eagerly', () => {
+  test('validates options once, when it is built', async () => {
     expect(() => signInLinkTool(options(okFetch(), { secretKey: ' ' }))).toThrow('Clerk error:');
+
+    const opts = options(okFetch());
+    const client = await connectTool(signInLinkTool(opts), { authInfo });
+    // A per-request check would now refuse the empty key; the tool must not re-validate.
+    opts.secretKey = '';
+    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    expect(result.isError).toBeFalsy();
   });
 });

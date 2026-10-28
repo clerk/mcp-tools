@@ -192,16 +192,13 @@ async function handler(req: Request) {
 export { handler as GET, handler as POST, handler as DELETE };
 ```
 
-- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool and get a session with the full permissions of the user. Your Clerk instance must issue the `aud` claim in its OAuth access tokens, so that `authenticateRequest` can compare it with your resource URL.
-- Set `requiredScopes`. It lists OAuth scopes the access token must carry, so only tokens the user approved for this use can create a link. If one is missing, the tool refuses before calling Clerk and tells the agent which scopes the user needs to approve when they reconnect. Default: none.
+- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. The `audience` option needs `@clerk/backend` 3.19.0, `@clerk/nextjs` 7.9.5, or `@clerk/express` 2.1.70 or later; older versions ignore it. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add that check yourself before you register this tool behind them.
+- Authenticate requests with `verifyClerkToken`, and set `requiredScopes` to the OAuth scopes the access token must carry. Without a Clerk-verified user, or when a scope is missing, the tool refuses before it calls Clerk and tells the agent what to do, such as which scopes to approve on reconnect. Default: no required scopes.
 - Your MCP server and your app must use the same Clerk instance. `secretKey` is that instance's secret key (`sk_...`), and `destinationUrl` must be on a domain of that instance.
-- Requests must be authenticated with `verifyClerkToken`. Without a Clerk-verified user, the tool returns an error and makes no API call. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add the audience check yourself before you register this tool behind them.
-- The agent can pass an absolute `path` such as `/settings` (with optional query and hash). It replaces the path of `destinationUrl`, and anything that would leave the app is refused.
-- The link is a bearer credential: anyone who has it before it is used or expires (about 1 hour) can sign in as the user. Never log it. The tool never puts it in error messages.
-- The tool's text result contains the link, so that the agent can open it. MCP clients and gateways that log tool results therefore log the link too. Treat those logs as credentials.
-- The session the link starts carries the full permissions of the user. Set `sessionMaxDurationInSeconds` to shorten it.
-- `agentName`, `apiUrl`, and `fetch` are optional. Requests to Clerk time out after 10 seconds.
-- Use `createSignInLink(options, { authInfo, path })` from the same module to create a link outside of an MCP tool. When it throws a `SignInLinkError`, `signInLinkErrorMessage(error)` returns the message the tool gives the agent.
+- The agent can pass an absolute `path` such as `/settings` (with optional query and hash). It replaces the path of `destinationUrl`, and the tool refuses anything that would leave the app.
+- The link is a bearer credential: anyone who has it before it is used or expires can sign in as the user. The tool never puts it in error messages, but its text result contains the link so that the agent can open it. Never log it, and treat MCP client and gateway logs of tool results as credentials.
+- Optional settings: `sessionMaxDurationInSeconds` shortens the session the link starts; `agentName`, `apiUrl`, and `fetch` are also available. Requests to Clerk time out after 10 seconds.
+- To create a link outside of an MCP tool, use `createSignInLink(options, { authInfo, path })` from the same module, and `validateSignInLinkOptions(options)` to check the options at startup. When it throws a `SignInLinkError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`), and `signInLinkErrorMessage(error)` returns the message the tool gives the agent.
 - This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
 
 ### Guide: building a client

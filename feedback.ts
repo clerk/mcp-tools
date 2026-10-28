@@ -1,15 +1,16 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { RequestMeta, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { RequestMeta } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
+import {
+  type BackendApiOptions,
+  type McpToolTuple,
+  OPEN_WORLD_WRITE_ANNOTATIONS,
+  postBackendApi,
+  validateBackendApiOptions,
+} from './backend-api';
 import { isClerkAuthInfo } from './server';
-import { isAllowedApiUrl } from './url';
-
-const DEFAULT_API_URL = 'https://api.clerk.com';
-
-// Well under MCP clients' own request timeouts, so a stalled API still gets the agent the "continue" message.
-const REQUEST_TIMEOUT_MS = 10_000;
 
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
@@ -95,12 +96,9 @@ export type FeedbackReport = {
   metadata?: Record<string, unknown>;
 };
 
-export type SubmitFeedbackOptions = {
+export type SubmitFeedbackOptions = BackendApiOptions & {
   /** Secret key of the Clerk instance the feedback belongs to. */
   secretKey: string;
-  /** Origin of the Clerk Backend API. Defaults to https://api.clerk.com. */
-  apiUrl?: string;
-  fetch?: typeof fetch;
 };
 
 export type SubmitFeedbackToolOptions = SubmitFeedbackOptions & {
@@ -125,20 +123,9 @@ export class FeedbackSubmissionError extends Error {
  */
 export async function submitFeedback(
   report: FeedbackReport,
-  { secretKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = fetch }: SubmitFeedbackOptions,
+  options: SubmitFeedbackOptions,
 ): Promise<SubmittedFeedback> {
-  if (!isAllowedApiUrl(apiUrl)) {
-    throw new Error('Clerk error: apiUrl must use HTTPS or loopback HTTP');
-  }
-  const response = await fetchImpl(new URL('/v1/feedback', apiUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${secretKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(report),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  const response = await postBackendApi('/v1/feedback', report, options);
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok || !isSubmittedFeedback(body)) {
     throw new FeedbackSubmissionError(response.status, body);
@@ -169,17 +156,11 @@ type SubmitFeedbackToolCallback = ToolCallback<typeof submitFeedbackInputSchema>
 type ToolExtra = Parameters<SubmitFeedbackToolCallback>[1];
 
 /** Arguments for `McpServer.registerTool`. */
-export type SubmitFeedbackTool = [
-  name: typeof SUBMIT_FEEDBACK_TOOL_NAME,
-  config: {
-    title: string;
-    description: string;
-    inputSchema: typeof submitFeedbackInputSchema;
-    outputSchema: typeof submitFeedbackOutputSchema;
-    annotations: ToolAnnotations;
-  },
-  callback: SubmitFeedbackToolCallback,
-];
+export type SubmitFeedbackTool = McpToolTuple<
+  typeof SUBMIT_FEEDBACK_TOOL_NAME,
+  typeof submitFeedbackInputSchema,
+  typeof submitFeedbackOutputSchema
+>;
 
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 
@@ -261,11 +242,9 @@ function source(extra: ToolExtra, server: SubmitFeedbackToolOptions['server']): 
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
 // identity that verifyClerkToken produced.
 function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
-  const userId = authInfo?.extra?.userId;
-  if (!isClerkAuthInfo(authInfo) || typeof userId !== 'string') {
-    return {};
-  }
-  return { user_id: userId, client_id: authInfo?.clientId || undefined };
+  return isClerkAuthInfo(authInfo)
+    ? { user_id: authInfo.extra.userId, client_id: authInfo.clientId || undefined }
+    : {};
 }
 
 // After a timeout, a lost connection, or an unreadable 2xx response, Clerk may already have stored the report.
@@ -295,12 +274,7 @@ function toolError(text: string) {
  * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
-  if (!options.secretKey?.trim()) {
-    throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
-  }
-  if (options.apiUrl !== undefined && !isAllowedApiUrl(options.apiUrl)) {
-    throw new Error('Clerk error: submitFeedbackTool apiUrl must use HTTPS or loopback HTTP');
-  }
+  validateBackendApiOptions('submitFeedbackTool', options);
 
   const callback: SubmitFeedbackToolCallback = async (input, extra) => {
     try {
@@ -342,12 +316,7 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
       description: SUBMIT_FEEDBACK_DESCRIPTION,
       inputSchema: submitFeedbackInputSchema,
       outputSchema: submitFeedbackOutputSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      annotations: OPEN_WORLD_WRITE_ANNOTATIONS,
     },
     callback,
   ];
