@@ -5,6 +5,7 @@ export default defineConfig({
     'client.ts',
     'feedback.ts',
     'server.ts',
+    'sign-in-link.ts',
     'next/index.ts',
     'express/index.ts',
     'hono/index.ts',

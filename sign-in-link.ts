@@ -1,4 +1,7 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod/v4';
 
 import { isClerkAuthInfo } from './server';
 import { isAllowedApiUrl } from './url';
@@ -217,4 +220,128 @@ export async function createSignInLink(
     expires_at: new Date(now().getTime() + LINK_LIFETIME_SECONDS * 1000).toISOString(),
     redirect_url: redirectUrl,
   };
+}
+
+export const SIGN_IN_LINK_DESCRIPTION = [
+  'Get a one-time link that opens this app in a browser already signed in as the current user.',
+  'Call it when a browser task reaches a sign-in page for this app, then open the returned URL in the browser.',
+  'The link is single use and expires in about 1 hour, so create it right before you open it.',
+  'Do not share the URL or print it to the user unless they ask for it.',
+].join(' ');
+
+export const signInLinkInputSchema = {
+  path: z
+    .string()
+    .max(2048)
+    .optional()
+    .describe(
+      "Page to open after sign-in, as an absolute path such as /settings. Omit for the app's default page.",
+    ),
+  task_description: z
+    .string()
+    .max(500)
+    .optional()
+    .describe('Short description of why you need the browser session.'),
+};
+
+const signInLinkOutputSchema = {
+  url: z.string(),
+  agent_task_id: z.string(),
+  expires_at: z.string(),
+  redirect_url: z.string(),
+};
+
+export type SignInLinkToolOptions = SignInLinkOptions;
+
+type SignInLinkToolCallback = ToolCallback<typeof signInLinkInputSchema>;
+
+/** Arguments for `McpServer.registerTool`. */
+export type SignInLinkTool = [
+  name: typeof CREATE_SIGN_IN_LINK_TOOL_NAME,
+  config: {
+    title: string;
+    description: string;
+    inputSchema: typeof signInLinkInputSchema;
+    outputSchema: typeof signInLinkOutputSchema;
+    annotations: ToolAnnotations;
+  },
+  callback: SignInLinkToolCallback,
+];
+
+function toolError(text: string) {
+  return { isError: true, content: [{ type: 'text' as const, text }] };
+}
+
+// Messages tell the agent what to do next. They never include the link, the response body, or the secret key.
+function messageForError(error: unknown): string {
+  if (!(error instanceof SignInLinkError)) {
+    return 'The sign-in link could not be created. Continue without it, or ask the user to sign in.';
+  }
+  switch (error.code) {
+    case 'not_authenticated':
+      return 'No signed-in user is available for this request. Ask the user to reconnect this MCP server and sign in, then try again.';
+    case 'invalid_path':
+      return 'The path is not allowed. Use an absolute path such as /settings, or omit it to open the default page.';
+    case 'insufficient_scope':
+      return `${error.message}. Ask the user to reconnect this MCP server and approve those scopes, then try again.`;
+    case 'rejected':
+      return 'Clerk rejected the request. Try again with a different path, or omit the path to open the default page.';
+    case 'unauthorized':
+      return 'The server is not authorized to create sign-in links. Tell the user the server owner must check the Clerk configuration. Do not retry.';
+    case 'rate_limited':
+      return 'Too many sign-in links were requested. Wait a while before you try again.';
+    case 'unavailable':
+      return 'Clerk could not create a sign-in link right now. Try again in a moment.';
+    default: {
+      const _exhaustive: never = error.code;
+      throw new Error(`Unhandled sign-in link error: ${String(_exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * Builds a `create_sign_in_link` tool that gives an agent a one-time link to open the app signed in as the
+ * user who authorized the MCP request. Register it with `server.registerTool(...signInLinkTool(options))`.
+ * Throws at construction when the options cannot work.
+ */
+export function signInLinkTool(options: SignInLinkToolOptions): SignInLinkTool {
+  validateSignInLinkOptions(options);
+
+  const callback: SignInLinkToolCallback = async (input, extra) => {
+    try {
+      const link = await createSignInLink(options, {
+        authInfo: extra.authInfo,
+        path: input.path,
+        taskDescription: input.task_description,
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Open this single use link in the browser to sign in: ${link.url}\nIt expires at ${link.expires_at}.`,
+          },
+        ],
+        structuredContent: link,
+      };
+    } catch (error) {
+      return toolError(messageForError(error));
+    }
+  };
+
+  return [
+    CREATE_SIGN_IN_LINK_TOOL_NAME,
+    {
+      title: 'Get a signed-in browser link',
+      description: SIGN_IN_LINK_DESCRIPTION,
+      inputSchema: signInLinkInputSchema,
+      outputSchema: signInLinkOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    callback,
+  ];
 }

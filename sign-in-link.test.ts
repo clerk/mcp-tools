@@ -1,4 +1,8 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
@@ -6,6 +10,8 @@ import {
   DEFAULT_SIGN_IN_LINK_TASK_DESCRIPTION,
   resolveRedirectUrl,
   SignInLinkError,
+  signInLinkTool,
+  type SignInLinkTool,
   validateSignInLinkOptions,
   type SignInLinkOptions,
 } from './sign-in-link';
@@ -288,5 +294,155 @@ describe('validateSignInLinkOptions', () => {
       { authInfo },
     ).catch((e: unknown) => e);
     expect((error as Error).message).toMatch(/^Clerk error: /);
+  });
+});
+
+// Customers spread the tuple into registerTool. Here the generics are passed explicitly, as in feedback.test.ts.
+function register(server: McpServer, [name, config, callback]: SignInLinkTool) {
+  server.registerTool<typeof config.outputSchema, typeof config.inputSchema>(
+    name,
+    config,
+    callback,
+  );
+}
+
+async function connect(
+  fetchImpl: typeof fetch,
+  auth: AuthInfo | null = authInfo,
+  extra: Partial<SignInLinkOptions> = {},
+) {
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  register(server, signInLinkTool(options(fetchImpl, extra)));
+  const client = new Client({ name: 'claude-code', version: '2.1.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const handleMessage = serverTransport.onmessage as
+    | ((message: unknown, extra?: MessageExtraInfo) => void)
+    | undefined;
+  serverTransport.onmessage = (message, messageExtra) =>
+    handleMessage?.(message, { ...messageExtra, authInfo: auth ?? undefined });
+  await client.connect(clientTransport);
+  return client;
+}
+
+function textOf(result: Awaited<ReturnType<Client['callTool']>>) {
+  const content = result.content as { type: string; text: string }[];
+  return content.map((part) => part.text).join('\n');
+}
+
+describe('signInLinkTool', () => {
+  test('returns the link as structured content', async () => {
+    const client = await connect(okFetch());
+    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      url: LINK,
+      agent_task_id: 'agttsk_1',
+      expires_at: '2026-10-28T01:00:00.000Z',
+      redirect_url: 'https://app.example.com/',
+    });
+    expect(textOf(result)).toContain(LINK);
+    expect(textOf(result)).toContain('single use');
+  });
+
+  test('passes the path and task description through', async () => {
+    const fetchImpl = okFetch();
+    const client = await connect(fetchImpl);
+    await client.callTool({
+      name: 'create_sign_in_link',
+      arguments: { path: '/settings', task_description: 'Check billing' },
+    });
+    expect(sentBody(fetchImpl)).toMatchObject({
+      redirect_url: 'https://app.example.com/settings',
+      task_description: 'Check billing',
+    });
+  });
+
+  test('ignores user_id in tool input', async () => {
+    const fetchImpl = okFetch();
+    const client = await connect(fetchImpl);
+    await client.callTool({
+      name: 'create_sign_in_link',
+      arguments: { user_id: 'user_evil', on_behalf_of: { user_id: 'user_evil' } },
+    });
+    expect(sentBody(fetchImpl).on_behalf_of).toEqual({ user_id: 'user_1' });
+  });
+
+  test.each([
+    ['not_authenticated', 'reconnect this MCP server', null, okFetch(), {}],
+    [
+      'invalid_path',
+      'Use an absolute path such as /settings',
+      authInfo,
+      okFetch(),
+      { path: '//evil.example' },
+    ],
+    [
+      'rejected',
+      'Try again',
+      authInfo,
+      vi.fn<typeof fetch>(async () => new Response('', { status: 422 })),
+      {},
+    ],
+    [
+      'unauthorized',
+      'not authorized',
+      authInfo,
+      vi.fn<typeof fetch>(async () => new Response('', { status: 401 })),
+      {},
+    ],
+    [
+      'rate_limited',
+      'Wait',
+      authInfo,
+      vi.fn<typeof fetch>(async () => new Response('', { status: 429 })),
+      {},
+    ],
+    [
+      'unavailable',
+      'Try again in a moment',
+      authInfo,
+      vi.fn<typeof fetch>(async () => new Response('', { status: 500 })),
+      {},
+    ],
+  ])('returns a tool error for %s', async (_code, hint, auth, fetchImpl, args) => {
+    const client = await connect(fetchImpl, auth);
+    const result = await client.callTool({ name: 'create_sign_in_link', arguments: args });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(hint);
+    expect(textOf(result)).not.toContain(SECRET);
+    expect(textOf(result)).not.toContain('SECRET_TICKET');
+  });
+
+  test('tells the agent which scopes to reconnect with', async () => {
+    const client = await connect(okFetch(), authInfo, { requiredScopes: ['sign_in_link'] });
+    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('sign_in_link');
+    expect(textOf(result)).toContain('reconnect');
+  });
+
+  test('returns a generic error for unknown failures', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      throw new Error(`boom ${LINK}`);
+    });
+    const client = await connect(fetchImpl);
+    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).not.toContain('SECRET_TICKET');
+  });
+
+  test('declares annotations', () => {
+    const [, config] = signInLinkTool(options(okFetch()));
+    expect(config.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+  });
+
+  test('validates options eagerly', () => {
+    expect(() => signInLinkTool(options(okFetch(), { secretKey: ' ' }))).toThrow('Clerk error:');
   });
 });

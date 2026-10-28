@@ -37,6 +37,10 @@
       "import": "./dist/feedback.mjs",
       "types": "./dist/feedback.d.mts"
     },
+    "./sign-in-link": {
+      "import": "./dist/sign-in-link.mjs",
+      "types": "./dist/sign-in-link.d.mts"
+    },
     "./server": {
       "import": "./dist/server.mjs",
       "types": "./dist/server.d.mts"

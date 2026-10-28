@@ -136,6 +136,37 @@ function createServer() {
 - If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`. Requests to Clerk time out after 10 seconds.
 - This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
 
+#### Signed-in browser links for agents
+
+When an agent drives a browser for your user and lands on your app's sign-in page, `@clerk/mcp-tools/sign-in-link` lets it get a one-time link that opens your app already signed in as that user. The `create_sign_in_link` tool takes the user from the verified MCP access token, never from tool input.
+
+```ts
+import { signInLinkTool } from '@clerk/mcp-tools/sign-in-link';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
+function createServer() {
+  const server = new McpServer({ name: 'my-app', version: '1.0.0' });
+  server.registerTool(
+    ...signInLinkTool({
+      secretKey: process.env.CLERK_SECRET_KEY!,
+      destinationUrl: 'https://app.example.com/dashboard',
+    }),
+  );
+  // ...register your own tools
+  return server;
+}
+```
+
+- Your MCP server and your app must use the same Clerk instance. `secretKey` is that instance's secret key (`sk_...`), and `destinationUrl` must be on a domain of that instance.
+- Requests must be authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`). Without a Clerk-verified user, the tool returns an error and makes no API call.
+- The agent can pass an absolute `path` such as `/settings` (with optional query and hash). It replaces the path of `destinationUrl`, and anything that would leave the app is refused.
+- The link is a bearer credential: anyone who has it before it is used or expires (about 1 hour) can sign in as the user. Never log it. The tool never puts it in error messages.
+- The session the link starts carries the full permissions of the user. Set `sessionMaxDurationInSeconds` to shorten it.
+- `requiredScopes` lists OAuth scopes the access token must carry. If one is missing, the tool refuses before calling Clerk and tells the agent which scopes the user needs to approve when they reconnect. Default: none.
+- `agentName`, `apiUrl`, and `fetch` are optional. Requests to Clerk time out after 10 seconds.
+- Use `createSignInLink(options, { authInfo, path })` from the same module to create a link outside of an MCP tool.
+- This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
+
 ### Guide: building a client
 
 The first step to building MCP compatibility into your AI application is allowing your users to connect with an MCP service. This can be kicked off simply with the URL of an MCP-compatible server, like `https://example.com/mcp`. Normally, your app would implement a text field where the user can enter an MCP endpoint, or have a pre-built integration where clicking a button would trigger an MCP connection flow with a baked-in endpoint URL.
