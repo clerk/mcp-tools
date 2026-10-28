@@ -140,6 +140,8 @@ describe('createSignInLink', () => {
     'settings',
     '',
     '/\t/evil.example',
+    '/..//evil.example',
+    '/.//evil.example',
   ])('refuses hostile path %j without calling the API', async (path) => {
     const fetchImpl = okFetch();
     const error = await failure(createSignInLink(options(fetchImpl), { authInfo, path }));
@@ -173,6 +175,37 @@ describe('createSignInLink', () => {
     expect(error.message).not.toContain('BODY_TEXT');
     expect(error.message).not.toContain(SECRET);
     expect(error.message).not.toContain('SECRET_TICKET');
+  });
+
+  test('cancels the response body on a failed response', async () => {
+    const cancel = vi.fn(async () => {});
+    const response = new Response('x', { status: 500 });
+    Object.defineProperty(response, 'body', { value: { cancel } });
+    const fetchImpl = vi.fn<typeof fetch>(async () => response);
+    await failure(createSignInLink(options(fetchImpl), { authInfo }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  test('refuses when a required scope is missing', async () => {
+    const fetchImpl = okFetch();
+    const error = await failure(
+      createSignInLink(options(fetchImpl, { requiredScopes: ['a', 'b'] }), {
+        authInfo: { ...authInfo, scopes: ['a'] },
+        path: 'bad',
+      }),
+    );
+    expect(error.code).toBe('insufficient_scope');
+    expect(error.message).toContain('b');
+    expect(error.message).not.toContain('a,');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test('proceeds when all required scopes are present', async () => {
+    const fetchImpl = okFetch();
+    await createSignInLink(options(fetchImpl, { requiredScopes: ['a'] }), {
+      authInfo: { ...authInfo, scopes: ['a', 'c'] },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   test.each([
@@ -241,6 +274,7 @@ describe('validateSignInLinkOptions', () => {
     ['insecure apiUrl', { apiUrl: 'http://api.example.com' }],
     ['invalid apiUrl', { apiUrl: 'not a url' }],
     ['insecure destinationUrl', { destinationUrl: 'http://app.example.com/' }],
+    ['empty required scope', { requiredScopes: ['a', ' '] }],
     ['zero session length', { sessionMaxDurationInSeconds: 0 }],
     ['negative session length', { sessionMaxDurationInSeconds: -5 }],
     ['fractional session length', { sessionMaxDurationInSeconds: 1.5 }],

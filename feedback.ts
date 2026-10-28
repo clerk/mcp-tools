@@ -4,6 +4,7 @@ import type { RequestMeta, ToolAnnotations } from '@modelcontextprotocol/sdk/typ
 import { z } from 'zod/v4';
 
 import { isClerkAuthInfo } from './server';
+import { isAllowedApiUrl } from './url';
 
 const DEFAULT_API_URL = 'https://api.clerk.com';
 
@@ -265,18 +266,6 @@ function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
     return {};
   }
   return { user_id: userId, client_id: authInfo?.clientId || undefined };
-}
-
-function isAllowedApiUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === 'https:' ||
-      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-    );
-  } catch {
-    return false;
-  }
 }
 
 // After a timeout, a lost connection, or an unreadable 2xx response, Clerk may already have stored the report.

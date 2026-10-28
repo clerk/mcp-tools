@@ -1,6 +1,7 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 import { isClerkAuthInfo } from './server';
+import { isAllowedApiUrl } from './url';
 
 const DEFAULT_API_URL = 'https://api.clerk.com';
 
@@ -26,6 +27,8 @@ export type SignInLinkOptions = {
   sessionMaxDurationInSeconds?: number;
   /** Origin of the Clerk Backend API. Defaults to https://api.clerk.com. */
   apiUrl?: string;
+  /** Scopes the token must carry. Missing scopes refuse the request before any API call. Default: none. */
+  requiredScopes?: readonly string[];
   fetch?: typeof fetch;
   /** Clock used to compute `expires_at`. */
   now?: () => Date;
@@ -52,6 +55,7 @@ export type SignInLinkErrorCode =
   | 'not_authenticated'
   | 'invalid_path'
   | 'rejected'
+  | 'insufficient_scope'
   | 'unauthorized'
   | 'rate_limited'
   | 'unavailable';
@@ -66,30 +70,21 @@ export class SignInLinkError extends Error {
   }
 }
 
-function isAllowedUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === 'https:' ||
-      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** Throws a `Clerk error:` message when the options cannot work. Call it once at construction. */
 export function validateSignInLinkOptions(options: SignInLinkOptions): void {
   if (!options.secretKey?.trim()) {
     throw new Error('Clerk error: createSignInLink requires the secretKey of a Clerk instance');
   }
-  if (options.apiUrl !== undefined && !isAllowedUrl(options.apiUrl)) {
+  if (options.apiUrl !== undefined && !isAllowedApiUrl(options.apiUrl)) {
     throw new Error('Clerk error: createSignInLink apiUrl must use HTTPS or loopback HTTP');
   }
-  if (!isAllowedUrl(options.destinationUrl)) {
+  if (!isAllowedApiUrl(options.destinationUrl)) {
     throw new Error(
       'Clerk error: createSignInLink destinationUrl must be a URL that uses HTTPS or loopback HTTP',
     );
+  }
+  if (options.requiredScopes?.some((scope) => typeof scope !== 'string' || !scope.trim())) {
+    throw new Error('Clerk error: createSignInLink requiredScopes must be non-empty strings');
   }
   const seconds = options.sessionMaxDurationInSeconds;
   if (seconds !== undefined && (!Number.isInteger(seconds) || seconds <= 0)) {
@@ -119,7 +114,7 @@ export function resolveRedirectUrl(destinationUrl: string, path: string | undefi
   } catch {
     throw invalid();
   }
-  if (resolved.origin !== destination.origin) {
+  if (resolved.origin !== destination.origin || resolved.pathname.startsWith('//')) {
     throw invalid();
   }
   return resolved.href;
@@ -161,6 +156,16 @@ export async function createSignInLink(
     throw new SignInLinkError('not_authenticated', 'A Clerk-verified signed-in user is required');
   }
 
+  const missingScopes = (options.requiredScopes ?? []).filter(
+    (scope) => !authInfo?.scopes?.includes(scope),
+  );
+  if (missingScopes.length > 0) {
+    throw new SignInLinkError(
+      'insufficient_scope',
+      `The token is missing required scopes: ${missingScopes.join(', ')}`,
+    );
+  }
+
   const redirectUrl = resolveRedirectUrl(destinationUrl, request.path);
   const body = {
     on_behalf_of: { user_id: userId },
@@ -189,6 +194,8 @@ export async function createSignInLink(
     throw new SignInLinkError('unavailable', 'Clerk could not be reached');
   }
   if (!response.ok) {
+    // Release the connection without reading the body; the body is never used.
+    await response.body?.cancel().catch(() => {});
     throw errorForStatus(response.status);
   }
 
