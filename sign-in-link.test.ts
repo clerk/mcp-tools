@@ -6,6 +6,7 @@ import {
   SignInLinkError,
   signInLinkErrorMessage,
   signInLinkTool,
+  signInLinkInstructions,
   signInLinkToolText,
   validateSignInLinkOptions,
   type SignInLinkOptions,
@@ -339,6 +340,14 @@ describe('signInLinkTool', () => {
     expect(tools[0]?.description).toContain('Opens https://app.example.com in a browser');
     expect(tools[0]?.description).toContain('before you open any page on app.example.com');
     expect(tools[0]?.description).toContain('Never type credentials for app.example.com');
+  });
+
+  test('gives short server instructions that name the host and the tool', () => {
+    const instructions = signInLinkInstructions('https://app.example.com/dashboard');
+    expect(instructions).toContain('app.example.com');
+    expect(instructions).toContain('create_browser_session');
+    // Some MCP clients show only the first ~200 characters of server instructions.
+    expect(instructions.length).toBeLessThanOrEqual(200);
   });
 
   test('keeps the port of a loopback destination', () => {

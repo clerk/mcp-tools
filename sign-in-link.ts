@@ -204,6 +204,15 @@ async function requestSignInLink(
   };
 }
 
+/**
+ * Server instructions to pass as `new McpServer(info, { instructions })`. Some clients show agents only the server
+ * instructions until they search for a tool, so the first sentence names the host and the tool.
+ */
+export function signInLinkInstructions(destinationUrl: string): string {
+  const { host } = new URL(destinationUrl);
+  return `To use ${host} in a browser, first call ${CREATE_BROWSER_SESSION_TOOL_NAME}: it opens ${host} signed in as the user. Never type credentials for ${host}.`;
+}
+
 /** The tool title and description, written for the app at `destinationUrl` so agents can match it to the site. */
 export function signInLinkToolText(destinationUrl: string): { title: string; description: string } {
   const { host, origin } = new URL(destinationUrl);

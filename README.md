@@ -145,7 +145,7 @@ The link starts a session with the full permissions of the user, so the access t
 ```ts
 // app/mcp/route.ts
 import { verifyClerkToken } from '@clerk/mcp-tools/next';
-import { signInLinkTool } from '@clerk/mcp-tools/sign-in-link';
+import { signInLinkInstructions, signInLinkTool } from '@clerk/mcp-tools/sign-in-link';
 import { clerkClient } from '@clerk/nextjs/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -153,12 +153,17 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 // The OAuth resource this server accepts. Tokens must carry it in their `aud` claim.
 const MCP_RESOURCE_URL = 'https://app.example.com/mcp';
 
+const APP_URL = 'https://app.example.com/dashboard';
+
 function createServer() {
-  const server = new McpServer({ name: 'my-app', version: '1.0.0' });
+  const server = new McpServer(
+    { name: 'my-app', version: '1.0.0' },
+    { instructions: signInLinkInstructions(APP_URL) },
+  );
   server.registerTool(
     ...signInLinkTool({
       secretKey: process.env.CLERK_SECRET_KEY!,
-      destinationUrl: 'https://app.example.com/dashboard',
+      destinationUrl: APP_URL,
       requiredScopes: ['profile'],
     }),
   );
@@ -192,6 +197,7 @@ async function handler(req: Request) {
 export { handler as GET, handler as POST, handler as DELETE };
 ```
 
+- Pass `signInLinkInstructions(destinationUrl)` as the server `instructions`. Some MCP clients, such as Codex, show agents only the server instructions until the agent searches for a tool, so without them an agent may open your app in a browser and stop at the sign-in page.
 - Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. The `audience` option needs `@clerk/backend` 3.19.0, `@clerk/nextjs` 7.9.5, or `@clerk/express` 2.1.70 or later; older versions ignore it. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add that check yourself before you register this tool behind them.
 - Authenticate requests with `verifyClerkToken`, and set `requiredScopes` to the OAuth scopes the access token must carry. Without a Clerk-verified user, or when a scope is missing, the tool refuses before it calls Clerk and tells the agent what to do, such as which scopes to approve on reconnect. `requiredScopes` is required: pass `[]` when the tool needs no scope.
 - Your MCP server and your app must use the same Clerk instance. `secretKey` is that instance's secret key (`sk_...`), and `destinationUrl` must be on a domain of that instance.
