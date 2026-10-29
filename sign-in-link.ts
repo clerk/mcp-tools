@@ -12,7 +12,7 @@ import {
 } from './backend-api';
 import { isClerkAuthInfo } from './server';
 
-export const CREATE_SIGN_IN_LINK_TOOL_NAME = 'create_sign_in_link';
+export const CREATE_BROWSER_SESSION_TOOL_NAME = 'create_browser_session';
 
 const DEFAULT_TASK_DESCRIPTION = 'Signed-in browser session requested through MCP';
 
@@ -231,7 +231,7 @@ const signInLinkOutputSchema = {
 
 /** Arguments for `McpServer.registerTool`. */
 export type SignInLinkTool = McpToolTuple<
-  typeof CREATE_SIGN_IN_LINK_TOOL_NAME,
+  typeof CREATE_BROWSER_SESSION_TOOL_NAME,
   typeof signInLinkInputSchema,
   typeof signInLinkOutputSchema
 >;
@@ -267,7 +267,7 @@ export function signInLinkErrorMessage(error: SignInLinkError): string {
 }
 
 /**
- * Builds the `create_sign_in_link` tool. Register it with `server.registerTool(...signInLinkTool(options))`.
+ * Builds the `create_browser_session` tool. Register it with `server.registerTool(...signInLinkTool(options))`.
  * Throws when the options cannot work.
  */
 export function signInLinkTool(options: SignInLinkOptions): SignInLinkTool {
@@ -299,7 +299,7 @@ export function signInLinkTool(options: SignInLinkOptions): SignInLinkTool {
   };
 
   return [
-    CREATE_SIGN_IN_LINK_TOOL_NAME,
+    CREATE_BROWSER_SESSION_TOOL_NAME,
     {
       title: 'Get a signed-in browser link',
       description: SIGN_IN_LINK_DESCRIPTION,

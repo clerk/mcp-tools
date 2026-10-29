@@ -327,7 +327,7 @@ describe('signInLinkTool', () => {
 
   test('returns the link as structured content', async () => {
     const client = await connect(okFetch());
-    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       url: LINK,
@@ -342,7 +342,7 @@ describe('signInLinkTool', () => {
     const fetchImpl = okFetch();
     const client = await connect(fetchImpl);
     await client.callTool({
-      name: 'create_sign_in_link',
+      name: 'create_browser_session',
       arguments: { path: '/settings', task_description: 'Check billing' },
     });
     expect(sentBody(fetchImpl)).toMatchObject({
@@ -355,7 +355,7 @@ describe('signInLinkTool', () => {
     const fetchImpl = okFetch();
     const client = await connect(fetchImpl);
     await client.callTool({
-      name: 'create_sign_in_link',
+      name: 'create_browser_session',
       arguments: { user_id: 'user_evil', on_behalf_of: { user_id: 'user_evil' } },
     });
     expect(sentBody(fetchImpl).on_behalf_of).toEqual({ user_id: 'user_1' });
@@ -375,7 +375,7 @@ describe('signInLinkTool', () => {
     ],
   ])('returns a tool error for %s', async (_name, hint, auth, makeFetch) => {
     const client = await connect(makeFetch(), auth);
-    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(hint);
     expect(textOf(result)).not.toMatch(LEAKS);
@@ -386,7 +386,7 @@ describe('signInLinkTool', () => {
       signInLinkTool(options(okFetch(), { requiredScopes: ['sign_in_link'] })),
       { authInfo },
     );
-    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('sign_in_link');
     expect(textOf(result)).toContain('reconnect');
@@ -395,7 +395,7 @@ describe('signInLinkTool', () => {
   test('returns a generic error when the failure is not a SignInLinkError', async () => {
     // A custom fetch that resolves to something other than a Response.
     const client = await connect(vi.fn<typeof fetch>(async () => undefined as never));
-    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe(
       'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
@@ -409,7 +409,7 @@ describe('signInLinkTool', () => {
     const client = await connectTool(signInLinkTool(opts), { authInfo });
     // A per-request check would now refuse the empty key; the tool must not re-validate.
     opts.secretKey = '';
-    const result = await client.callTool({ name: 'create_sign_in_link', arguments: {} });
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBeFalsy();
   });
 });

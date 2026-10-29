@@ -138,7 +138,7 @@ function createServer() {
 
 #### Signed-in browser links for agents
 
-When an agent drives a browser for your user and lands on your app's sign-in page, `@clerk/mcp-tools/sign-in-link` lets it get a one-time link that opens your app already signed in as that user. The `create_sign_in_link` tool takes the user from the verified MCP access token, never from tool input.
+When an agent drives a browser for your user and lands on your app's sign-in page, `@clerk/mcp-tools/sign-in-link` lets it get a one-time link that opens your app already signed in as that user. The `create_browser_session` tool takes the user from the verified MCP access token, never from tool input.
 
 The link starts a session with the full permissions of the user, so the access token check in front of this tool must be strict. Verify the token with `authenticateRequest` and an `audience` equal to your MCP server's resource URL. Here is a Next.js route handler (see [Building an MCP Server](./next/README.md#building-an-mcp-server) for the rest of the Next.js setup):
 
