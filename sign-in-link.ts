@@ -204,12 +204,20 @@ async function requestSignInLink(
   };
 }
 
-export const SIGN_IN_LINK_DESCRIPTION = [
-  'Get a one-time link that opens this app in a browser already signed in as the current user.',
-  'Call it when a browser task reaches a sign-in page for this app, then open the returned URL in the browser.',
-  'The link is single use and expires in about 1 hour, so create it right before you open it.',
-  'Do not share the URL or print it to the user unless they ask for it.',
-].join(' ');
+/** The tool title and description, written for the app at `destinationUrl` so agents can match it to the site. */
+export function signInLinkToolText(destinationUrl: string): { title: string; description: string } {
+  const { host, origin } = new URL(destinationUrl);
+  return {
+    title: `Open ${host} signed in`,
+    description: [
+      `Opens ${origin} in a browser already signed in as the current user, with no password or sign-in step.`,
+      `Use this before you open any page on ${host} in a browser, and also if you reach its sign-in page.`,
+      `Never type credentials for ${host}.`,
+      'Call it with the path you want (for example /settings), then open the returned URL in the browser right away:',
+      'it works once and expires in about 1 hour. Do not print or share the URL.',
+    ].join(' '),
+  };
+}
 
 export const signInLinkInputSchema = {
   path: z
@@ -304,8 +312,7 @@ export function signInLinkTool(options: SignInLinkOptions): SignInLinkTool {
   return [
     CREATE_BROWSER_SESSION_TOOL_NAME,
     {
-      title: 'Get a signed-in browser link',
-      description: SIGN_IN_LINK_DESCRIPTION,
+      ...signInLinkToolText(options.destinationUrl),
       inputSchema: signInLinkInputSchema,
       outputSchema: signInLinkOutputSchema,
       annotations: OPEN_WORLD_WRITE_ANNOTATIONS,

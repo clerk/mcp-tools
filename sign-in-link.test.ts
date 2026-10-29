@@ -6,6 +6,7 @@ import {
   SignInLinkError,
   signInLinkErrorMessage,
   signInLinkTool,
+  signInLinkToolText,
   validateSignInLinkOptions,
   type SignInLinkOptions,
 } from './sign-in-link';
@@ -330,6 +331,21 @@ describe('signInLinkTool', () => {
   function connect(fetchImpl: typeof fetch, auth: AuthInfo | null = authInfo) {
     return connectTool(signInLinkTool(options(fetchImpl)), { authInfo: auth ?? undefined });
   }
+
+  test('names the destination host in the title and description', async () => {
+    const client = await connect(okFetch());
+    const { tools } = await client.listTools();
+    expect(tools[0]?.title).toBe('Open app.example.com signed in');
+    expect(tools[0]?.description).toContain('Opens https://app.example.com in a browser');
+    expect(tools[0]?.description).toContain('before you open any page on app.example.com');
+    expect(tools[0]?.description).toContain('Never type credentials for app.example.com');
+  });
+
+  test('keeps the port of a loopback destination', () => {
+    expect(signInLinkToolText('http://localhost:3000/').title).toBe(
+      'Open localhost:3000 signed in',
+    );
+  });
 
   test('returns the link as structured content', async () => {
     const client = await connect(okFetch());
