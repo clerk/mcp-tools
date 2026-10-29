@@ -25,8 +25,8 @@ export type SignInLinkOptions = BackendApiOptions & {
   agentName?: string;
   /** Lifetime of the browser session the link starts. Must be a positive integer. */
   sessionMaxDurationInSeconds?: number;
-  /** Scopes the token must carry. Missing scopes refuse the request before any API call. Default: none. */
-  requiredScopes?: readonly string[];
+  /** Scopes the token must carry. Missing scopes refuse the request before any API call. Pass `[]` for none. */
+  requiredScopes: readonly string[];
 };
 
 export type SignInLinkRequest = {
@@ -78,7 +78,12 @@ export function validateSignInLinkOptions(options: SignInLinkOptions): void {
       'Clerk error: createSignInLink destinationUrl must be a URL that uses HTTPS or loopback HTTP',
     );
   }
-  if (options.requiredScopes?.some((scope) => typeof scope !== 'string' || !scope.trim())) {
+  if (!Array.isArray(options.requiredScopes)) {
+    throw new Error(
+      'Clerk error: createSignInLink requiredScopes must be an array of scopes; pass [] to require none',
+    );
+  }
+  if (options.requiredScopes.some((scope) => typeof scope !== 'string' || !scope.trim())) {
     throw new Error('Clerk error: createSignInLink requiredScopes must be non-empty strings');
   }
   const seconds = options.sessionMaxDurationInSeconds;
@@ -152,9 +157,7 @@ async function requestSignInLink(
     throw new SignInLinkError('not_authenticated', 'A Clerk-verified signed-in user is required');
   }
 
-  const missingScopes = (options.requiredScopes ?? []).filter(
-    (scope) => !authInfo.scopes.includes(scope),
-  );
+  const missingScopes = options.requiredScopes.filter((scope) => !authInfo.scopes.includes(scope));
   if (missingScopes.length > 0) {
     throw new SignInLinkError(
       'insufficient_scope',

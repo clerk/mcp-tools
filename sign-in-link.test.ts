@@ -31,6 +31,7 @@ function options(
     destinationUrl: 'https://app.example.com/',
     apiUrl: 'https://api.clerk.test',
     fetch: fetchImpl,
+    requiredScopes: [],
     ...extra,
   };
 }
@@ -252,7 +253,11 @@ describe('createSignInLink', () => {
 });
 
 describe('validateSignInLinkOptions', () => {
-  const base = { secretKey: SECRET, destinationUrl: 'https://app.example.com/' };
+  const base = {
+    secretKey: SECRET,
+    destinationUrl: 'https://app.example.com/',
+    requiredScopes: [],
+  };
 
   test('accepts valid options, including loopback http', () => {
     expect(() => validateSignInLinkOptions(base)).not.toThrow();
@@ -272,6 +277,7 @@ describe('validateSignInLinkOptions', () => {
     ['invalid apiUrl', { apiUrl: 'not a url' }],
     ['insecure destinationUrl', { destinationUrl: 'http://app.example.com/' }],
     ['empty required scope', { requiredScopes: ['a', ' '] }],
+    ['missing requiredScopes', { requiredScopes: undefined as unknown as string[] }],
     ['zero session length', { sessionMaxDurationInSeconds: 0 }],
     ['negative session length', { sessionMaxDurationInSeconds: -5 }],
     ['fractional session length', { sessionMaxDurationInSeconds: 1.5 }],
