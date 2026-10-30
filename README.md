@@ -125,6 +125,8 @@ function createServer() {
 }
 ```
 
+The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/sdk` 1.x (`McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`) and `@modelcontextprotocol/server` 2.x (`McpServer` from `@modelcontextprotocol/server`). The registration line is the same. With SDK 2.x, install `zod` 4 (SDK 2.x requires it), so the tool's input schema type-checks against `registerTool`.
+
 - `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `submitFeedbackTool` throws if it's empty, so a missing environment variable fails at startup.
 - Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong.
 - Each report names your server as its source: the request's host by default, or pass `server: { name, version }` to label it yourself.
