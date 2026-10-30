@@ -1,6 +1,5 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { RequestMeta, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
 import { isClerkAuthInfo } from './server';
@@ -164,10 +163,40 @@ function bareToolNames(operation: string) {
     .slice(0, MAX_OPERATION_LENGTH);
 }
 
-type SubmitFeedbackToolCallback = ToolCallback<typeof submitFeedbackInputSchema>;
-type ToolExtra = Parameters<SubmitFeedbackToolCallback>[1];
+type FeedbackInput = z.infer<z.ZodObject<typeof submitFeedbackInputSchema>>;
 
-/** Arguments for `McpServer.registerTool`. */
+/**
+ * The parts of the callback's second argument this tool reads. The MCP SDK v1 passes the first three
+ * fields (`RequestHandlerExtra`) and v2 passes the last two (`ServerContext`), so both versions' arguments
+ * are assignable to it.
+ */
+export type FeedbackToolExtra = {
+  authInfo?: AuthInfo;
+  _meta?: Record<string, unknown>;
+  requestInfo?: {
+    headers?: Record<string, string | string[] | undefined>;
+    url?: URL;
+  };
+  http?: {
+    authInfo?: AuthInfo;
+    req?: Pick<Request, 'headers' | 'url'>;
+  };
+  mcpReq?: {
+    _meta?: Record<string, unknown>;
+    envelope?: Record<string, unknown>;
+  };
+};
+
+type SubmitFeedbackToolCallback = (
+  input: FeedbackInput,
+  extra: FeedbackToolExtra,
+) => Promise<{
+  content: { type: 'text'; text: string }[];
+  structuredContent?: { feedback_id: string; received: boolean };
+  isError?: boolean;
+}>;
+
+/** Arguments for `McpServer.registerTool`, on MCP SDK v1 and v2. */
 export type SubmitFeedbackTool = [
   name: typeof SUBMIT_FEEDBACK_TOOL_NAME,
   config: {
@@ -212,7 +241,7 @@ function origin(type: string, name: unknown, version: unknown): FeedbackOrigin {
   return { type, name: label(name, MAX_NAME_LENGTH), version: label(version, MAX_VERSION_LENGTH) };
 }
 
-function clientInfoFromMeta(meta: RequestMeta | undefined) {
+function clientInfoFromMeta(meta: Record<string, unknown> | undefined) {
   const info = meta?.[CLIENT_INFO_META_KEY];
   if (
     !info ||
@@ -227,11 +256,7 @@ function clientInfoFromMeta(meta: RequestMeta | undefined) {
 
 // Clients that don't send their info with each request are named by their User-Agent product token,
 // such as "claude-code/2.1.0".
-function clientInfoFromUserAgent(
-  headers: NonNullable<ToolExtra['requestInfo']>['headers'] | undefined,
-) {
-  const header = headers?.['user-agent'];
-  const userAgent = Array.isArray(header) ? header[0] : header;
+function clientInfoFromUserAgent(userAgent: string | null | undefined) {
   const product = userAgent?.trim().split(/\s+/)[0];
   if (!product) {
     return undefined;
@@ -243,18 +268,35 @@ function clientInfoFromUserAgent(
   return { name, version };
 }
 
-function reporter(extra: ToolExtra): FeedbackOrigin {
+// SDK v2 moves the reserved io.modelcontextprotocol/* keys out of `_meta` into `mcpReq.envelope`; SDK v1
+// leaves them in `_meta`.
+function reporter(extra: FeedbackToolExtra): FeedbackOrigin {
   const client =
-    clientInfoFromMeta(extra._meta) ?? clientInfoFromUserAgent(extra.requestInfo?.headers);
+    clientInfoFromMeta(extra.mcpReq?.envelope) ??
+    clientInfoFromMeta(extra.mcpReq?._meta ?? extra._meta) ??
+    clientInfoFromUserAgent(userAgent(extra));
   return origin('agent', client?.name, client?.version);
 }
 
-function source(extra: ToolExtra, server: SubmitFeedbackToolOptions['server']): FeedbackOrigin {
-  return origin(
-    'mcp',
-    label(server?.name, MAX_NAME_LENGTH) ?? extra.requestInfo?.url?.host,
-    server?.version,
-  );
+function userAgent(extra: FeedbackToolExtra) {
+  const req = extra.http?.req;
+  if (req) {
+    return req.headers.get('user-agent');
+  }
+  const header = extra.requestInfo?.headers?.['user-agent'];
+  return Array.isArray(header) ? header[0] : header;
+}
+
+function requestHost(extra: FeedbackToolExtra) {
+  const req = extra.http?.req;
+  return req ? new URL(req.url).host : extra.requestInfo?.url?.host;
+}
+
+function source(
+  extra: FeedbackToolExtra,
+  server: SubmitFeedbackToolOptions['server'],
+): FeedbackOrigin {
+  return origin('mcp', label(server?.name, MAX_NAME_LENGTH) ?? requestHost(extra), server?.version);
 }
 
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
@@ -321,7 +363,7 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
           operation: input.operation && bareToolNames(input.operation),
           source: source(extra, options.server),
           reporter: reporter(extra),
-          ...identityFromAuthInfo(extra.authInfo),
+          ...identityFromAuthInfo(extra.http?.authInfo ?? extra.authInfo),
         },
         options,
       );
