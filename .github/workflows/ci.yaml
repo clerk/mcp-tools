@@ -70,3 +70,17 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install
       - run: pnpm test
+
+  # zod is a peer dependency (^3.25 || ^4.0) and the dev install is zod 4, so also run the suite on the lowest supported zod.
+  test-zod-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm add -D zod@3.25.27
+      - run: pnpm test
