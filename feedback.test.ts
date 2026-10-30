@@ -3,14 +3,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { MessageExtraInfo, RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import {
-  submitFeedback,
-  type SubmitFeedbackTool,
-  submitFeedbackTool,
-  type SubmitFeedbackToolOptions,
-} from './feedback';
+import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './feedback';
 
 const input = {
   kind: 'broken' as const,
@@ -38,21 +34,10 @@ type ConnectOptions = {
   server?: SubmitFeedbackToolOptions['server'];
 };
 
-// Customers spread the tuple into registerTool (checked against the packed package). Compiling feedback.ts from
-// source infers much deeper zod types than its declarations, so here the generics are passed explicitly.
-function register(server: McpServer, [name, config, callback]: SubmitFeedbackTool) {
-  server.registerTool<typeof config.outputSchema, typeof config.inputSchema>(
-    name,
-    config,
-    callback,
-  );
-}
-
 async function connect(fetchImpl: typeof fetch, options: ConnectOptions = {}) {
   const server = new McpServer({ name: 'test', version: '0.0.0' });
-  register(
-    server,
-    submitFeedbackTool({
+  server.registerTool(
+    ...submitFeedbackTool({
       secretKey: 'sk_test_123',
       apiUrl: 'https://api.clerk.test',
       fetch: fetchImpl,
@@ -482,5 +467,133 @@ describe('submitFeedbackTool', () => {
 
     expect(result.isError).toBe(true);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('submitFeedbackTool on MCP SDK v2', () => {
+  const clerkAuthInfo: AuthInfo = {
+    token: 'oat_test',
+    clientId: 'client_123',
+    scopes: ['profile'],
+    extra: { userId: 'user_123', verifiedBy: 'clerk' },
+  };
+
+  function callTool(
+    fetchImpl: typeof fetch,
+    {
+      authInfo,
+      headers,
+      meta,
+      server,
+    }: {
+      authInfo?: AuthInfo;
+      headers?: Record<string, string>;
+      meta?: Record<string, unknown>;
+      server?: SubmitFeedbackToolOptions['server'];
+    } = {},
+  ) {
+    const handler = createMcpHandler(() => {
+      const mcp = new McpServerV2({ name: 'test', version: '0.0.0' });
+      mcp.registerTool(
+        ...submitFeedbackTool({
+          secretKey: 'sk_test_123',
+          apiUrl: 'https://api.clerk.test',
+          fetch: fetchImpl,
+          server,
+        }),
+      );
+      return mcp;
+    });
+    const body = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'submit_feedback', arguments: input, ...(meta && { _meta: meta }) },
+    };
+    return handler.fetch(
+      new Request('https://acme.example/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...headers,
+        },
+        body: JSON.stringify(body),
+      }),
+      { authInfo },
+    );
+  }
+
+  // The 2026-07-28 revision sends these with every request instead of during initialize.
+  const modernMeta = {
+    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+    'io.modelcontextprotocol/clientInfo': { name: 'claude-code', version: '2.1.0' },
+    'io.modelcontextprotocol/clientCapabilities': {},
+  };
+
+  test.each([
+    [
+      'a 2025 request',
+      {},
+      { 'io.modelcontextprotocol/clientInfo': { name: 'claude-code', version: '2.1.0' } },
+    ],
+    [
+      'a 2026-07-28 request',
+      {
+        'mcp-protocol-version': '2026-07-28',
+        'mcp-method': 'tools/call',
+        'mcp-name': 'submit_feedback',
+      },
+      modernMeta,
+    ],
+  ])('attaches the user, client, reporter and source for %s', async (_, headers, meta) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+    const response = await callTool(fetchImpl, { authInfo: clerkAuthInfo, headers, meta });
+
+    expect(await response.text()).toContain('fbk_1');
+    expect(sentBody(fetchImpl)).toMatchObject({
+      user_id: 'user_123',
+      client_id: 'client_123',
+      reporter: { type: 'agent', name: 'claude-code', version: '2.1.0' },
+      source: { type: 'mcp', name: 'acme.example' },
+    });
+  });
+
+  test('names the agent from the User-Agent product when the request has no client info', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+    await callTool(fetchImpl, { headers: { 'user-agent': 'cursor/1.4.0 (darwin)' } });
+
+    expect(sentBody(fetchImpl).reporter).toMatchObject({
+      type: 'agent',
+      name: 'cursor',
+      version: '1.4.0',
+    });
+  });
+
+  test('uses the configured server as source', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+    await callTool(fetchImpl, { server: { name: 'acme-mcp', version: '1.2.0' } });
+
+    expect(sentBody(fetchImpl).source).toEqual({ type: 'mcp', name: 'acme-mcp', version: '1.2.0' });
+  });
+
+  test('does not forward identity from other auth providers', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+
+    await callTool(fetchImpl, {
+      authInfo: {
+        token: 't',
+        clientId: 'client_other',
+        scopes: [],
+        extra: { userId: 'user_other' },
+      },
+    });
+
+    const body = sentBody(fetchImpl);
+    expect(body).not.toHaveProperty('user_id');
+    expect(body).not.toHaveProperty('client_id');
   });
 });
