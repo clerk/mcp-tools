@@ -98,6 +98,7 @@
     "@clerk/express": "^2.1.5",
     "@clerk/hono": "^0.1.15",
     "@clerk/nextjs": "^7.2.3",
+    "@modelcontextprotocol/server": "2.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
@@ -113,7 +114,7 @@
     "tsdown": "^0.21.9",
     "typescript": "^5.8.3",
     "vitest": "^4.1.4",
-    "zod": "^3.25.27"
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@clerk/express": "^2.1.5",
