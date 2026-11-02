@@ -109,6 +109,69 @@ To create an MCP endpoint that handles the actual MCP protocol communication, yo
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
+#### Scope step-up for tools
+
+When a `tools/call` needs an OAuth scope the access token lacks, the MCP server should answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`. MCP clients answer that by asking the user to approve the extra scopes (step-up authorization). A tool cannot send that response itself, because the transport has already chosen the HTTP status when the tool runs. `scopeChallenge` from `@clerk/mcp-tools/server` (also re-exported from `@clerk/mcp-tools/next`) builds it in front of the transport.
+
+`ToolScopes` is a plain object of tool name to the scopes that tool needs. A tool that is not listed needs none. Here is a Next.js route handler:
+
+```ts
+// app/mcp/route.ts
+import { scopeChallenge, type ToolScopes, verifyClerkToken } from '@clerk/mcp-tools/next';
+import { auth } from '@clerk/nextjs/server';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+
+const RESOURCE_METADATA_URL = 'https://app.example.com/.well-known/oauth-protected-resource/mcp';
+const toolScopes: ToolScopes = { list_projects: ['projects:read'] };
+
+function createServer() {
+  const server = new McpServer({ name: 'my-app', version: '1.0.0' });
+  // ...register your tools, such as list_projects
+  return server;
+}
+
+export async function POST(req: Request) {
+  const token = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+  const authInfo = verifyClerkToken(await auth({ acceptsToken: 'oauth_token' }), token);
+  if (!authInfo) {
+    return new Response('Unauthorized', {
+      status: 401,
+      headers: { 'WWW-Authenticate': `Bearer resource_metadata="${RESOURCE_METADATA_URL}"` },
+    });
+  }
+
+  // The body can be read only once, so it is parsed here and passed to the transport.
+  const body: unknown = await req.json().catch(() => undefined);
+  const challenge = scopeChallenge({
+    body,
+    authInfo,
+    toolScopes,
+    resourceMetadataUrl: RESOURCE_METADATA_URL,
+  });
+  if (challenge) return challenge;
+
+  const server = createServer();
+  // JSON responses, so the whole reply is ready before the server closes.
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  await server.connect(transport);
+  try {
+    return await transport.handleRequest(req, { authInfo, parsedBody: body });
+  } finally {
+    await server.close();
+  }
+}
+```
+
+- Only a `POST` carries JSON-RPC messages, so only a `POST` can call a tool. This stateless route needs no `GET` export.
+- A request body can be read only once, so pass the body that `scopeChallenge` read to the transport as `parsedBody`.
+- On MCP SDK 2.x (`@modelcontextprotocol/server`), the route is the same, with `createMcpHandler` in place of the transport: `return mcpHandler.fetch(req, { authInfo, parsedBody: body });`.
+- The Express and Hono `mcpAuth` helpers take the same map: `await mcpAuth(verifyToken, { toolScopes })` for Express, which is async, and `mcpAuth(verifyToken, { toolScopes })` for Hono. The Express helper reads `req.body`, so register `express.json()` before it; a `POST` with a body that `express.json()` did not parse gets a `415`.
+- Every scope must be a valid OAuth scope token, with no spaces, quotes, backslashes, or control characters; the helpers and `scopeChallenge` throw a `Clerk error:` message otherwise.
+
 #### Collecting feedback from agents
 
 Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `@clerk/mcp-tools/feedback` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
@@ -661,6 +724,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** Returns `true` when an `AuthInfo` object came from `verifyClerkToken`, which marks its result with `extra.verifiedBy: 'clerk'`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier.
   - **Params:** `authInfo: AuthInfo | undefined`
   - **Returns:** `boolean`
+
+- `scopeChallenge`
+  - **Description:** Returns a `403` step-up challenge (`WWW-Authenticate: Bearer error="insufficient_scope", scope="...", resource_metadata="..."`) when a `tools/call` in `body` needs scopes that `authInfo` lacks, and `undefined` otherwise. The challenged scopes are the granted scopes followed by the missing ones, so the new grant does not drop access. Call it after the token is verified and before the transport handles the request.
+  - **Params:** `{ body: unknown; authInfo: AuthInfo; toolScopes: ToolScopes; resourceMetadataUrl: string }`, where `ToolScopes` is `Readonly<Record<string, readonly string[]>>` (tool name to scopes, for example `{ list_projects: ['projects:read'] }`; a tool that is not listed needs none)
+  - **Returns:** `Response | undefined`
 
 - `corsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.

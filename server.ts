@@ -148,6 +148,8 @@ export function isClerkAuthInfo(authInfo: AuthInfo | undefined): boolean {
   return authInfo?.extra?.verifiedBy === 'clerk';
 }
 
+export { scopeChallenge, type ToolScopes } from './scope-challenge';
+
 /**
  * CORS headers for OAuth metadata endpoints
  */

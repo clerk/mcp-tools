@@ -160,6 +160,7 @@ Generic authentication middleware that allows you to implement custom token veri
 **Parameters:**
 
 - `verifyToken: (token: string, req: express.Request) => Promise<any | false>` - Function that verifies the token and returns auth data or false
+- `options.toolScopes?: ToolScopes` - Optional map of tool name to the OAuth scopes that tool needs (from `@clerk/mcp-tools/server`). A `tools/call` for a tool whose scopes the token lacks gets a `403` step-up challenge (see [`scopeChallenge`](../README.md#scope-clerkmcp-toolsserver)). It reads `req.body`, so register `express.json()` before `mcpAuth`; without it, a JSON request fails with a `Clerk error:` message. A `POST` that `express.json()` did not parse, because its `Content-Type` is not JSON, gets a `415`.
 
 **Example:**
 
@@ -185,6 +186,7 @@ The middleware will:
 - Extract the Bearer token
 - Call your `verifyToken` function
 - Return a 401 response with proper `WWW-Authenticate` header if authentication fails
+- Return a 403 step-up challenge if `toolScopes` is set and a tool call needs a scope the token lacks
 - Add the auth data to `req.auth` if successful
 
 ### `mcpAuthClerk`

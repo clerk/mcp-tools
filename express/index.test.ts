@@ -3,7 +3,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { describe, expect, test, vi } from 'vitest';
-import { streamableHttpHandler } from './index';
+import { mcpAuth, streamableHttpHandler } from './index';
 
 const mcpHeaders = {
   'Content-Type': 'application/json',
@@ -25,12 +25,13 @@ function createMcpServer() {
 }
 
 async function withApp(
-  handler: ReturnType<typeof streamableHttpHandler>,
+  handlers: express.RequestHandler | (express.RequestHandler | express.ErrorRequestHandler)[],
   fn: (baseUrl: string) => Promise<void>,
+  { json = true } = {},
 ) {
   const app = express();
-  app.use(express.json());
-  app.post('/mcp', handler);
+  if (json) app.use(express.json());
+  app.post('/mcp', handlers);
 
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -97,4 +98,105 @@ describe('streamableHttpHandler', () => {
       });
     });
   });
+});
+
+describe('mcpAuth with toolScopes', () => {
+  test('rejects a scope that is not a scope token when it is created', async () => {
+    await expect(mcpAuth(async () => undefined, { toolScopes: { t: ['a b'] } })).rejects.toThrow(
+      /^Clerk error: mcpAuth toolScopes/,
+    );
+  });
+
+  const authInfo = { token: 'tok', scopes: ['profile'], clientId: 'c1' };
+  const toolScopes = { create_browser_session: ['profile', 'user:org:read'] };
+
+  async function authHandlers() {
+    return [
+      await mcpAuth(async () => authInfo, { toolScopes }),
+      (req: express.Request, res: express.Response) => {
+        res.json({ body: req.body });
+      },
+    ];
+  }
+
+  function callTool(baseUrl: string, name: string) {
+    return fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { ...mcpHeaders, Authorization: 'Bearer tok' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name } }),
+    });
+  }
+
+  test('returns a 403 step-up challenge for a tool that needs a scope the token lacks', async () => {
+    await withApp(await authHandlers(), async (baseUrl) => {
+      const res = await callTool(baseUrl, 'create_browser_session');
+      expect(res.status).toBe(403);
+      expect(res.headers.get('WWW-Authenticate')).toBe(
+        `Bearer error="insufficient_scope", scope="profile user:org:read", resource_metadata="${baseUrl}/.well-known/oauth-protected-resource/mcp"`,
+      );
+      expect(await res.json()).toEqual({ error: 'Forbidden' });
+    });
+  });
+
+  test('lets other calls through', async () => {
+    await withApp(await authHandlers(), async (baseUrl) => {
+      const res = await callTool(baseUrl, 'whoami');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ body: { params: { name: 'whoami' } } });
+    });
+  });
+
+  test('fails loudly when express.json() is not registered', async () => {
+    const errors: unknown[] = [];
+    const onError: express.ErrorRequestHandler = (error, _req, res, _next) => {
+      errors.push(error);
+      res.status(500).end();
+    };
+    await withApp(
+      [...(await authHandlers()), onError],
+      async (baseUrl) => {
+        const res = await callTool(baseUrl, 'create_browser_session');
+        expect(res.status).toBe(500);
+      },
+      { json: false },
+    );
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: expect.stringMatching(/^Clerk error: .*express\.json\(\)/),
+      }),
+    ]);
+  });
+
+  // express.json() skips these, but the transport reads any Content-Type that contains application/json.
+  test.each(['application/jsonx', 'text/plain; application/json'])(
+    'refuses Content-Type %j with a 415 before the tool runs',
+    async (contentType) => {
+      const toolCallback = vi.fn(async () => ({
+        content: [{ type: 'text' as const, text: 'ran' }],
+      }));
+      const createServer = () => {
+        const server = createMcpServer();
+        server.registerTool('create_browser_session', {}, toolCallback);
+        return server;
+      };
+      await withApp(
+        [await mcpAuth(async () => authInfo, { toolScopes }), streamableHttpHandler(createServer)],
+        async (baseUrl) => {
+          const res = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: { ...mcpHeaders, 'Content-Type': contentType, Authorization: 'Bearer tok' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'tools/call',
+              params: { name: 'create_browser_session', arguments: {} },
+            }),
+          });
+          expect(res.status).toBe(415);
+          expect(await res.json()).toEqual({ error: 'Unsupported Media Type' });
+        },
+      );
+      expect(toolCallback).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { type Handler, Hono } from 'hono';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../server', async (importOriginal) => {
@@ -203,6 +203,12 @@ describe('authServerMetadataHandlerClerk', () => {
 });
 
 describe('mcpAuth', () => {
+  test('rejects a toolScopes scope that is not a scope token when it is created', () => {
+    expect(() => mcpAuth(async () => undefined, { toolScopes: { t: ['a"b'] } })).toThrow(
+      /^Clerk error: mcpAuth toolScopes/,
+    );
+  });
+
   test('returns 401 with WWW-Authenticate when Authorization header is missing', async () => {
     const app = new Hono();
     app.get(
@@ -314,6 +320,55 @@ describe('mcpAuth', () => {
     expect(res.status).toBe(401);
     expect(verifyToken).not.toHaveBeenCalled();
     expect(res.headers.get('WWW-Authenticate')).toMatch(/^Bearer resource_metadata=/);
+  });
+});
+
+describe('mcpAuth with toolScopes', () => {
+  const authInfo: AuthInfo = { token: 'tok', scopes: ['profile'], clientId: 'c1' };
+  const toolScopes = { create_browser_session: ['profile', 'user:org:read'] };
+  const callBody = (name: string) =>
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, arguments: {} },
+    });
+
+  function post(
+    body: string,
+    handler: Handler = async (c) => c.json({ body: await c.req.json() }),
+  ) {
+    const hono = new Hono();
+    hono.post(
+      '/mcp',
+      mcpAuth(async () => authInfo, { toolScopes }),
+      handler,
+    );
+    return hono.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { ...mcpHeaders, Authorization: 'Bearer tok' },
+      body,
+    });
+  }
+
+  test('returns a 403 step-up challenge for a tool that needs a scope the token lacks', async () => {
+    const res = await post(callBody('create_browser_session'));
+    expect(res.status).toBe(403);
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer error="insufficient_scope", scope="profile user:org:read", resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  test('lets other calls through with the body still readable', async () => {
+    const res = await post(callBody('whoami'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ body: { params: { name: 'whoami' } } });
+  });
+
+  test('lets a body that is not JSON through to the transport', async () => {
+    const res = await post('not json', async (c) => c.text(await c.req.text()));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('not json');
   });
 });
 

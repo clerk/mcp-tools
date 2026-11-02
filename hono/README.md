@@ -86,9 +86,11 @@ export default app;
 
 ## Reference
 
-### `mcpAuth(verifyToken)`
+### `mcpAuth(verifyToken, options?)`
 
 Middleware that enforces authentication for MCP requests. Extracts the bearer token from the `Authorization` header, calls `verifyToken`, and stores the result in Hono context for downstream handlers (`c.get('mcpAuth')`). Returns `401` with a `WWW-Authenticate` header if auth fails.
+
+`options.toolScopes` is an optional map of tool name to the OAuth scopes that tool needs (`ToolScopes` from `@clerk/mcp-tools/server`). When a `tools/call` needs a scope the token lacks, the middleware returns a `403` step-up challenge (see [`scopeChallenge`](../README.md#scope-clerkmcp-toolsserver)). It reads a clone of the request, so the transport can still read the body.
 
 ### `mcpAuthClerk`
 

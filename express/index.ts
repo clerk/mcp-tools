@@ -9,6 +9,7 @@ import {
   generateProtectedResourceMetadata,
   verifyClerkToken,
 } from '../server';
+import { assertToolScopes, scopeChallengeHeader, type ToolScopes } from '../scope-challenge';
 
 /**
  * Express middleware that enforces authentication for MCP requests.
@@ -32,17 +33,29 @@ import {
  *   return authData;
  * }
  *
- * app.post("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
+ * app.post("/mcp", await mcpAuth(verifyToken), streamableHttpHandler(createServer));
  * ```
  */
 export async function mcpAuth(
   verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
+  options: {
+    /**
+     * Scopes each tool needs. A `tools/call` for a tool whose scopes the token lacks gets a 403 step-up challenge.
+     * Reads `req.body`, so register `express.json()` first. A `POST` with a body it did not parse gets a 415.
+     */
+    toolScopes?: ToolScopes;
+  } = {},
 ) {
-  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (options.toolScopes) assertToolScopes('mcpAuth', options.toolScopes);
+  return async (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): Promise<void> => {
     const prmUrl = getPRMUrl(req);
 
     if (!req.headers.authorization) {
-      return res
+      res
         .status(401)
         .set({
           'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}`,
@@ -50,6 +63,7 @@ export async function mcpAuth(
         .send({
           error: 'Unauthorized',
         });
+      return;
     }
 
     const authHeader = req.headers.authorization;
@@ -64,7 +78,34 @@ export async function mcpAuth(
     const authData = await verifyToken(token, req);
 
     if (!authData) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    // Only a POST carries JSON-RPC messages, so only a POST can call a tool.
+    if (options.toolScopes && req.method === 'POST') {
+      if (req.body === undefined) {
+        // A JSON body that no parser read means express.json() is missing, and the challenge would never fire.
+        if (req.is('json')) {
+          throw new Error(
+            'Clerk error: mcpAuth toolScopes reads the parsed request body, so register express.json() before mcpAuth',
+          );
+        }
+        // express.json() skips other types, but the transport parses any Content-Type that contains
+        // application/json, so an unread body would reach the tools without the challenge.
+        res.status(415).json({ error: 'Unsupported Media Type' });
+        return;
+      }
+      const challenge = scopeChallengeHeader({
+        body: req.body,
+        authInfo: authData,
+        toolScopes: options.toolScopes,
+        resourceMetadataUrl: prmUrl,
+      });
+      if (challenge) {
+        res.status(403).set('WWW-Authenticate', challenge).json({ error: 'Forbidden' });
+        return;
+      }
     }
 
     // @ts-expect-error - we're monkey patching this on purpose

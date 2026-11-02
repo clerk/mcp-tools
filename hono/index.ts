@@ -8,8 +8,11 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
+  scopeChallenge,
+  type ToolScopes,
   verifyClerkToken,
 } from '../server';
+import { assertToolScopes } from '../scope-challenge';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -64,7 +67,12 @@ export async function authServerMetadataHandlerClerk(c: Context) {
 
 export function mcpAuth(
   verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
+  options: {
+    /** Scopes each tool needs. A `tools/call` for a tool whose scopes the token lacks gets a 403 step-up challenge. */
+    toolScopes?: ToolScopes;
+  } = {},
 ): MiddlewareHandler {
+  if (options.toolScopes) assertToolScopes('mcpAuth', options.toolScopes);
   return async (c: Context, next: Next) => {
     const authHeader = c.req.header('authorization');
 
@@ -82,6 +90,21 @@ export function mcpAuth(
 
     if (!authData) {
       return c.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (options.toolScopes && c.req.method === 'POST') {
+      // A clone, so the transport can still read the request body.
+      const body: unknown = await c.req.raw
+        .clone()
+        .json()
+        .catch(() => undefined);
+      const challenge = scopeChallenge({
+        body,
+        authInfo: authData,
+        toolScopes: options.toolScopes,
+        resourceMetadataUrl: getPRMUrl(c),
+      });
+      if (challenge) return challenge;
     }
 
     c.set('mcpAuth', authData);
