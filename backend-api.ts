@@ -31,21 +31,31 @@ export function parseAllowedUrl(value: string): URL | undefined {
   }
 }
 
-/** Throws a `Clerk error:` message, prefixed with `label`, when the secret key is blank. */
-export function requireSecretKey(label: string, { secretKey }: BackendApiOptions): void {
-  if (!secretKey?.trim()) {
-    throw new Error(`Clerk error: ${label} requires the secretKey of a Clerk instance`);
-  }
+// Error codes, parameter names, and error names are identifiers. Anything else in them (a proxy's text, the link)
+// is dropped before it is logged.
+export const IDENTIFIER_PATTERN = /^[a-z][a-z0-9_.]{0,63}$/i;
+
+/**
+ * The name of `error` when it is safe to log, and `'unknown error'` otherwise. Only the name: a custom `fetch` can
+ * put the Authorization header or a link in the message, and it can set any name.
+ */
+export function safeErrorName(error: unknown): string {
+  return error instanceof Error && IDENTIFIER_PATTERN.test(error.name)
+    ? error.name
+    : 'unknown error';
 }
 
 /**
- * Builds a client for `options`. Throws a `Clerk error:` message, prefixed with `label`, when the API URL is
- * neither HTTPS nor loopback HTTP, so the secret key is never sent anywhere else.
+ * Builds a client for `options`. Throws a `Clerk error:` message, prefixed with `label`, when the secret key is
+ * blank, or when the API URL is neither HTTPS nor loopback HTTP, so the secret key is never sent anywhere else.
  */
 export function createBackendApiClient(
   label: string,
   { secretKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl }: BackendApiOptions,
 ): BackendApiClient {
+  if (!secretKey?.trim()) {
+    throw new Error(`Clerk error: ${label} requires the secretKey of a Clerk instance`);
+  }
   const origin = parseAllowedUrl(apiUrl);
   if (!origin) {
     throw new Error(`Clerk error: ${label} apiUrl must use HTTPS or loopback HTTP`);

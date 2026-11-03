@@ -5,8 +5,9 @@ import {
   type BackendApiClient,
   type BackendApiOptions,
   createBackendApiClient,
+  IDENTIFIER_PATTERN,
   parseAllowedUrl,
-  requireSecretKey,
+  safeErrorName,
 } from './backend-api';
 import {
   type McpToolTuple,
@@ -69,10 +70,65 @@ export class BrowserSessionError extends Error {
     message: string,
     /** The scopes the token lacks, for `insufficient_scope`. */
     readonly missingScopes: readonly string[] = [],
+    /** Safe to log: status, error codes, or an error name. Never the link, the key, or response text. */
+    readonly detail?: string,
   ) {
     super(message);
     this.name = 'BrowserSessionError';
   }
+}
+
+// The copy for each code: `message` is the error's own message, `agent` is the text the agent reads.
+const ERROR_COPY = {
+  not_authenticated: {
+    message: 'A Clerk-verified signed-in user is required',
+    agent: () =>
+      'No signed-in user is available for this request. Ask the user to reconnect this MCP server and sign in, then try again.',
+  },
+  invalid_path: {
+    message: 'path must start with a single "/" and stay on the app',
+    agent: () =>
+      'The path is not allowed. Use an absolute path such as /settings, or omit it to open the default page.',
+  },
+  insufficient_scope: {
+    message: 'The token is missing required scopes',
+    agent: (error) =>
+      `The token is missing required scopes: ${error.missingScopes.join(', ')}. Ask the user to reconnect this MCP server and approve those scopes, then try again. If the scopes are still missing, tell the user the server owner must check the configuration. Do not retry more than once.`,
+  },
+  rejected: {
+    message: 'Clerk rejected the sign-in link request',
+    agent: () =>
+      'Clerk rejected the request. Do not retry. Tell the user the sign-in link could not be created.',
+  },
+  destination_rejected: {
+    message: 'Clerk does not allow the destination of the sign-in link',
+    agent: () =>
+      "Clerk does not allow this server's sign-in link destination. Tell the user the server owner must check the Clerk configuration. Do not retry.",
+  },
+  unauthorized: {
+    message: 'Clerk rejected the server credentials',
+    agent: () =>
+      'The server is not authorized to create sign-in links. Tell the user the server owner must check the Clerk configuration. Do not retry.',
+  },
+  rate_limited: {
+    message: 'Too many sign-in links were requested',
+    agent: () => 'Too many sign-in links were requested. Wait a while before you try again.',
+  },
+  unavailable: {
+    message: 'Clerk could not create a sign-in link',
+    agent: () => 'Clerk could not create a sign-in link right now. Try again in a moment.',
+  },
+} satisfies Record<
+  BrowserSessionErrorCode,
+  { message: string; agent: (error: BrowserSessionError) => string }
+>;
+
+function sessionError(
+  code: BrowserSessionErrorCode,
+  detail?: string,
+  missing: readonly string[] = [],
+) {
+  return new BrowserSessionError(code, ERROR_COPY[code].message, missing, detail);
 }
 
 type BrowserSessionConfig = Pick<
@@ -97,7 +153,6 @@ function parseDestinationUrl(destinationUrl: string): URL {
 }
 
 function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): BrowserSessionConfig {
-  requireSecretKey('createBrowserSession', options);
   const client = createBackendApiClient('createBrowserSession', options);
   const destination = parseDestinationUrl(options.destinationUrl);
   if (!Array.isArray(options.requiredScopes)) {
@@ -132,8 +187,6 @@ export function validateBrowserSessionOptions(options: CreateBrowserSessionOptio
   resolveBrowserSessionConfig(options);
 }
 
-const INVALID_PATH_MESSAGE = 'path must start with a single "/" and stay on the app';
-
 // Resolves the agent's `path` against the origin of `destination`. Refuses anything that could leave that origin.
 function resolveRedirectUrl(destination: URL, path: string | undefined): string {
   if (!path?.trim()) {
@@ -141,29 +194,27 @@ function resolveRedirectUrl(destination: URL, path: string | undefined): string 
   }
   // The origin check below would accept `//app.example.com/x`; a path that names a host is still refused.
   if (!path.startsWith('/') || path.startsWith('//') || path.startsWith('/\\')) {
-    throw new BrowserSessionError('invalid_path', INVALID_PATH_MESSAGE);
+    throw sessionError('invalid_path');
   }
   const { origin } = destination;
   let resolved: URL;
   try {
     resolved = new URL(path, origin);
   } catch {
-    throw new BrowserSessionError('invalid_path', INVALID_PATH_MESSAGE);
+    throw sessionError('invalid_path');
   }
   if (resolved.origin !== origin || resolved.pathname.startsWith('//')) {
-    throw new BrowserSessionError('invalid_path', INVALID_PATH_MESSAGE);
+    throw sessionError('invalid_path');
   }
   // URL keeps a malformed escape such as `%ZZ`, but Clerk rejects it as a bad redirect_url, which would read as a
   // server configuration error instead of a path the agent can fix.
   if (/%(?![0-9a-f]{2})/i.test(resolved.href.slice(origin.length))) {
-    throw new BrowserSessionError('invalid_path', INVALID_PATH_MESSAGE);
+    throw sessionError('invalid_path');
   }
   return resolved.href;
 }
 
-// Error codes, parameter names, and error names are identifiers. Anything else in them (a proxy's text, the link)
-// is dropped.
-const identifier = z.string().regex(/^[a-z][a-z0-9_.]{0,63}$/i);
+const identifier = z.string().regex(IDENTIFIER_PATTERN);
 
 const apiErrorsSchema = z.object({
   errors: z.array(
@@ -185,46 +236,26 @@ function apiErrors(body: unknown): ApiError[] {
   return result.success ? result.data.errors : [];
 }
 
-function errorForStatus(status: number, errors: readonly ApiError[]): BrowserSessionError {
-  if (status === 401 || status === 403) {
-    return new BrowserSessionError('unauthorized', 'Clerk rejected the server credentials');
-  }
-  if (status === 429) {
-    return new BrowserSessionError('rate_limited', 'Too many sign-in links were requested');
-  }
-  // Clerk checks the redirect URL's scheme and host, never its path, so this is the destination's configuration.
-  if (status === 422 && errors.some((error) => error.meta?.param_name === 'redirect_url')) {
-    return new BrowserSessionError(
-      'destination_rejected',
-      'Clerk does not allow the destination of the sign-in link',
-    );
-  }
-  if (status >= 400 && status < 500) {
-    return new BrowserSessionError('rejected', 'Clerk rejected the sign-in link request');
-  }
-  return new BrowserSessionError('unavailable', 'Clerk could not create a sign-in link');
-}
-
-const agentTaskResponseSchema = z.object({ url: z.string(), agent_task_id: z.string() });
-
-// Never the body text or a custom fetch's error message: they could carry the link or the key.
-function logFailure(reason: string) {
-  console.error(`Clerk error: createBrowserSession failed (${reason})`);
-}
-
-function statusReason(status: number, errors: readonly ApiError[]): string {
+function statusDetail(status: number, errors: readonly ApiError[]): string {
   const details = errors
     .map((error) => [error.code, error.meta?.param_name].filter(Boolean).join(' '))
     .filter(Boolean);
   return details.length > 0 ? `status ${status}: ${details.join(', ')}` : `status ${status}`;
 }
 
-// The path is agent input and stays out of the log; scope names come from the server's own options.
-function logRejection(error: BrowserSessionError) {
-  const reason =
-    error.missingScopes.length > 0 ? `${error.code}: ${error.missingScopes.join(' ')}` : error.code;
-  console.error(`Clerk error: createBrowserSession rejected (${reason})`);
+function errorForStatus(status: number, errors: readonly ApiError[]): BrowserSessionError {
+  const detail = statusDetail(status, errors);
+  if (status === 401 || status === 403) return sessionError('unauthorized', detail);
+  if (status === 429) return sessionError('rate_limited', detail);
+  // Clerk checks the redirect URL's scheme and host, never its path, so this is the destination's configuration.
+  if (status === 422 && errors.some((error) => error.meta?.param_name === 'redirect_url')) {
+    return sessionError('destination_rejected', detail);
+  }
+  if (status >= 400 && status < 500) return sessionError('rejected', detail);
+  return sessionError('unavailable', detail);
 }
+
+const agentTaskResponseSchema = z.object({ url: z.string(), agent_task_id: z.string() });
 
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
@@ -237,29 +268,23 @@ export async function createBrowserSession(
   return requestBrowserSession(request, resolveBrowserSessionConfig(options));
 }
 
-// Checks the request and builds the agent task body. Throws a BrowserSessionError before anything reaches Clerk.
-function buildAgentTaskBody(request: CreateBrowserSessionRequest, config: BrowserSessionConfig) {
+// Throws a BrowserSessionError. Nothing reaches the log here: the tool callback logs `error.detail`.
+async function requestBrowserSession(
+  request: CreateBrowserSessionRequest,
+  config: BrowserSessionConfig,
+): Promise<BrowserSession> {
   const { authInfo } = request;
-  if (!isClerkAuthInfo(authInfo)) {
-    throw new BrowserSessionError(
-      'not_authenticated',
-      'A Clerk-verified signed-in user is required',
-    );
-  }
+  if (!isClerkAuthInfo(authInfo)) throw sessionError('not_authenticated');
 
   const missing = missingScopes(config.requiredScopes, authInfo);
   if (missing.length > 0) {
-    throw new BrowserSessionError(
-      'insufficient_scope',
-      `The token is missing required scopes: ${missing.join(', ')}`,
-      missing,
-    );
+    throw sessionError('insufficient_scope', `insufficient_scope: ${missing.join(' ')}`, missing);
   }
 
   const redirectUrl = resolveRedirectUrl(config.destination, request.path);
   const agentName =
     config.agentName?.trim() || (authInfo.clientId ? `mcp:${authInfo.clientId}` : 'mcp');
-  return {
+  const body = {
     on_behalf_of: { user_id: authInfo.extra.userId },
     permissions: '*',
     agent_name: agentName,
@@ -269,46 +294,23 @@ function buildAgentTaskBody(request: CreateBrowserSessionRequest, config: Browse
       session_max_duration_in_seconds: config.sessionMaxDurationInSeconds,
     }),
   };
-}
-
-async function requestBrowserSession(
-  request: CreateBrowserSessionRequest,
-  config: BrowserSessionConfig,
-): Promise<BrowserSession> {
-  let body: ReturnType<typeof buildAgentTaskBody>;
-  try {
-    body = buildAgentTaskBody(request, config);
-  } catch (error) {
-    if (error instanceof BrowserSessionError) logRejection(error);
-    throw error;
-  }
 
   let response: Response;
   try {
     response = await config.client.post('/v1/agents/tasks', body);
   } catch (error) {
-    // A custom fetch can set any name, so only an identifier-shaped one is logged.
-    const name = error instanceof Error ? identifier.safeParse(error.name) : undefined;
-    logFailure(name?.success ? name.data : 'unknown error');
-    throw new BrowserSessionError('unavailable', 'Clerk could not be reached');
+    throw sessionError('unavailable', safeErrorName(error));
   }
   const responseBody: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
-    const errors = apiErrors(responseBody);
-    logFailure(statusReason(response.status, errors));
-    throw errorForStatus(response.status, errors);
+    throw errorForStatus(response.status, apiErrors(responseBody));
   }
 
   const result = agentTaskResponseSchema.safeParse(responseBody);
   if (!result.success) {
-    logFailure(`unreadable response with status ${response.status}`);
-    throw new BrowserSessionError('unavailable', 'Clerk returned an unreadable response');
+    throw sessionError('unavailable', `unreadable response with status ${response.status}`);
   }
-  return {
-    url: result.data.url,
-    agentTaskId: result.data.agent_task_id,
-    redirectUrl: body.redirect_url,
-  };
+  return { url: result.data.url, agentTaskId: result.data.agent_task_id, redirectUrl };
 }
 
 /**
@@ -372,28 +374,7 @@ export type CreateBrowserSessionTool = McpToolTuple<
 
 /** The message for the agent after a failed `createBrowserSession`. It never includes the link or secret key. */
 export function browserSessionErrorMessage(error: BrowserSessionError): string {
-  switch (error.code) {
-    case 'not_authenticated':
-      return 'No signed-in user is available for this request. Ask the user to reconnect this MCP server and sign in, then try again.';
-    case 'invalid_path':
-      return 'The path is not allowed. Use an absolute path such as /settings, or omit it to open the default page.';
-    case 'insufficient_scope':
-      return `The token is missing required scopes: ${error.missingScopes.join(', ')}. Ask the user to reconnect this MCP server and approve those scopes, then try again. If the scopes are still missing, tell the user the server owner must check the configuration. Do not retry more than once.`;
-    case 'rejected':
-      return 'Clerk rejected the request. Do not retry. Tell the user the sign-in link could not be created.';
-    case 'destination_rejected':
-      return "Clerk does not allow this server's sign-in link destination. Tell the user the server owner must check the Clerk configuration. Do not retry.";
-    case 'unauthorized':
-      return 'The server is not authorized to create sign-in links. Tell the user the server owner must check the Clerk configuration. Do not retry.';
-    case 'rate_limited':
-      return 'Too many sign-in links were requested. Wait a while before you try again.';
-    case 'unavailable':
-      return 'Clerk could not create a sign-in link right now. Try again in a moment.';
-    default: {
-      const _exhaustive: never = error.code;
-      throw new Error(`Unhandled sign-in link error: ${String(_exhaustive)}`);
-    }
-  }
+  return ERROR_COPY[error.code].agent(error);
 }
 
 /**
@@ -422,12 +403,13 @@ export function createBrowserSessionTool(
       });
     } catch (error) {
       if (error instanceof BrowserSessionError) {
+        // The path is agent input and stays out of the log; `detail` holds only safe text.
+        console.error(`Clerk error: createBrowserSession failed (${error.detail ?? error.code})`);
         return toolError(browserSessionErrorMessage(error));
       }
-      // Not the message or stack: they could carry the link or the key. A custom error can set any name.
-      const name = error instanceof Error ? identifier.safeParse(error.name) : undefined;
+      // Not the message or stack: they could carry the link or the key.
       console.error(
-        `Clerk error: createBrowserSession tool failed unexpectedly (${name?.success ? name.data : 'unknown error'})`,
+        `Clerk error: createBrowserSession tool failed unexpectedly (${safeErrorName(error)})`,
       );
       return toolError(
         'The sign-in link could not be created. Continue without it, or ask the user to sign in.',

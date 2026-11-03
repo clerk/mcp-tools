@@ -1,12 +1,10 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { MessageExtraInfo, RequestInfo } from '@modelcontextprotocol/sdk/types.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './feedback';
+import { connectTool, sentBody } from './test/mcp-harness';
 
 const input = {
   kind: 'broken' as const,
@@ -23,41 +21,25 @@ function storedResponse() {
   return Response.json(stored, { status: 201 });
 }
 
-function sentBody(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
-  const [, init] = fetchImpl.mock.calls[0]!;
-  return JSON.parse(String(init?.body)) as Record<string, unknown>;
-}
-
 type ConnectOptions = {
   authInfo?: AuthInfo;
   requestInfo?: RequestInfo;
   server?: SubmitFeedbackToolOptions['server'];
 };
 
-async function connect(fetchImpl: typeof fetch, options: ConnectOptions = {}) {
-  const server = new McpServer({ name: 'test', version: '0.0.0' });
-  server.registerTool(
-    ...submitFeedbackTool({
-      secretKey: 'sk_test_123',
-      apiUrl: 'https://api.clerk.test',
-      fetch: fetchImpl,
-      server: 'server' in options ? options.server : { name: 'acme-mcp', version: '1.2.0' },
-    }),
+function connect(fetchImpl: typeof fetch, options: ConnectOptions = {}) {
+  return connectTool(
+    (server) =>
+      server.registerTool(
+        ...submitFeedbackTool({
+          secretKey: 'sk_test_123',
+          apiUrl: 'https://api.clerk.test',
+          fetch: fetchImpl,
+          server: 'server' in options ? options.server : { name: 'acme-mcp', version: '1.2.0' },
+        }),
+      ),
+    { authInfo: options.authInfo, requestInfo: options.requestInfo },
   );
-  const client = new Client({ name: 'claude-code', version: '2.1.0' });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  const handleMessage = serverTransport.onmessage as
-    | ((message: unknown, extra?: MessageExtraInfo) => void)
-    | undefined;
-  serverTransport.onmessage = (message, extra) =>
-    handleMessage?.(message, {
-      ...extra,
-      authInfo: options.authInfo,
-      requestInfo: options.requestInfo,
-    });
-  await client.connect(clientTransport);
-  return client;
 }
 
 function clientInfoMeta(name: string, version: string) {
@@ -69,6 +51,14 @@ beforeEach(() => {
 });
 
 describe('submitFeedback', () => {
+  test.each(['', '   '])('rejects a blank secretKey %j before any request', async (secretKey) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(submitFeedback(report, { secretKey, fetch: fetchImpl })).rejects.toThrow(
+      /^Clerk error: submitFeedback requires the secretKey/,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   test('posts to the Backend API with the secret key', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
 

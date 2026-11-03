@@ -34,6 +34,7 @@ export type McpToolTuple<
   Name extends string,
   InputSchema extends z.ZodRawShape,
   OutputSchema extends z.ZodRawShape,
+  Extra extends McpToolExtra = McpToolExtra,
 > = [
   name: Name,
   config: {
@@ -47,7 +48,7 @@ export type McpToolTuple<
   },
   callback: (
     input: z.infer<z.ZodObject<InputSchema>>,
-    extra: McpToolExtra,
+    extra: Extra,
   ) => Promise<{
     content: { type: 'text'; text: string }[];
     structuredContent?: z.infer<z.ZodObject<OutputSchema>>;

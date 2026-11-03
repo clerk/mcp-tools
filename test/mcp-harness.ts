@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
+import type { vi } from 'vitest';
 
 /**
  * Registers a tool with `register`, as customers do with `server.registerTool(...tool)`, and connects a client.
@@ -29,4 +30,10 @@ export async function connectTool(
 export function textOf(result: Awaited<ReturnType<Client['callTool']>>) {
   const content = result.content as { type: string; text: string }[];
   return content.map((part) => part.text).join('\n');
+}
+
+/** The JSON body of the first request that a mocked `fetch` received. */
+export function sentBody(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
+  const [, init] = fetchImpl.mock.calls[0]!;
+  return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }

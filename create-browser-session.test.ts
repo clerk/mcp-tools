@@ -12,7 +12,7 @@ import {
   validateBrowserSessionOptions,
   type CreateBrowserSessionOptions,
 } from './create-browser-session';
-import { connectTool, textOf } from './test/mcp-harness';
+import { connectTool, sentBody, textOf } from './test/mcp-harness';
 
 const authInfo: AuthInfo = {
   token: 't',
@@ -66,11 +66,6 @@ function apiError(code: string, paramName?: string) {
 
 function statusFetch(status: number, body: unknown = { errors: [apiError('some_error')] }) {
   return vi.fn<typeof fetch>(async () => Response.json(body, { status }));
-}
-
-function sentBody(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
-  const [, init] = fetchImpl.mock.calls[0]!;
-  return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }
 
 function browserSessionError(code: string, extra: Record<string, unknown> = {}) {
@@ -189,7 +184,81 @@ describe('createBrowserSession', () => {
     '/.//evil.example',
     // new URL() throws ERR_INVALID_URL for this one.
     '/\n\\]',
-  ])('refuses hostile path %j without calling the API', async (path) => {
+    // A malformed percent escape, which Clerk would reject as a bad redirect_url.
+    '/%ZZ',
+    '/%',
+    '/settings%2',
+    '/settings?tab=%G1',
+  ])('refuses path %j without calling the API', async (path) => {
+    const fetchImpl = okFetch();
+    await expect(
+      createBrowserSession({ authInfo, path }, options(fetchImpl)),
+    ).rejects.toMatchObject(browserSessionError('invalid_path'));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test.each(['', '   '])('falls back to the default agent name for %j', async (agentName) => {
+    const fetchImpl = okFetch();
+    await createBrowserSession({ authInfo }, options(fetchImpl, { agentName }));
+    expect(sentBody(fetchImpl).agent_name).toBe('mcp:client_1');
+  });
+
+  test('falls back to the default task description when blank', async () => {
+    const fetchImpl = okFetch();
+    await createBrowserSession({ authInfo, taskDescription: '   ' }, options(fetchImpl));
+    expect(sentBody(fetchImpl).task_description).toBe(
+      'Signed-in browser session requested through MCP',
+    );
+  });
+
+  test('names the agent "mcp" without a client id', async () => {
+    const fetchImpl = okFetch();
+    await createBrowserSession({ authInfo: { ...authInfo, clientId: '' } }, options(fetchImpl));
+    expect(sentBody(fetchImpl).agent_name).toBe('mcp');
+  });
+
+  test('sends session_max_duration_in_seconds only when set', async () => {
+    const without = okFetch();
+    await createBrowserSession({ authInfo }, options(without));
+    expect(sentBody(without)).not.toHaveProperty('session_max_duration_in_seconds');
+
+    const withIt = okFetch();
+    await createBrowserSession({ authInfo }, options(withIt, { sessionMaxDurationInSeconds: 600 }));
+    expect(sentBody(withIt).session_max_duration_in_seconds).toBe(600);
+  });
+
+  test.each([
+    ['no auth info', undefined],
+    ['no user id', { ...authInfo, extra: { verifiedBy: 'clerk' } }],
+    ['empty user id', { ...authInfo, extra: { userId: '', verifiedBy: 'clerk' } }],
+    ['not Clerk-verified', { ...authInfo, extra: { userId: 'user_1' } }],
+  ])('refuses without Clerk-verified auth: %s', async (_name, info) => {
+    const fetchImpl = okFetch();
+    await expect(
+      createBrowserSession({ authInfo: info }, options(fetchImpl)),
+    ).rejects.toMatchObject(browserSessionError('not_authenticated'));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    'https://evil.example',
+    '//evil.example',
+    '//app.example.com/settings',
+    '/\\evil.example',
+    'javascript:alert(1)',
+    '\\\\evil.example',
+    'settings',
+    '/\t/evil.example',
+    '/..//evil.example',
+    '/.//evil.example',
+    // new URL() throws ERR_INVALID_URL for this one.
+    '/\n\\]',
+    // A malformed percent escape, which Clerk would reject as a bad redirect_url.
+    '/%ZZ',
+    '/%',
+    '/settings%2',
+    '/settings?tab=%G1',
+  ])('refuses path %j without calling the API', async (path) => {
     const fetchImpl = okFetch();
     await expect(
       createBrowserSession({ authInfo, path }, options(fetchImpl)),
@@ -238,76 +307,6 @@ describe('createBrowserSession', () => {
     await expect(
       createBrowserSession({ authInfo }, options(statusFetch(status, body))),
     ).rejects.toMatchObject(browserSessionError(code));
-  });
-
-  test('logs the status and the error codes and parameters of a failed response', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(
-      createBrowserSession({ authInfo }, options(statusFetch(422, redirectUrlErrors))),
-    ).rejects.toThrow();
-    const [message] = consoleError.mock.calls[0]!;
-    expect(message).toBe(
-      'Clerk error: createBrowserSession failed (status 422: form_param_value_invalid redirect_url)',
-    );
-  });
-
-  test('leaves unexpected error codes and parameters out of the log', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const body = { errors: [{ code: `x ${SECRET}`, meta: { param_name: LINK } }] };
-    await expect(
-      createBrowserSession({ authInfo }, options(statusFetch(422, body))),
-    ).rejects.toThrow();
-    const [message] = consoleError.mock.calls[0]!;
-    expect(message).toBe('Clerk error: createBrowserSession failed (status 422)');
-  });
-
-  test.each([
-    ['insufficient_scope: b', { authInfo: { ...authInfo, scopes: ['a'] } }, ['a', 'b']],
-    ['not_authenticated', { authInfo: undefined }, []],
-    ['invalid_path', { authInfo, path: `https://evil.example/${SECRET}` }, []],
-  ])('logs a refused request as %s', async (reason, request, requiredScopes) => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(
-      createBrowserSession(request, options(okFetch(), { requiredScopes })),
-    ).rejects.toThrow();
-    expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(consoleError.mock.calls[0]![0]).toBe(
-      `Clerk error: createBrowserSession rejected (${reason})`,
-    );
-  });
-
-  test('logs only the status of a failed response', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(createBrowserSession({ authInfo }, options(statusFetch(401)))).rejects.toThrow();
-    expect(consoleError).toHaveBeenCalledTimes(1);
-    const [message] = consoleError.mock.calls[0]!;
-    expect(message).toMatch(/^Clerk error: .*status 401/);
-    expect(message).not.toMatch(LEAKS);
-  });
-
-  test('logs only the error name when Clerk cannot be reached', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const fetchImpl = vi.fn<typeof fetch>(async () => {
-      throw new TypeError(`fetch failed ${SECRET} ${LINK}`);
-    });
-    await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toThrow();
-    const [message] = consoleError.mock.calls[0]!;
-    expect(message).toMatch(/^Clerk error: .*TypeError/);
-    expect(message).not.toMatch(LEAKS);
-  });
-
-  test('leaves an error name that is not an identifier out of the log', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const fetchImpl = vi.fn<typeof fetch>(async () => {
-      const error = new Error('boom');
-      error.name = 'sk_live_SECRET https://ticket.example';
-      throw error;
-    });
-    await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toThrow();
-    const [message] = consoleError.mock.calls[0]!;
-    expect(message).toMatch(/^Clerk error: createBrowserSession failed/);
-    expect(message).not.toContain('sk_live_SECRET');
-    expect(message).not.toContain('https://ticket.example');
   });
 
   test('refuses when a required scope is missing', async () => {
@@ -486,6 +485,79 @@ describe('createBrowserSessionTool', () => {
     expect(browserSessionToolText('http://localhost:3000/').title).toBe(
       'Open localhost:3000 signed in',
     );
+  });
+
+  describe('logging', () => {
+    const redirectUrlErrors = {
+      errors: [{ code: 'form_param_value_invalid', meta: { param_name: 'redirect_url' } }],
+    };
+
+    // Calls the tool callback and returns what it logged and what it told the agent.
+    async function callLogged(
+      fetchImpl: typeof fetch,
+      request: { auth?: AuthInfo; path?: string; requiredScopes?: string[] } = {},
+    ) {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const tool = createBrowserSessionTool(
+        options(fetchImpl, { requiredScopes: request.requiredScopes ?? [] }),
+      );
+      const result = await tool[2]({ path: request.path }, { authInfo: request.auth ?? authInfo });
+      expect(result.isError).toBe(true);
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      const [message] = consoleError.mock.calls[0]!;
+      expect(message).not.toMatch(LEAKS);
+      expect(JSON.stringify(result)).not.toMatch(LEAKS);
+      return String(message);
+    }
+
+    test('logs the status and the error codes and parameters of a failed response', async () => {
+      expect(await callLogged(statusFetch(422, redirectUrlErrors))).toBe(
+        'Clerk error: createBrowserSession failed (status 422: form_param_value_invalid redirect_url)',
+      );
+    });
+
+    test('leaves unexpected error codes and parameters out of the log', async () => {
+      const body = { errors: [{ code: `x ${SECRET}`, meta: { param_name: LINK } }] };
+      expect(await callLogged(statusFetch(422, body))).toBe(
+        'Clerk error: createBrowserSession failed (status 422)',
+      );
+    });
+
+    test('logs the status and code of an unauthorized response', async () => {
+      expect(await callLogged(statusFetch(401))).toBe(
+        'Clerk error: createBrowserSession failed (status 401: some_error)',
+      );
+    });
+
+    test.each([
+      ['insufficient_scope: b', { auth: { ...authInfo, scopes: ['a'] } }, ['a', 'b']],
+      ['not_authenticated', { auth: { ...authInfo, extra: {} } as AuthInfo }, []],
+      ['invalid_path', { path: `https://evil.example/${SECRET}` }, []],
+    ])('logs a refused request as %s', async (reason, request, requiredScopes) => {
+      expect(await callLogged(okFetch(), { ...request, requiredScopes })).toBe(
+        `Clerk error: createBrowserSession failed (${reason})`,
+      );
+    });
+
+    test('logs only the error name when Clerk cannot be reached', async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => {
+        throw new TypeError(`fetch failed ${SECRET} ${LINK}`);
+      });
+      expect(await callLogged(fetchImpl)).toBe(
+        'Clerk error: createBrowserSession failed (TypeError)',
+      );
+    });
+
+    test('leaves an error name that is not an identifier out of the log', async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => {
+        const error = new Error('boom');
+        error.name = 'sk_live_SECRET https://ticket.example';
+        throw error;
+      });
+      expect(await callLogged(fetchImpl)).toBe(
+        'Clerk error: createBrowserSession failed (unknown error)',
+      );
+    });
   });
 
   test('logs an unexpected error with a fixed category and tells the agent to continue', async () => {

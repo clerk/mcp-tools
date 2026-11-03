@@ -100,12 +100,12 @@ export async function fetchClerkAuthorizationServerMetadata({
  * as `authData to the MCP SDK.
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
  * @param token - The token to verify
- * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
+ * @returns A `ClerkAuthInfo`, which is an `AuthInfo` (see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`), or `undefined`
  */
 export function verifyClerkToken(
   auth: MachineAuthObject<'oauth_token'>,
   token: string | undefined,
-): AuthInfo | undefined {
+): ClerkAuthInfo | undefined {
   if (!token) return undefined;
 
   if (!auth.isAuthenticated) {

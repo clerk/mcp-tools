@@ -44,8 +44,7 @@ function challengeScopes(
   if (missing.length === 0) return undefined;
   // A malformed granted scope is dropped: it would break the quoted header, and the SDK throws on the whole challenge.
   const granted = grantedScopes(authInfo).filter(isScopeToken);
-  const [first, ...rest] = new Set([...granted, ...missing]);
-  return [first!, ...rest];
+  return [...new Set([...granted, ...missing])] as [string, ...string[]];
 }
 
 /**

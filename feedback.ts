@@ -1,9 +1,20 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
-import { type BackendApiClient, createBackendApiClient, requireSecretKey } from './backend-api';
-import { OPEN_WORLD_WRITE_ANNOTATIONS, toolError, toolResult } from './mcp-tool';
+import {
+  type BackendApiClient,
+  type BackendApiOptions,
+  createBackendApiClient,
+  safeErrorName,
+} from './backend-api';
+import {
+  type McpToolExtra,
+  type McpToolTuple,
+  OPEN_WORLD_WRITE_ANNOTATIONS,
+  toolAuthInfo,
+  toolError,
+  toolResult,
+} from './mcp-tool';
 import { isClerkAuthInfo } from './server';
 
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
@@ -90,13 +101,8 @@ export type FeedbackReport = {
   metadata?: Record<string, unknown>;
 };
 
-export type SubmitFeedbackOptions = {
-  /** Secret key of the Clerk instance the feedback belongs to. */
-  secretKey: string;
-  /** Origin of the Clerk Backend API. Defaults to https://api.clerk.com. */
-  apiUrl?: string;
-  fetch?: typeof fetch;
-};
+/** `secretKey` is the secret key of the Clerk instance the feedback belongs to. */
+export type SubmitFeedbackOptions = BackendApiOptions;
 
 export type SubmitFeedbackToolOptions = SubmitFeedbackOptions & {
   /** Name and version of your MCP server, shown with each report. The name defaults to the request's host. */
@@ -156,22 +162,18 @@ function bareToolNames(operation: string) {
     .slice(0, MAX_OPERATION_LENGTH);
 }
 
-type FeedbackInput = z.infer<z.ZodObject<typeof submitFeedbackInputSchema>>;
-
 /**
  * The parts of the callback's second argument this tool reads. The MCP SDK v1 passes the first three
  * fields (`RequestHandlerExtra`) and v2 passes the last two (`ServerContext`), so both versions' arguments
  * are assignable to it.
  */
-export type FeedbackToolExtra = {
-  authInfo?: AuthInfo;
+export type FeedbackToolExtra = McpToolExtra & {
   _meta?: Record<string, unknown>;
   requestInfo?: {
     headers?: Record<string, string | string[] | undefined>;
     url?: URL;
   };
   http?: {
-    authInfo?: AuthInfo;
     req?: Pick<Request, 'headers' | 'url'>;
   };
   mcpReq?: {
@@ -180,27 +182,13 @@ export type FeedbackToolExtra = {
   };
 };
 
-type SubmitFeedbackToolCallback = (
-  input: FeedbackInput,
-  extra: FeedbackToolExtra,
-) => Promise<{
-  content: { type: 'text'; text: string }[];
-  structuredContent?: { feedback_id: string; received: boolean };
-  isError?: boolean;
-}>;
-
 /** Arguments for `McpServer.registerTool`, on MCP SDK v1 and v2. */
-export type SubmitFeedbackTool = [
-  name: typeof SUBMIT_FEEDBACK_TOOL_NAME,
-  config: {
-    title: string;
-    description: string;
-    inputSchema: typeof submitFeedbackInputSchema;
-    outputSchema: typeof submitFeedbackOutputSchema;
-    annotations: ToolAnnotations;
-  },
-  callback: SubmitFeedbackToolCallback,
-];
+export type SubmitFeedbackTool = McpToolTuple<
+  typeof SUBMIT_FEEDBACK_TOOL_NAME,
+  typeof submitFeedbackInputSchema,
+  typeof submitFeedbackOutputSchema,
+  FeedbackToolExtra
+>;
 
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 
@@ -305,12 +293,12 @@ function wasRejected(error: unknown): error is FeedbackSubmissionError {
   return error instanceof FeedbackSubmissionError && (error.status < 200 || error.status >= 300);
 }
 
-// Only the status or error name: a custom fetch's error message could echo the Authorization header.
+// Only the status or a safe error name: a custom fetch's error message could echo the Authorization header.
 function failureReason(error: unknown) {
   if (error instanceof FeedbackSubmissionError) {
     return `status ${error.status}`;
   }
-  return error instanceof Error ? error.name : 'unknown error';
+  return safeErrorName(error);
 }
 
 function feedbackToolError(text: string) {
@@ -324,17 +312,16 @@ function feedbackToolError(text: string) {
  * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
-  requireSecretKey('submitFeedbackTool', options);
   const client = createBackendApiClient('submitFeedbackTool', options);
 
-  const callback: SubmitFeedbackToolCallback = async (input, extra) => {
+  const callback: SubmitFeedbackTool[2] = async (input, extra) => {
     try {
       const { id } = await postFeedback(client, {
         ...input,
         operation: input.operation && bareToolNames(input.operation),
         source: source(extra, options.server),
         reporter: reporter(extra),
-        ...identityFromAuthInfo(extra.http?.authInfo ?? extra.authInfo),
+        ...identityFromAuthInfo(toolAuthInfo(extra)),
       });
       const result = { feedback_id: id, received: true };
       return toolResult(JSON.stringify(result), result);
