@@ -109,6 +109,33 @@ To create an MCP endpoint that handles the actual MCP protocol communication, yo
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
+#### Step-up for your own tools
+
+When a tool needs an OAuth scope that the access token lacks, the MCP server can answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", ...`. MCP clients answer that by asking the user to approve more scopes. MCP SDK 2.1 or later (`@modelcontextprotocol/server`) sends this challenge before the tool runs, from the `scopeChallenge` option of `registerTool`. `scopeChallengeFor` from `@clerk/mcp-tools/server` (also exported from `@clerk/mcp-tools/next`) builds that option from the scopes the tool needs:
+
+```ts
+import { scopeChallengeFor } from '@clerk/mcp-tools/server';
+
+server.registerTool(
+  'list_projects',
+  {
+    title: 'List projects',
+    description: 'Lists the projects of the signed-in user.',
+    inputSchema: {},
+    scopeChallenge: scopeChallengeFor(['projects:read']),
+  },
+  async () => {
+    // ...
+  },
+);
+```
+
+- Pass `resourceMetadataUrl` on the `authInfo` you give the SDK (for example `{ ...authInfo, resourceMetadataUrl }`). Without it, the challenge has no `resource_metadata`.
+- The challenge lists the granted scopes followed by the missing ones. Some MCP clients request exactly the challenged scopes, so listing only the missing ones could drop access that other tools need. The SDK's own `requireScopes` helper lists the required scopes only.
+- List every scope your tools need in `scopes_supported` of your protected resource metadata, and enable them for the OAuth application. MCP clients choose the scopes to request from the challenge, then from that list.
+- Earlier SDK versions ignore the option, so a tool must still check its scopes itself. `createBrowserSessionTool` sets this option from its `requiredScopes` for you.
+- `scopeChallengeFor` throws a `Clerk error:` message when a scope is not a valid OAuth scope token.
+
 #### Collecting feedback from agents
 
 Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `@clerk/mcp-tools/feedback` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
@@ -228,7 +255,7 @@ export { handler as GET, handler as POST, handler as DELETE };
 ```
 
 - Pass `browserSessionInstructions(destinationUrl)` as the server `instructions`. Some MCP clients, such as Codex, show agents only the server instructions until the agent searches for a tool, so without them an agent may open your app in a browser and stop at the sign-in page.
-- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. The `audience` option needs `@clerk/backend` 3.19.0, `@clerk/nextjs` 7.9.5, or `@clerk/express` 2.1.70 or later; older versions ignore it. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add that check yourself before you register this tool behind them.
+- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. The `audience` option needs `@clerk/backend` 3.19.0, `@clerk/nextjs` 7.9.5, or `@clerk/express` 2.1.70 or later; older versions ignore it. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add that check yourself before you register this tool behind them. To confirm that the check works, send a token that was issued to another OAuth application of the same instance, or for another resource: the MCP route must answer `401`.
 - Authenticate requests with `verifyClerkToken`, and set `requiredScopes` to the OAuth scopes the access token must carry. `requiredScopes` is required: pass `[]` when the tool needs no scope.
 - Step-up authorization (a `403` challenge that makes the MCP client ask the user to approve more scopes) needs `@modelcontextprotocol/server` 2.1 or later. The tool sets the SDK's `scopeChallenge` registration option, and you must pass `resourceMetadataUrl` on `authInfo`, as above; without it the challenge has no `resource_metadata`. The challenge asks for the token's granted scopes plus the missing ones, so the new grant does not drop access that other tools need. The SDK's own `requireScopes` helper challenges for the listed scopes only.
 - On `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` versions before 2.1 the tool still registers and works, but there is no step-up. A token without the required scopes gets the tool's own error, which tells the agent to ask the user to reconnect the MCP server and approve those scopes. The tool refuses before it calls Clerk. `createBrowserSessionTool` also throws a `Clerk error:` message when a scope is not a valid OAuth scope token.
@@ -762,6 +789,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** Returns `true` when an `AuthInfo` object came from `verifyClerkToken`, which marks its result with `extra.verifiedBy: 'clerk'` and a non-empty `extra.userId`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier. It is a type guard: after the check, TypeScript knows `authInfo.extra.userId` is a string.
   - **Params:** `authInfo: AuthInfo | undefined`
   - **Returns:** `authInfo is ClerkAuthInfo` (`ClerkAuthInfo` is also exported)
+
+- `scopeChallengeFor`
+  - **Description:** Builds the `scopeChallenge` registration option of MCP SDK 2.1 or later for a tool that needs `requiredScopes`. Before the tool runs, the SDK answers a token that lacks some of them with a `403` step-up challenge for the granted scopes followed by the missing ones. A request without auth info is left to the tool. Earlier SDK versions ignore the option. See [Step-up for your own tools](#step-up-for-your-own-tools).
+  - **Params:** `requiredScopes: readonly string[]`
+  - **Returns:** `ScopeChallengeHandler` (also exported), which is `(context: { authInfo?: AuthInfo }) => { scopes: [string, ...string[]] } | undefined`
 
 - `corsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
