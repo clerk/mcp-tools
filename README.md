@@ -144,7 +144,7 @@ When an agent drives a browser for your user and lands on your app's sign-in pag
 
 The link starts a session with the full permissions of the user, so the access token check in front of this tool must be strict. Verify the token with `authenticateRequest` and an `audience` equal to your MCP server's resource URL. Here is a Next.js setup on `@modelcontextprotocol/server` 2.1 or later, so that the SDK can send the step-up challenge. It replaces the `mcp-adapter` route from the [Next.js guide](./next/README.md#building-an-mcp-server). The tool also works behind the `mcp-adapter` route when that route checks the audience, but without step-up.
 
-First, serve the protected resource metadata at the path form of the MCP endpoint, with `resource` set to the same URL the route uses as its `audience`. MCP clients send that `resource` when they request a token, and Clerk puts it in the token's `aud`, so the two must match. The guide's root metadata route advertises only the origin, and every token would then fail the audience check:
+First, serve the protected resource metadata at the path form of the MCP endpoint, with `resource` set to the same URL the route uses as its `audience`. MCP clients send that `resource` when they request a token, and Clerk puts it in the token's `aud`, so the two must match. The guide's root metadata route advertises only the origin, and every token would then fail the audience check. The scopes the tool requires must be listed in `scopes_supported` and enabled for the OAuth application. MCP clients choose the scopes to request from the challenge, then from this list, so a reconnect cannot grant a scope that is not advertised here:
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
@@ -153,7 +153,11 @@ import {
   protectedResourceHandlerClerk,
 } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk({ resource: 'https://app.example.com/mcp' });
+// List every scope the server's tools need, here the `requiredScopes` of the tool below.
+const handler = protectedResourceHandlerClerk({
+  resource: 'https://app.example.com/mcp',
+  scopes_supported: ['profile'],
+});
 const corsHandler = metadataCorsOptionsRequestHandler();
 
 export { handler as GET, corsHandler as OPTIONS };
@@ -180,18 +184,19 @@ const APP_URL = 'https://app.example.com/dashboard';
 // The OAuth scopes the tool needs.
 const BROWSER_SESSION_SCOPES = ['profile'] as const;
 
+// Built once at module scope, so a bad configuration fails at startup instead of on every request.
+const browserSessionTool = createBrowserSessionTool({
+  secretKey: process.env.CLERK_SECRET_KEY!,
+  destinationUrl: APP_URL,
+  requiredScopes: BROWSER_SESSION_SCOPES,
+});
+
 const mcpHandler = createMcpHandler(() => {
   const server = new McpServer(
     { name: 'my-app', version: '1.0.0' },
     { instructions: browserSessionInstructions(APP_URL) },
   );
-  server.registerTool(
-    ...createBrowserSessionTool({
-      secretKey: process.env.CLERK_SECRET_KEY!,
-      destinationUrl: APP_URL,
-      requiredScopes: BROWSER_SESSION_SCOPES,
-    }),
-  );
+  server.registerTool(...browserSessionTool);
   // ...register your own tools
   return server;
 });
