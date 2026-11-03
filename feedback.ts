@@ -163,9 +163,9 @@ function bareToolNames(operation: string) {
 }
 
 /**
- * The parts of the callback's second argument this tool reads. The MCP SDK v1 passes the first three
- * fields (`RequestHandlerExtra`) and v2 passes the last two (`ServerContext`), so both versions' arguments
- * are assignable to it.
+ * The parts of the callback's second argument this tool reads. The MCP SDK v1 passes `authInfo`,
+ * `_meta`, and `requestInfo` (`RequestHandlerExtra`) and v2 passes `http` and `mcpReq` (`ServerContext`), so both
+ * versions' arguments are assignable to it.
  */
 export type FeedbackToolExtra = McpToolExtra & {
   _meta?: Record<string, unknown>;

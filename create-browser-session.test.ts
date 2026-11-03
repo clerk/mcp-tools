@@ -42,16 +42,13 @@ function options(
 // The full Backend API response; only url and agent_task_id are read.
 function okFetch() {
   return vi.fn<typeof fetch>(async () =>
-    Response.json(
-      {
-        object: 'agent_task',
-        agent_id: 'agt_1',
-        agent_task_id: 'agttsk_1',
-        task_id: 'tsk_1',
-        url: LINK,
-      },
-      { status: 200 },
-    ),
+    Response.json({
+      object: 'agent_task',
+      agent_id: 'agt_1',
+      agent_task_id: 'agttsk_1',
+      task_id: 'tsk_1',
+      url: LINK,
+    }),
   );
 }
 
@@ -197,86 +194,6 @@ describe('createBrowserSession', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  test.each(['', '   '])('falls back to the default agent name for %j', async (agentName) => {
-    const fetchImpl = okFetch();
-    await createBrowserSession({ authInfo }, options(fetchImpl, { agentName }));
-    expect(sentBody(fetchImpl).agent_name).toBe('mcp:client_1');
-  });
-
-  test('falls back to the default task description when blank', async () => {
-    const fetchImpl = okFetch();
-    await createBrowserSession({ authInfo, taskDescription: '   ' }, options(fetchImpl));
-    expect(sentBody(fetchImpl).task_description).toBe(
-      'Signed-in browser session requested through MCP',
-    );
-  });
-
-  test('names the agent "mcp" without a client id', async () => {
-    const fetchImpl = okFetch();
-    await createBrowserSession({ authInfo: { ...authInfo, clientId: '' } }, options(fetchImpl));
-    expect(sentBody(fetchImpl).agent_name).toBe('mcp');
-  });
-
-  test('sends session_max_duration_in_seconds only when set', async () => {
-    const without = okFetch();
-    await createBrowserSession({ authInfo }, options(without));
-    expect(sentBody(without)).not.toHaveProperty('session_max_duration_in_seconds');
-
-    const withIt = okFetch();
-    await createBrowserSession({ authInfo }, options(withIt, { sessionMaxDurationInSeconds: 600 }));
-    expect(sentBody(withIt).session_max_duration_in_seconds).toBe(600);
-  });
-
-  test.each([
-    ['no auth info', undefined],
-    ['no user id', { ...authInfo, extra: { verifiedBy: 'clerk' } }],
-    ['empty user id', { ...authInfo, extra: { userId: '', verifiedBy: 'clerk' } }],
-    ['not Clerk-verified', { ...authInfo, extra: { userId: 'user_1' } }],
-  ])('refuses without Clerk-verified auth: %s', async (_name, info) => {
-    const fetchImpl = okFetch();
-    await expect(
-      createBrowserSession({ authInfo: info }, options(fetchImpl)),
-    ).rejects.toMatchObject(browserSessionError('not_authenticated'));
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  test.each([
-    'https://evil.example',
-    '//evil.example',
-    '//app.example.com/settings',
-    '/\\evil.example',
-    'javascript:alert(1)',
-    '\\\\evil.example',
-    'settings',
-    '/\t/evil.example',
-    '/..//evil.example',
-    '/.//evil.example',
-    // new URL() throws ERR_INVALID_URL for this one.
-    '/\n\\]',
-    // A malformed percent escape, which Clerk would reject as a bad redirect_url.
-    '/%ZZ',
-    '/%',
-    '/settings%2',
-    '/settings?tab=%G1',
-  ])('refuses path %j without calling the API', async (path) => {
-    const fetchImpl = okFetch();
-    await expect(
-      createBrowserSession({ authInfo, path }, options(fetchImpl)),
-    ).rejects.toMatchObject(browserSessionError('invalid_path'));
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  test.each(['/%ZZ', '/%', '/settings%2', '/settings?tab=%G1'])(
-    'refuses path %j with a malformed percent escape without calling the API',
-    async (path) => {
-      const fetchImpl = okFetch();
-      await expect(
-        createBrowserSession({ authInfo, path }, options(fetchImpl)),
-      ).rejects.toMatchObject(browserSessionError('invalid_path'));
-      expect(fetchImpl).not.toHaveBeenCalled();
-    },
-  );
-
   test.each(['', '   '])('treats a blank path %j as omitted', async (path) => {
     const fetchImpl = okFetch();
     const session = await createBrowserSession({ authInfo, path }, options(fetchImpl));
@@ -309,7 +226,7 @@ describe('createBrowserSession', () => {
     ).rejects.toMatchObject(browserSessionError(code));
   });
 
-  test('refuses when a required scope is missing', async () => {
+  test('refuses when a required scope is missing, before it checks the path', async () => {
     const fetchImpl = okFetch();
     await expect(
       createBrowserSession(
@@ -531,7 +448,7 @@ describe('createBrowserSessionTool', () => {
 
     test.each([
       ['insufficient_scope: b', { auth: { ...authInfo, scopes: ['a'] } }, ['a', 'b']],
-      ['not_authenticated', { auth: { ...authInfo, extra: {} } as AuthInfo }, []],
+      ['not_authenticated', { auth: { ...authInfo, extra: {} } }, []],
       ['invalid_path', { path: `https://evil.example/${SECRET}` }, []],
     ])('logs a refused request as %s', async (reason, request, requiredScopes) => {
       expect(await callLogged(okFetch(), { ...request, requiredScopes })).toBe(

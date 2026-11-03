@@ -1,4 +1,4 @@
-// Internal scope helpers for the MCP step-up scope challenge. This module is not part of the package exports.
+// Internal scope helpers for the MCP step-up scope challenge. Not part of the package exports.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 import type { McpScopeChallengeHandler } from './mcp-tool';
@@ -7,7 +7,6 @@ import type { McpScopeChallengeHandler } from './mcp-tool';
 // `WWW-Authenticate` value.
 const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 
-/** Whether `scope` is a valid OAuth scope-token. */
 function isScopeToken(scope: unknown): scope is string {
   return typeof scope === 'string' && SCOPE_TOKEN.test(scope);
 }
