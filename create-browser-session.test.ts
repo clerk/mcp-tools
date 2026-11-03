@@ -384,11 +384,10 @@ describe('createBrowserSessionTool', () => {
     expect(instructions.length).toBeLessThanOrEqual(200);
   });
 
-  test('keeps the safety sentence and the tool call within the first 200 characters of a long host', () => {
-    const instructions = browserSessionInstructions(
-      'https://dashboard.my-company-staging.com/home',
-    );
-    expect(instructions.slice(0, 200)).toContain('Never type credentials for');
+  test('keeps the tool name within the first 200 characters for a long host', () => {
+    const host = `${'a'.repeat(63)}.${'b'.repeat(63)}.com`;
+    const instructions = browserSessionInstructions(`https://${host}/home`);
+    expect(instructions).toContain(host);
     expect(instructions.slice(0, 200)).toContain('call create_browser_session');
   });
 
@@ -439,6 +438,24 @@ describe('createBrowserSessionTool', () => {
       const body = { errors: [{ code: `x ${SECRET}`, meta: { param_name: LINK } }] };
       expect(await callLogged(statusFetch(422, body))).toBe(
         'Clerk error: createBrowserSession failed (status 422)',
+      );
+    });
+
+    test('leaves a secret key shaped error code out of the log', async () => {
+      const body = { errors: [{ code: SECRET, meta: { param_name: 'redirect_url' } }] };
+      expect(await callLogged(statusFetch(422, body))).toBe(
+        'Clerk error: createBrowserSession failed (status 422: redirect_url)',
+      );
+    });
+
+    test('leaves a secret key shaped error name out of the log', async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => {
+        const error = new Error('boom');
+        error.name = SECRET;
+        throw error;
+      });
+      expect(await callLogged(fetchImpl)).toBe(
+        'Clerk error: createBrowserSession failed (unknown error)',
       );
     });
 
@@ -628,12 +645,12 @@ describe('createBrowserSessionTool on MCP SDK v2', () => {
     const fetchImpl = okFetch();
     const response = await callTool(
       fetchImpl,
-      { ...authInfo, scopes: ['email'], resource: new URL('https://mcp.example.com/mcp') },
+      { ...authInfo, scopes: ['profile'], resource: new URL('https://mcp.example.com/mcp') },
       { requiredScopes: ['email', 'user:org:read'] },
     );
     expect(response.status).toBe(403);
     expect(response.headers.get('www-authenticate')).toBe(
-      'Bearer error="insufficient_scope", error_description="Insufficient scope", scope="email user:org:read", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
+      'Bearer error="insufficient_scope", error_description="Insufficient scope", scope="profile email user:org:read", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
     );
     expect(fetchImpl).not.toHaveBeenCalled();
   });

@@ -316,12 +316,12 @@ async function requestBrowserSession(
 
 /**
  * Server instructions to pass as `new McpServer(info, { instructions })`. Some clients show agents only the server
- * instructions until they search for a tool, so the first sentence names the host and the tool.
+ * instructions until they search for a tool, so the tool name comes first.
  */
 export function browserSessionInstructions(destinationUrl: string): string {
   const { host } = parseDestinationUrl(destinationUrl);
-  // The safety sentence and the tool name come first: a client that truncates to ~200 characters still keeps them.
-  return `Never type credentials for ${host}. To use ${host} in a browser, first call ${CREATE_BROWSER_SESSION_TOOL_NAME}: it opens ${host} signed in as the user.`;
+  // The tool name comes first, before any host: a client that truncates to ~200 characters still keeps it.
+  return `First call ${CREATE_BROWSER_SESSION_TOOL_NAME} to use ${host} in a browser: it opens ${host} signed in as the user. Never type credentials for ${host}.`;
 }
 
 /** The tool title and description, written for the app at `destinationUrl` so agents can match it to the site. */
