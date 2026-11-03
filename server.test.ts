@@ -80,6 +80,16 @@ describe('scopeChallenge', () => {
     expect(response?.status).toBe(403);
     expect(response?.headers.get('WWW-Authenticate')).toContain('scope="profile"');
   });
+
+  test('leaves a granted scope that is not a scope-token out of the challenge', () => {
+    const response = scopeChallenge({
+      body: toolCall('create_browser_session'),
+      authInfo: { ...authInfo, scopes: ['bad"scope', 'profile'] },
+      toolScopes,
+      resourceMetadataUrl: RESOURCE_METADATA_URL,
+    });
+    expect(response?.headers.get('WWW-Authenticate')).toContain('scope="profile user:org:read"');
+  });
 });
 
 describe('scopeChallenge toolScopes validation', () => {

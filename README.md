@@ -111,7 +111,9 @@ These adapters handle the MCP protocol details and integrate with your authentic
 
 #### Scope step-up for tools
 
-When a `tools/call` needs an OAuth scope the access token lacks, the MCP server should answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`. MCP clients answer that by asking the user to approve the extra scopes (step-up authorization). A tool cannot send that response itself, because the transport has already chosen the HTTP status when the tool runs. `scopeChallenge` from `@clerk/mcp-tools/server` (also re-exported from `@clerk/mcp-tools/next`) builds it in front of the transport.
+When a `tools/call` needs an OAuth scope the access token lacks, the MCP server should answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`. MCP clients answer that by asking the user to approve the extra scopes (step-up authorization). A tool callback cannot send that response itself, because the transport has already chosen the HTTP status when the callback runs. `scopeChallenge` from `@clerk/mcp-tools/server` (also re-exported from `@clerk/mcp-tools/next`) builds the challenge in front of the transport, on every MCP SDK version. It challenges for the granted scopes plus the missing ones, so the new grant keeps the old access.
+
+MCP SDK 2.1 or later (`@modelcontextprotocol/server`) can also send the challenge itself, from a `scopeChallenge` option on `registerTool`; see the [SDK authorization guide](https://ts.sdk.modelcontextprotocol.io/v2/serving/authorization.html#enforce-per-operation-scopes). The SDK's `requireScopes` helper challenges for the listed scopes only. Some MCP clients, such as the MCP SDK 1.x client, request exactly the challenged scopes, so the new token can lose scopes the old one had, and another tool then needs a second step-up.
 
 `ToolScopes` is a plain object of tool name to the scopes that tool needs. A tool that is not listed needs none. Here is a Next.js route handler:
 

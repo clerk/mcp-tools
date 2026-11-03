@@ -46,6 +46,22 @@ export function missingScopes(required: Iterable<string>, authInfo: AuthInfo): s
   return [...required].filter((scope) => !granted.includes(scope));
 }
 
+/**
+ * The scopes to challenge for when `authInfo` lacks some of `required`, and `undefined` otherwise: the granted ones
+ * followed by the missing ones, so the new grant keeps the old access.
+ */
+function challengeScopes(
+  required: Iterable<string>,
+  authInfo: AuthInfo,
+): [string, ...string[]] | undefined {
+  const missing = missingScopes(required, authInfo);
+  if (missing.length === 0) return undefined;
+  // A malformed granted scope is dropped: it would break the quoted header value.
+  const granted = grantedScopes(authInfo).filter(isScopeToken);
+  const [first, ...rest] = new Set([...granted, ...missing]);
+  return [first!, ...rest];
+}
+
 // Names of the tools that a parsed JSON-RPC message, or batch of messages, calls with `tools/call`.
 function toolCallNames(body: unknown): string[] {
   const messages: unknown[] = Array.isArray(body) ? body : [body];
@@ -60,8 +76,7 @@ function toolCallNames(body: unknown): string[] {
 
 /**
  * The `WWW-Authenticate` value of the 403 step-up challenge when `body` calls a tool that needs scopes `authInfo`
- * lacks, and `undefined` otherwise. The challenged scopes are the granted ones followed by the missing ones, so the
- * new grant keeps the old access.
+ * lacks, and `undefined` otherwise.
  * @see https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#scope-challenge-handling
  */
 export function scopeChallengeHeader({
@@ -76,9 +91,8 @@ export function scopeChallengeHeader({
       Object.hasOwn(toolScopes, name) ? toolScopes[name] : [],
     ),
   );
-  const missing = missingScopes(required, authInfo);
-  if (missing.length === 0) return undefined;
-  const scopes = [...new Set([...grantedScopes(authInfo), ...missing])];
+  const scopes = challengeScopes(required, authInfo);
+  if (scopes === undefined) return undefined;
   return `Bearer error="insufficient_scope", scope="${scopes.join(' ')}", resource_metadata="${resourceMetadataUrl}"`;
 }
 
