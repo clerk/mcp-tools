@@ -7,3 +7,5 @@ Add `@clerk/mcp-tools/create-browser-session`, whose `createBrowserSessionTool` 
 `isClerkAuthInfo` from `@clerk/mcp-tools/server` is now a type guard for the new exported `ClerkAuthInfo` type, and it also requires a non-empty `extra.userId`.
 
 `submitFeedbackTool` now also checks that `fetch` is a function when it is created, so a bad value fails at startup instead of on the first call.
+
+`submitFeedback` now throws a `Clerk error:` message for a blank `secretKey` before it sends a request, as `submitFeedbackTool` already did. `verifyClerkToken` now returns the `ClerkAuthInfo` type.
