@@ -25,7 +25,7 @@ export function toolAuthInfo(extra: McpToolExtra): AuthInfo | undefined {
 }
 
 /** The MCP SDK 2.1+ `scopeChallenge` registration option: the complete scope set to challenge for, or `undefined`. */
-export type McpScopeChallengeHandler = (context: {
+export type ScopeChallengeHandler = (context: {
   authInfo?: AuthInfo;
 }) => { scopes: readonly [string, ...string[]] } | undefined;
 
@@ -44,7 +44,7 @@ export type McpToolTuple<
     outputSchema: OutputSchema;
     annotations: ToolAnnotations;
     /** The MCP SDK 2.1+ step-up check, run before the callback. SDK versions before 2.1 ignore it. */
-    scopeChallenge?: McpScopeChallengeHandler;
+    scopeChallenge?: ScopeChallengeHandler;
   },
   callback: (
     input: z.infer<z.ZodObject<InputSchema>>,

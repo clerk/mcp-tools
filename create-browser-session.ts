@@ -16,7 +16,7 @@ import {
   toolError,
   toolResult,
 } from './mcp-tool';
-import { assertScopeTokens, missingScopes, registrationScopeChallenge } from './scope-challenge';
+import { assertScopeTokens, missingScopes, scopeChallengeFor } from './scope-challenge';
 import { isClerkAuthInfo } from './server';
 
 export const CREATE_BROWSER_SESSION_TOOL_NAME = 'create_browser_session';
@@ -425,7 +425,7 @@ export function createBrowserSessionTool(
       inputSchema: browserSessionInputSchema,
       outputSchema: browserSessionOutputSchema,
       annotations: OPEN_WORLD_WRITE_ANNOTATIONS,
-      scopeChallenge: registrationScopeChallenge(config.requiredScopes),
+      scopeChallenge: scopeChallengeFor(config.requiredScopes),
     },
     callback,
   ];

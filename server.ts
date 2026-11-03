@@ -154,6 +154,8 @@ export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is Cle
   return authInfo?.extra?.verifiedBy === 'clerk' && typeof userId === 'string' && userId !== '';
 }
 
+export { scopeChallengeFor, type ScopeChallengeHandler } from './scope-challenge';
+
 /**
  * CORS headers for OAuth metadata endpoints
  */

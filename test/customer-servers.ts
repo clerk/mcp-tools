@@ -8,8 +8,12 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
 import { createBrowserSessionTool } from '../create-browser-session';
+import { scopeChallengeFor } from '../server';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
+
+export const OWN_TOOL_NAME = 'list_projects';
+export const OWN_TOOL_SCOPES = ['projects:read'];
 
 /** Bearer tokens the servers accept, and the scopes each one grants. */
 export const TOKENS = {
@@ -20,7 +24,7 @@ export const TOKENS = {
 
 export type CustomerServer = { origin: string; mcpUrl: URL; close: () => Promise<void> };
 
-export type CustomerServerKind = 'v1-route' | 'v2-registration';
+export type CustomerServerKind = 'v1-route' | 'v2-registration' | 'v2-own-tool';
 
 type Listener = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -143,6 +147,29 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
       const authInfo = verify(bearer(req));
       if (!authInfo) return unauthorized(origin);
       // The tool's registration option makes the SDK send the step-up challenge.
+      return mcpHandler.fetch(req, {
+        authInfo: { ...authInfo, resourceMetadataUrl: resourceMetadataUrl(origin) },
+      });
+    });
+  },
+
+  // The customer's own tool, instrumented with `scopeChallengeFor`.
+  'v2-own-tool': (origin) => {
+    const mcpHandler = createMcpHandler(() => {
+      const server = new McpServerV2({ name: 'customer-own-tool', version: '0.0.0' });
+      server.registerTool(
+        OWN_TOOL_NAME,
+        {
+          description: 'Lists projects',
+          scopeChallenge: scopeChallengeFor(OWN_TOOL_SCOPES),
+        },
+        async () => ({ content: [{ type: 'text' as const, text: 'projects' }] }),
+      );
+      return server;
+    });
+    return fetchApp(origin, async (req) => {
+      const authInfo = verify(bearer(req));
+      if (!authInfo) return unauthorized(origin);
       return mcpHandler.fetch(req, {
         authInfo: { ...authInfo, resourceMetadataUrl: resourceMetadataUrl(origin) },
       });

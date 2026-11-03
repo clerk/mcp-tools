@@ -8,6 +8,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   type CustomerServer,
   type CustomerServerKind,
+  OWN_TOOL_NAME,
+  OWN_TOOL_SCOPES,
   REQUIRED_SCOPES,
   startCustomerServer,
   TOKENS,
@@ -103,6 +105,20 @@ describe('create_browser_session on a v1-route server (MCP SDK 1.x)', () => {
       `The token is missing required scopes: ${REQUIRED_SCOPES.join(', ')}`,
     );
     expect(redirects).toHaveLength(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('a customer tool with scopeChallengeFor on a v2-own-tool server (MCP SDK 2.1+)', () => {
+  test('steps up a token without the tool scopes, keeping the granted ones', async () => {
+    const { client, fetchImpl, redirects } = await connect('v2-own-tool', TOKENS.profileOnly.token);
+    await expect(client.callTool({ name: OWN_TOOL_NAME, arguments: {} })).rejects.toBeInstanceOf(
+      UnauthorizedError,
+    );
+    expect(redirects).toHaveLength(1);
+    expect(redirects[0]!.searchParams.get('scope')).toBe(
+      [...TOKENS.profileOnly.scopes, ...OWN_TOOL_SCOPES].join(' '),
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,10 @@
-// Internal scope helpers for the MCP step-up scope challenge. Not part of the package exports.
+// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` and `ScopeChallengeHandler` are public,
+// re-exported from `@clerk/mcp-tools/server`. This module is not a package entry point.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
-import type { McpScopeChallengeHandler } from './mcp-tool';
+import type { ScopeChallengeHandler } from './mcp-tool';
+
+export type { ScopeChallengeHandler };
 
 // An RFC 6749 scope-token: no space, `"`, `\`, or control character, so it fits a space-separated list and a quoted
 // `WWW-Authenticate` value.
@@ -47,13 +50,22 @@ function challengeScopes(
 }
 
 /**
- * The `scopeChallenge` registration option for a tool that needs `required`. MCP SDK 2.1+ calls it before the tool
- * runs and answers with the 403 step-up challenge. A request without auth info is left to the tool.
+ * The `scopeChallenge` registration option for a tool that needs `requiredScopes`. MCP SDK 2.1+ calls it before the
+ * tool runs and answers with the 403 step-up challenge for the granted scopes followed by the missing ones, so the
+ * new grant keeps the old access. A request without auth info is left to the tool. Earlier SDK versions ignore the
+ * option. Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
+ * Throws a `Clerk error:` message when `requiredScopes` is not an array of scope-tokens.
+ * @example
+ * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: scopeChallengeFor(['projects:read']) }, handler);
  */
-export function registrationScopeChallenge(required: readonly string[]): McpScopeChallengeHandler {
+export function scopeChallengeFor(requiredScopes: readonly string[]): ScopeChallengeHandler {
+  if (!Array.isArray(requiredScopes)) {
+    throw new Error('Clerk error: scopeChallengeFor requiredScopes must be an array of scopes');
+  }
+  assertScopeTokens('scopeChallengeFor', 'requiredScopes', requiredScopes);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
-    const scopes = challengeScopes(required, authInfo);
+    const scopes = challengeScopes(requiredScopes, authInfo);
     return scopes && { scopes };
   };
 }
