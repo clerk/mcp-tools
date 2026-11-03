@@ -5,6 +5,7 @@ export default defineConfig({
     'client.ts',
     'feedback.ts',
     'server.ts',
+    'create-browser-session.ts',
     'next/index.ts',
     'express/index.ts',
     'hono/index.ts',

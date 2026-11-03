@@ -2,12 +2,9 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
+import { type BackendApiClient, createBackendApiClient, requireSecretKey } from './backend-api';
+import { OPEN_WORLD_WRITE_ANNOTATIONS, toolError, toolResult } from './mcp-tool';
 import { isClerkAuthInfo } from './server';
-
-const DEFAULT_API_URL = 'https://api.clerk.com';
-
-// Well under MCP clients' own request timeouts, so a stalled API still gets the agent the "continue" message.
-const REQUEST_TIMEOUT_MS = 10_000;
 
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
@@ -123,20 +120,16 @@ export class FeedbackSubmissionError extends Error {
  */
 export async function submitFeedback(
   report: FeedbackReport,
-  { secretKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = fetch }: SubmitFeedbackOptions,
+  options: SubmitFeedbackOptions,
 ): Promise<SubmittedFeedback> {
-  if (!isAllowedApiUrl(apiUrl)) {
-    throw new Error('Clerk error: apiUrl must use HTTPS or loopback HTTP');
-  }
-  const response = await fetchImpl(new URL('/v1/feedback', apiUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${secretKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(report),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  return postFeedback(createBackendApiClient('submitFeedback', options), report);
+}
+
+async function postFeedback(
+  client: BackendApiClient,
+  report: FeedbackReport,
+): Promise<SubmittedFeedback> {
+  const response = await client.post('/v1/feedback', report);
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok || !isSubmittedFeedback(body)) {
     throw new FeedbackSubmissionError(response.status, body);
@@ -302,23 +295,9 @@ function source(
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
 // identity that verifyClerkToken produced.
 function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
-  const userId = authInfo?.extra?.userId;
-  if (!isClerkAuthInfo(authInfo) || typeof userId !== 'string') {
-    return {};
-  }
-  return { user_id: userId, client_id: authInfo?.clientId || undefined };
-}
-
-function isAllowedApiUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === 'https:' ||
-      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-    );
-  } catch {
-    return false;
-  }
+  return isClerkAuthInfo(authInfo)
+    ? { user_id: authInfo.extra.userId, client_id: authInfo.clientId || undefined }
+    : {};
 }
 
 // After a timeout, a lost connection, or an unreadable 2xx response, Clerk may already have stored the report.
@@ -334,11 +313,8 @@ function failureReason(error: unknown) {
   return error instanceof Error ? error.name : 'unknown error';
 }
 
-function toolError(text: string) {
-  return {
-    isError: true,
-    content: [{ type: 'text' as const, text: `${text} Do not retry; continue with the task.` }],
-  };
+function feedbackToolError(text: string) {
+  return toolError(`${text} Do not retry; continue with the task.`);
 }
 
 /**
@@ -348,43 +324,33 @@ function toolError(text: string) {
  * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
-  if (!options.secretKey?.trim()) {
-    throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
-  }
-  if (options.apiUrl !== undefined && !isAllowedApiUrl(options.apiUrl)) {
-    throw new Error('Clerk error: submitFeedbackTool apiUrl must use HTTPS or loopback HTTP');
-  }
+  requireSecretKey('submitFeedbackTool', options);
+  const client = createBackendApiClient('submitFeedbackTool', options);
 
   const callback: SubmitFeedbackToolCallback = async (input, extra) => {
     try {
-      const { id } = await submitFeedback(
-        {
-          ...input,
-          operation: input.operation && bareToolNames(input.operation),
-          source: source(extra, options.server),
-          reporter: reporter(extra),
-          ...identityFromAuthInfo(extra.http?.authInfo ?? extra.authInfo),
-        },
-        options,
-      );
+      const { id } = await postFeedback(client, {
+        ...input,
+        operation: input.operation && bareToolNames(input.operation),
+        source: source(extra, options.server),
+        reporter: reporter(extra),
+        ...identityFromAuthInfo(extra.http?.authInfo ?? extra.authInfo),
+      });
       const result = { feedback_id: id, received: true };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result) }],
-        structuredContent: result,
-      };
+      return toolResult(JSON.stringify(result), result);
     } catch (error) {
       const reason = failureReason(error);
       if (!wasRejected(error)) {
         console.error(
           `Clerk error: submit_feedback could not confirm the feedback was stored (${reason})`,
         );
-        return toolError('Feedback may not have been received.');
+        return feedbackToolError('Feedback may not have been received.');
       }
       console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
       if (error.status === 429) {
-        return toolError('Feedback limit reached for now.');
+        return feedbackToolError('Feedback limit reached for now.');
       }
-      return toolError('Feedback could not be sent.');
+      return feedbackToolError('Feedback could not be sent.');
     }
   };
 
@@ -395,12 +361,7 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
       description: SUBMIT_FEEDBACK_DESCRIPTION,
       inputSchema: submitFeedbackInputSchema,
       outputSchema: submitFeedbackOutputSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      annotations: OPEN_WORLD_WRITE_ANNOTATIONS,
     },
     callback,
   ];
