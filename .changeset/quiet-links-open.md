@@ -1,0 +1,9 @@
+---
+'@clerk/mcp-tools': minor
+---
+
+Add `@clerk/mcp-tools/create-browser-session`, whose `createBrowserSessionTool` gives agents a one-time link that opens your app signed in as the user. The tool sets the `scopeChallenge` registration option of MCP SDK 2.1 or later, so on those versions a token without its `requiredScopes` gets the step-up challenge. On earlier SDK versions the tool still works, and an under-scoped token gets the tool's own missing-scope error.
+
+`isClerkAuthInfo` from `@clerk/mcp-tools/server` is now a type guard for the new exported `ClerkAuthInfo` type, and it also requires a non-empty `extra.userId`.
+
+`submitFeedbackTool` now also checks that `fetch` is a function when it is created, so a bad value fails at startup instead of on the first call.
