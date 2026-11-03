@@ -116,7 +116,8 @@ const ERROR_COPY = {
   },
   unavailable: {
     message: 'Clerk could not create a sign-in link',
-    agent: () => 'Clerk could not create a sign-in link right now. Try again in a moment.',
+    agent: () =>
+      'Clerk could not create a sign-in link right now, and a link may already exist. Try again at most once, then continue without it or ask the user to sign in.',
   },
 } satisfies Record<
   BrowserSessionErrorCode,

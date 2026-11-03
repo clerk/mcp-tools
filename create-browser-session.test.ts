@@ -322,7 +322,7 @@ describe('browserSessionErrorMessage', () => {
     ['invalid_path', 'Use an absolute path such as /settings'],
     ['unauthorized', 'Do not retry'],
     ['rate_limited', 'Wait'],
-    ['unavailable', 'Try again in a moment'],
+    ['unavailable', 'Try again at most once'],
   ] as const)('tells the agent what to do for %s', (code, hint) => {
     expect(browserSessionErrorMessage(new BrowserSessionError(code, 'detail'))).toContain(hint);
   });
@@ -533,10 +533,10 @@ describe('createBrowserSessionTool', () => {
 
   test.each([
     ['a refusal before the API call', 'reconnect this MCP server', null, () => okFetch()],
-    ['an HTTP error', 'Try again in a moment', authInfo, () => statusFetch(500)],
+    ['an HTTP error', 'Try again at most once', authInfo, () => statusFetch(500)],
     [
       'a thrown fetch error',
-      'Try again in a moment',
+      'Try again at most once',
       authInfo,
       () =>
         vi.fn<typeof fetch>(async () => {
