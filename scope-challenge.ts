@@ -12,8 +12,8 @@ function isScopeToken(scope: unknown): scope is string {
 }
 
 /** Throws a `Clerk error:` message when `scopes` has a value that is not a scope-token. */
-export function assertScopeTokens(caller: string, option: string, scopes: Iterable<unknown>) {
-  if (![...scopes].every(isScopeToken)) {
+export function assertScopeTokens(caller: string, option: string, scopes: readonly unknown[]) {
+  if (!scopes.every(isScopeToken)) {
     throw new Error(
       `Clerk error: ${caller} ${option} must contain only scope tokens: no empty strings, spaces, quotes, backslashes, or control characters`,
     );
@@ -26,9 +26,9 @@ function grantedScopes(authInfo: AuthInfo): string[] {
 }
 
 /** The `required` scopes that `authInfo` lacks. The scope challenge and the tools' own checks share this rule. */
-export function missingScopes(required: Iterable<string>, authInfo: AuthInfo): string[] {
+export function missingScopes(required: readonly string[], authInfo: AuthInfo): string[] {
   const granted = grantedScopes(authInfo);
-  return [...required].filter((scope) => !granted.includes(scope));
+  return required.filter((scope) => !granted.includes(scope));
 }
 
 /**
@@ -36,7 +36,7 @@ export function missingScopes(required: Iterable<string>, authInfo: AuthInfo): s
  * followed by the missing ones, so the new grant keeps the old access.
  */
 function challengeScopes(
-  required: Iterable<string>,
+  required: readonly string[],
   authInfo: AuthInfo,
 ): [string, ...string[]] | undefined {
   const missing = missingScopes(required, authInfo);

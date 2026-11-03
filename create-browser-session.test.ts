@@ -356,12 +356,14 @@ describe('browserSessionErrorMessage', () => {
 });
 
 describe('createBrowserSessionTool', () => {
-  function connect(fetchImpl: typeof fetch, auth: AuthInfo | null = authInfo) {
+  function connect(
+    fetchImpl: typeof fetch,
+    auth: AuthInfo | null = authInfo,
+    extra: Partial<CreateBrowserSessionOptions> = {},
+  ) {
     return connectTool(
-      (server) => server.registerTool(...createBrowserSessionTool(options(fetchImpl))),
-      {
-        authInfo: auth ?? undefined,
-      },
+      (server) => server.registerTool(...createBrowserSessionTool(options(fetchImpl, extra))),
+      { authInfo: auth ?? undefined },
     );
   }
 
@@ -550,13 +552,7 @@ describe('createBrowserSessionTool', () => {
   });
 
   test('tells the agent which scopes to reconnect with', async () => {
-    const client = await connectTool(
-      (server) =>
-        server.registerTool(
-          ...createBrowserSessionTool(options(okFetch(), { requiredScopes: ['sign_in_link'] })),
-        ),
-      { authInfo },
-    );
+    const client = await connect(okFetch(), authInfo, { requiredScopes: ['sign_in_link'] });
     const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('sign_in_link');

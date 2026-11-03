@@ -12,7 +12,7 @@ import {
   startCustomerServer,
   TOKENS,
 } from './customer-servers';
-import { textOf } from './mcp-harness';
+import { sentBody, textOf } from './mcp-harness';
 
 const LINK = 'https://app.example.com/v1/tickets/accept?ticket=customer_ticket';
 
@@ -69,7 +69,7 @@ describe.each<CustomerServerKind>(['v1-route', 'v2-registration'])(
       expect(result.isError).toBeFalsy();
       expect(textOf(result)).toContain(LINK);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toMatchObject({
+      expect(sentBody(fetchImpl)).toMatchObject({
         on_behalf_of: { user_id: 'user_1' },
       });
     });
