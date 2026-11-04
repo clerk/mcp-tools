@@ -1,4 +1,5 @@
 import { getAuth } from '@clerk/hono';
+import type { MachineAuthObject } from '@clerk/backend';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -10,6 +11,14 @@ import {
   generateProtectedResourceMetadata,
   verifyClerkToken,
 } from '../server';
+import {
+  type McpAuthClerkOptions,
+  resolveMcpAuthClerkOptions,
+  tokenMatchesAudience,
+  withResourceMetadataUrl,
+} from '../mcp-auth-options';
+
+export type { McpAuthClerkOptions };
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -89,11 +98,56 @@ export function mcpAuth(
   };
 }
 
+/**
+ * Hono middleware that verifies the OAuth access token using Clerk, with no audience check. Prefer
+ * `createMcpAuthClerk`, which checks the audience and sets `resourceMetadataUrl`.
+ */
 export const mcpAuthClerk = mcpAuth(async (token, c) => {
   const authData = getAuth(c, { acceptsToken: 'oauth_token' });
   if (!authData.isAuthenticated) return undefined;
   return verifyClerkToken(authData, token);
 });
+
+/**
+ * Creates Hono middleware that enforces authentication for MCP requests: it verifies the OAuth access token using
+ * Clerk, refuses a token that was not issued for `audience` with `401`, and stores auth info that carries
+ * `resourceMetadataUrl` as `c.get('mcpAuth')`. Apply `clerkMiddleware()` first, as for `mcpAuthClerk`. Without an
+ * audience check, any OAuth token that your Clerk instance issued could call your tools. Throws a `Clerk error:`
+ * message when `audience` is missing or empty.
+ * The audience is also checked here for JWT access tokens (the `aud` claim must overlap `audience`), so an older Clerk
+ * SDK that ignores the `audience` option still cannot accept a token for another resource. Opaque tokens have no `aud`
+ * to read here, so only Clerk's check covers them, and that needs `@clerk/backend` 3.19.0 or later.
+ * @example
+ * ```ts
+ * const mcpHandler = createMcpHandler(createServer);
+ *
+ * app.use("/mcp", clerkMiddleware());
+ * app.all("/mcp", createMcpAuthClerk({ audience: "https://mcp.example.com/mcp" }), (c) =>
+ *   mcpHandler.fetch(c.req.raw, { authInfo: c.get("mcpAuth") }),
+ * );
+ * ```
+ */
+export function createMcpAuthClerk(options: McpAuthClerkOptions): MiddlewareHandler {
+  const { audience, resourceMetadataUrl } = resolveMcpAuthClerkOptions(options);
+  return mcpAuth(async (token, c) => {
+    const clerk = c.get('clerk');
+    if (!clerk) {
+      throw new Error(
+        'Clerk error: createMcpAuthClerk needs clerkMiddleware() to run before it, so that Clerk is set up for this request',
+      );
+    }
+    const requestState = await clerk.authenticateRequest(c.req.raw, {
+      acceptsToken: 'oauth_token',
+      audience,
+    });
+    const authData = requestState.toAuth() as unknown as MachineAuthObject<'oauth_token'>;
+    // The same token that Clerk verified and that goes into the auth info.
+    const authInfo = tokenMatchesAudience(token, audience)
+      ? verifyClerkToken(authData, token)
+      : undefined;
+    return authInfo && withResourceMetadataUrl(authInfo, resourceMetadataUrl ?? getPRMUrl(c));
+  });
+}
 
 export function streamableHttpHandler(createServer: () => McpServer) {
   return async (c: Context) => {

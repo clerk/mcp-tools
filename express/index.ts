@@ -1,4 +1,5 @@
-import { getAuth } from '@clerk/express';
+import { authenticateRequest, clerkClient, getAuth } from '@clerk/express';
+import type { MachineAuthObject } from '@clerk/backend';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -9,6 +10,14 @@ import {
   generateProtectedResourceMetadata,
   verifyClerkToken,
 } from '../server';
+import {
+  type McpAuthClerkOptions,
+  resolveMcpAuthClerkOptions,
+  tokenMatchesAudience,
+  withResourceMetadataUrl,
+} from '../mcp-auth-options';
+
+export type { McpAuthClerkOptions };
 
 /**
  * Express middleware that enforces authentication for MCP requests.
@@ -67,15 +76,16 @@ export async function mcpAuth(
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // @ts-expect-error - we're monkey patching this on purpose
-    req.auth = authData;
+    // Monkey patched on purpose: the MCP transports read `req.auth`, which Express does not declare for them.
+    (req as express.Request & { auth?: AuthInfo }).auth = authData;
 
     next();
   };
 }
 
 /**
- * Express middleware that enforces authentication for MCP requests and automatically verifies the OAuth access token using Clerk.
+ * Express middleware that enforces authentication for MCP requests and verifies the OAuth access token using Clerk,
+ * with no audience check. Prefer `createMcpAuthClerk`, which checks the audience and sets `resourceMetadataUrl`.
  * @example
  * ```ts
  * function createServer() {
@@ -106,6 +116,52 @@ export async function mcpAuthClerk(
       return verifyClerkToken(authData, token);
     })
   )(req, res, next);
+}
+
+/**
+ * Creates Express middleware that enforces authentication for MCP requests: it verifies the OAuth access token using
+ * Clerk, refuses a token that was not issued for `audience` with `401`, and stores auth info that carries
+ * `resourceMetadataUrl`. It sets `req.auth`, which `streamableHttpHandler` and the MCP SDK 2.x Node adapters read.
+ * It does not need `clerkMiddleware()`. Without an audience check, any OAuth token that your Clerk instance issued
+ * could call your tools. Throws a `Clerk error:` message when `audience` is missing or empty.
+ * The audience is also checked here for JWT access tokens (the `aud` claim must overlap `audience`), so an older Clerk
+ * SDK that ignores the `audience` option still cannot accept a token for another resource. Opaque tokens have no `aud`
+ * to read here, so only Clerk's check covers them, and that needs `@clerk/backend` 3.19.0 or later.
+ * @example
+ * ```ts
+ * import { toNodeHandler } from "@modelcontextprotocol/node";
+ * import { createMcpHandler } from "@modelcontextprotocol/server";
+ *
+ * const mcpHandler = toNodeHandler(createMcpHandler(createServer));
+ * const mcpAuth = createMcpAuthClerk({ audience: "https://mcp.example.com/mcp" });
+ *
+ * app.post("/mcp", mcpAuth, (req, res) => mcpHandler(req, res, req.body));
+ * ```
+ */
+export function createMcpAuthClerk(options: McpAuthClerkOptions) {
+  const { audience, resourceMetadataUrl } = resolveMcpAuthClerkOptions(options);
+  const middleware = mcpAuth(async (token, req: express.Request) => {
+    const requestState = await authenticateRequest({
+      clerkClient,
+      request: req,
+      options: { acceptsToken: 'oauth_token', audience },
+    });
+    const authData = requestState.toAuth() as unknown as MachineAuthObject<'oauth_token'>;
+    // The same token that Clerk verified and that goes into the auth info.
+    const authInfo = tokenMatchesAudience(token, audience)
+      ? verifyClerkToken(authData, token)
+      : undefined;
+    return authInfo && withResourceMetadataUrl(authInfo, resourceMetadataUrl ?? getPRMUrl(req));
+  });
+  return async (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): Promise<void> => {
+    await (
+      await middleware
+    )(req, res, next);
+  };
 }
 
 /**

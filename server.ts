@@ -144,7 +144,11 @@ export function verifyClerkToken(
 /**
  * Auth info produced by `verifyClerkToken`. `clientId` can be empty when the `AuthInfo` was built by hand.
  */
-export type ClerkAuthInfo = AuthInfo & { extra: { userId: string; verifiedBy: 'clerk' } };
+export type ClerkAuthInfo = AuthInfo & {
+  /** The protected resource metadata URL, which MCP SDK 2.1+ puts in the step-up challenge. */
+  resourceMetadataUrl?: string;
+  extra: { userId: string; verifiedBy: 'clerk' };
+};
 
 /**
  * Whether `authInfo` came from `verifyClerkToken`, so its `clientId` and `extra.userId` are Clerk ids.

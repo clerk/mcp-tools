@@ -25,6 +25,7 @@ import { getAuth } from '@clerk/hono';
 import { env } from 'hono/adapter';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { jwtWith } from '../test/jwt';
 import { generateClerkProtectedResourceMetadata } from '../server';
 
 import {
@@ -33,6 +34,7 @@ import {
   authServerMetadataHandlerClerk,
   mcpAuth,
   mcpAuthClerk,
+  createMcpAuthClerk,
   streamableHttpHandler,
 } from './index';
 
@@ -355,6 +357,132 @@ describe('mcpAuthClerk', () => {
       clientId: 'client-1',
       extra: { userId: 'user-1', verifiedBy: 'clerk' },
     });
+  });
+});
+
+describe('createMcpAuthClerk', () => {
+  const oauthAuth = {
+    isAuthenticated: true,
+    tokenType: 'oauth_token',
+    clientId: 'client-1',
+    scopes: ['email'],
+    userId: 'user-1',
+  };
+
+  // Stands in for what `clerkMiddleware` sets, and records how the token was verified.
+  function appWith(
+    options: Parameters<typeof createMcpAuthClerk>[0],
+    authObject: object = oauthAuth,
+  ) {
+    const authenticateRequest = vi.fn(async () => ({ toAuth: () => authObject }));
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      c.set('clerk', { authenticateRequest } as never);
+      await next();
+    });
+    app.post('/mcp', createMcpAuthClerk(options), (c) => c.json(c.get('mcpAuth')));
+    const post = (headers: Record<string, string> = { Authorization: 'Bearer valid-token' }) =>
+      app.request('https://mcp.example.com/mcp', { method: 'POST', headers });
+    return { post, authenticateRequest };
+  }
+
+  test.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['blank', '  '],
+    ['an empty list', []],
+    ['a list with an empty value', ['https://mcp.example.com/mcp', '']],
+    ['not a string', 42],
+  ])('throws when the audience is %s', (_name, audience) => {
+    expect(() => createMcpAuthClerk({ audience } as never)).toThrow(/^Clerk error: /);
+  });
+
+  test('throws when resourceMetadataUrl is not an HTTPS URL', () => {
+    expect(() =>
+      createMcpAuthClerk({ audience: 'a', resourceMetadataUrl: 'http://example.com/prm' }),
+    ).toThrow(/^Clerk error: .*resourceMetadataUrl/);
+  });
+
+  test('verifies the token for the audience as an OAuth token', async () => {
+    const { post, authenticateRequest } = appWith({
+      audience: ['https://mcp.example.com/mcp', 'x'],
+    });
+    expect((await post()).status).toBe(200);
+    expect(authenticateRequest).toHaveBeenCalledWith(expect.any(Request), {
+      acceptsToken: 'oauth_token',
+      audience: ['https://mcp.example.com/mcp', 'x'],
+    });
+  });
+
+  test('sets resourceMetadataUrl to the URL that the 401 advertises', async () => {
+    const { post } = appWith({ audience: 'https://mcp.example.com/mcp' });
+    expect(await (await post()).json()).toEqual({
+      token: 'valid-token',
+      scopes: ['email'],
+      clientId: 'client-1',
+      extra: { userId: 'user-1', verifiedBy: 'clerk' },
+      resourceMetadataUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp',
+    });
+  });
+
+  test('lets resourceMetadataUrl override the default', async () => {
+    const { post } = appWith({
+      audience: 'https://mcp.example.com/mcp',
+      resourceMetadataUrl: 'https://public.example.com/.well-known/oauth-protected-resource/mcp',
+    });
+    expect(await (await post()).json()).toMatchObject({
+      resourceMetadataUrl: 'https://public.example.com/.well-known/oauth-protected-resource/mcp',
+    });
+  });
+
+  test('answers 401 when Clerk does not authenticate the token', async () => {
+    const { post } = appWith({ audience: 'a' }, { isAuthenticated: false });
+    expect((await post()).status).toBe(401);
+  });
+
+  test('answers 401 with the metadata URL when there is no token', async () => {
+    const { post, authenticateRequest } = appWith({ audience: 'a' });
+    const res = await post({});
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe(
+      'Bearer resource_metadata=https://mcp.example.com/.well-known/oauth-protected-resource/mcp',
+    );
+    expect(authenticateRequest).not.toHaveBeenCalled();
+  });
+
+  describe('audience check of its own, when Clerk verification succeeds', () => {
+    const audience = 'https://mcp.example.com/mcp';
+    const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+    test.each([
+      ['has no aud', {}],
+      ['has an empty aud', { aud: '' }],
+      ['has an empty aud list', { aud: [] }],
+      ['is for another resource', { aud: 'https://other.example.com/mcp' }],
+    ])('answers 401 for a JWT that %s', async (_name, claims) => {
+      const { post } = appWith({ audience });
+      expect((await post(bearer(jwtWith(claims)))).status).toBe(401);
+    });
+
+    test('passes a JWT whose aud matches, with that token in the auth info', async () => {
+      const { post } = appWith({ audience });
+      const token = jwtWith({ aud: [audience, 'x'] });
+      const res = await post(bearer(token));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ token });
+    });
+  });
+
+  test('says that clerkMiddleware must run first', async () => {
+    const app = new Hono();
+    app.onError((error, c) => c.text(error.message, 500));
+    app.post('/mcp', createMcpAuthClerk({ audience: 'a' }), (c) => c.json({}));
+    const res = await app.request('https://mcp.example.com/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer t' },
+    });
+    expect(res.status).toBe(500);
+    expect(await res.text()).toMatch(/^Clerk error: .*clerkMiddleware/);
   });
 });
 
