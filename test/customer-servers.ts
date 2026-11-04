@@ -5,10 +5,17 @@ import type { AddressInfo } from 'node:net';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { clerkMiddleware } from '@clerk/hono';
+import { createMcpExpressApp } from '@modelcontextprotocol/express';
+import { createMcpHonoApp } from '@modelcontextprotocol/hono';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
 import { createBrowserSessionTool } from '../create-browser-session';
+import { createMcpAuthClerk as createMcpAuthClerkExpress } from '../express';
+import { createMcpAuthClerk as createMcpAuthClerkHono } from '../hono';
 import { scopeChallengeFor } from '../server';
+import { signAccessToken, useFakeClerk } from './fake-clerk';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
 
@@ -22,9 +29,25 @@ export const TOKENS = {
   full: { token: 'token_full', scopes: [...REQUIRED_SCOPES] },
 };
 
-export type CustomerServer = { origin: string; mcpUrl: URL; close: () => Promise<void> };
+export type CustomerServer = {
+  origin: string;
+  mcpUrl: URL;
+  /** The bearer token for `name`. The Express and Hono servers verify real signed tokens, so theirs name this server. */
+  token: (name: TokenName) => string;
+  close: () => Promise<void>;
+};
 
-export type CustomerServerKind = 'v1-route' | 'v2-registration' | 'v2-own-tool';
+export type TokenName = keyof typeof TOKENS | 'wrongAudience';
+
+export type CustomerServerKind =
+  | 'v1-route'
+  | 'v2-registration'
+  | 'v2-own-tool'
+  | 'express-v2'
+  | 'hono-v2';
+
+/** The kinds that verify tokens through `createMcpAuthClerk`, so Clerk's own verification runs. */
+const CLERK_VERIFIED_KINDS: readonly CustomerServerKind[] = ['express-v2', 'hono-v2'];
 
 type Listener = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -117,6 +140,15 @@ function fetchApp(origin: string, route: (req: Request) => Promise<Response>): L
   };
 }
 
+// A customer's MCP server instance for the SDK 2.x adapters, with `create_browser_session` registered.
+function createV2Handler(fetchImpl: typeof fetch) {
+  return createMcpHandler(() => {
+    const server = new McpServerV2({ name: 'customer-adapter', version: '0.0.0' });
+    server.registerTool(...createBrowserSessionTool(toolOptions(fetchImpl)));
+    return server;
+  });
+}
+
 const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch) => Listener> = {
   // SDK 1.x has no step-up: the route only verifies the token, and the tool refuses an under-scoped one itself.
   'v1-route': (origin, fetchImpl) =>
@@ -153,6 +185,32 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
     });
   },
 
+  // The README's Express setup: `createMcpAuthClerk` in front of the SDK 2.x Node adapter, which reads `req.auth`.
+  'express-v2': (origin, fetchImpl) => {
+    const mcpHandler = toNodeHandler(createV2Handler(fetchImpl));
+    const app = createMcpExpressApp();
+    app.get(/^\/\.well-known\//, async (req, res) => {
+      const document = metadata(origin, req.path);
+      if (document) await send(res, document);
+      else res.status(404).end();
+    });
+    app.post('/mcp', createMcpAuthClerkExpress({ audience: `${origin}/mcp` }), (req, res) =>
+      mcpHandler(req, res, req.body),
+    );
+    return app;
+  },
+
+  // The README's Hono setup: `clerkMiddleware` and `createMcpAuthClerk` in front of the SDK 2.x web-standard handler.
+  'hono-v2': (origin, fetchImpl) => {
+    const mcpHandler = createV2Handler(fetchImpl);
+    const app = createMcpHonoApp();
+    app.use('/mcp', clerkMiddleware());
+    app.all('/mcp', createMcpAuthClerkHono({ audience: `${origin}/mcp` }), (c) =>
+      mcpHandler.fetch(c.req.raw, { authInfo: c.get('mcpAuth') }),
+    );
+    return fetchApp(origin, (req) => Promise.resolve(app.fetch(req)));
+  },
+
   // The customer's own tool, instrumented with `scopeChallengeFor`.
   'v2-own-tool': (origin) => {
     const mcpHandler = createMcpHandler(() => {
@@ -182,6 +240,7 @@ export async function startCustomerServer(
   kind: CustomerServerKind,
   fetchImpl: typeof fetch,
 ): Promise<CustomerServer> {
+  if (CLERK_VERIFIED_KINDS.includes(kind)) await useFakeClerk();
   // Listen first: the app needs the origin for its metadata documents.
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -190,6 +249,16 @@ export async function startCustomerServer(
   return {
     origin,
     mcpUrl: new URL('/mcp', origin),
+    token: (name) => {
+      if (!CLERK_VERIFIED_KINDS.includes(kind)) {
+        if (name === 'wrongAudience') throw new Error(`${kind} does not check the audience`);
+        return TOKENS[name].token;
+      }
+      const resource = `${origin}/mcp`;
+      return name === 'wrongAudience'
+        ? signAccessToken({ aud: 'https://other.example.com/mcp', scopes: REQUIRED_SCOPES })
+        : signAccessToken({ aud: resource, scopes: TOKENS[name].scopes });
+    },
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.closeAllConnections();

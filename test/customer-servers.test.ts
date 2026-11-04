@@ -12,6 +12,7 @@ import {
   OWN_TOOL_SCOPES,
   REQUIRED_SCOPES,
   startCustomerServer,
+  type TokenName,
   TOKENS,
 } from './customer-servers';
 import { sentBody, textOf } from './mcp-harness';
@@ -47,11 +48,11 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
-async function connect(kind: CustomerServerKind, token: string) {
+async function connect(kind: CustomerServerKind, token: TokenName) {
   const fetchImpl = clerkFetch();
   const server = await startCustomerServer(kind, fetchImpl);
   servers.push(server);
-  const { provider, redirects } = authProvider(token);
+  const { provider, redirects } = authProvider(server.token(token));
   const client = new Client({ name: 'e2e', version: '0.0.0' });
   await client.connect(
     new StreamableHTTPClientTransport(server.mcpUrl, { authProvider: provider }),
@@ -62,11 +63,11 @@ async function connect(kind: CustomerServerKind, token: string) {
 const callBrowserSession = (client: Client) =>
   client.callTool({ name: 'create_browser_session', arguments: {} });
 
-describe.each<CustomerServerKind>(['v1-route', 'v2-registration'])(
+describe.each<CustomerServerKind>(['v1-route', 'v2-registration', 'express-v2', 'hono-v2'])(
   'create_browser_session on a %s server',
   (kind) => {
     test('creates the link when the token has the required scopes', async () => {
-      const { client, fetchImpl } = await connect(kind, TOKENS.full.token);
+      const { client, fetchImpl } = await connect(kind, 'full');
       const result = await callBrowserSession(client);
       expect(result.isError).toBeFalsy();
       expect(textOf(result)).toContain(LINK);
@@ -78,27 +79,74 @@ describe.each<CustomerServerKind>(['v1-route', 'v2-registration'])(
   },
 );
 
-describe('create_browser_session on a v2-registration server (MCP SDK 2.1+)', () => {
-  test('steps up a token without the required scopes, keeping the granted ones', async () => {
-    const { client, fetchImpl, redirects, server } = await connect(
-      'v2-registration',
-      TOKENS.profileOnly.token,
-    );
-    await expect(callBrowserSession(client)).rejects.toBeInstanceOf(UnauthorizedError);
-    expect(redirects).toHaveLength(1);
-    expect(redirects[0]!.origin + redirects[0]!.pathname).toBe(`${server.origin}/authorize`);
-    // The granted scope comes first, then the missing ones.
-    expect(redirects[0]!.searchParams.get('scope')).toBe(
-      [...TOKENS.profileOnly.scopes, ...REQUIRED_SCOPES].join(' '),
-    );
-    expect(redirects[0]!.searchParams.get('resource')).toBe(server.mcpUrl.href);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-});
+// `express-v2` and `hono-v2` are the README setups: `createMcpAuthClerk` in front of the MCP SDK 2.x adapters.
+describe.each<CustomerServerKind>(['v2-registration', 'express-v2', 'hono-v2'])(
+  'create_browser_session on a %s server (MCP SDK 2.1+)',
+  (kind) => {
+    test('steps up a token without the required scopes, keeping the granted ones', async () => {
+      const { client, fetchImpl, redirects, server } = await connect(kind, 'profileOnly');
+      await expect(callBrowserSession(client)).rejects.toBeInstanceOf(UnauthorizedError);
+      expect(redirects).toHaveLength(1);
+      expect(redirects[0]!.origin + redirects[0]!.pathname).toBe(`${server.origin}/authorize`);
+      // The granted scope comes first, then the missing ones.
+      expect(redirects[0]!.searchParams.get('scope')).toBe(
+        [...TOKENS.profileOnly.scopes, ...REQUIRED_SCOPES].join(' '),
+      );
+      expect(redirects[0]!.searchParams.get('resource')).toBe(server.mcpUrl.href);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  },
+);
+
+describe.each<CustomerServerKind>(['express-v2', 'hono-v2'])(
+  'createMcpAuthClerk on a %s server',
+  (kind) => {
+    async function post(server: CustomerServer, token?: string) {
+      return fetch(server.mcpUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...(token && { authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      });
+    }
+
+    async function start() {
+      const fetchImpl = clerkFetch();
+      const server = await startCustomerServer(kind, fetchImpl);
+      servers.push(server);
+      return { server, fetchImpl };
+    }
+
+    test('refuses a token that was issued for another resource with 401', async () => {
+      const { server, fetchImpl } = await start();
+      // Valid signature and scopes: only the audience differs.
+      expect((await post(server, server.token('wrongAudience'))).status).toBe(401);
+      expect((await post(server, server.token('full'))).status).toBe(200);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test('answers a request without a token with 401 and the metadata URL', async () => {
+      const { server } = await start();
+      const response = await post(server);
+      expect(response.status).toBe(401);
+      expect(response.headers.get('www-authenticate')).toBe(
+        `Bearer resource_metadata=${server.origin}/.well-known/oauth-protected-resource/mcp`,
+      );
+    });
+
+    test('refuses a token that is not a valid access token with 401', async () => {
+      const { server } = await start();
+      expect((await post(server, 'not_a_token')).status).toBe(401);
+    });
+  },
+);
 
 describe('create_browser_session on a v1-route server (MCP SDK 1.x)', () => {
   test('answers a token without the required scopes with the tool error and no step-up', async () => {
-    const { client, fetchImpl, redirects } = await connect('v1-route', TOKENS.profileOnly.token);
+    const { client, fetchImpl, redirects } = await connect('v1-route', 'profileOnly');
     const result = await callBrowserSession(client);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(
@@ -111,7 +159,7 @@ describe('create_browser_session on a v1-route server (MCP SDK 1.x)', () => {
 
 describe('a customer tool with scopeChallengeFor on a v2-own-tool server (MCP SDK 2.1+)', () => {
   test('steps up a token without the tool scopes, keeping the granted ones', async () => {
-    const { client, fetchImpl, redirects } = await connect('v2-own-tool', TOKENS.profileOnly.token);
+    const { client, fetchImpl, redirects } = await connect('v2-own-tool', 'profileOnly');
     await expect(client.callTool({ name: OWN_TOOL_NAME, arguments: {} })).rejects.toBeInstanceOf(
       UnauthorizedError,
     );

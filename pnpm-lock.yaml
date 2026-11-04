@@ -27,6 +27,15 @@ importers:
       '@clerk/nextjs':
         specifier: ^7.2.3
         version: 7.2.3(next@15.5.15(react-dom@19.1.0(react@19.1.0))(react@19.1.0))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      '@modelcontextprotocol/express':
+        specifier: 2.0.2
+        version: 2.0.2(@modelcontextprotocol/server@2.4.0)(express@5.2.1)
+      '@modelcontextprotocol/hono':
+        specifier: 2.0.2
+        version: 2.0.2(@modelcontextprotocol/server@2.4.0)(hono@4.12.14)
+      '@modelcontextprotocol/node':
+        specifier: 2.1.2
+        version: 2.1.2(@modelcontextprotocol/server@2.4.0)
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
@@ -386,6 +395,26 @@ packages:
   '@modelcontextprotocol/core@2.4.0':
     resolution: {integrity: sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q==}
     engines: {node: '>=20'}
+
+  '@modelcontextprotocol/express@2.0.2':
+    resolution: {integrity: sha512-lUvfV7gT/tgP8nLRs0ajUtgL+MlMNWWHAls5c9cf4PyBexq3EgmhWWrS4irQOC9OoKuUsHHcNjUw9urhHz542g==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.3.0
+      express: ^4.18.0 || ^5.0.0
+
+  '@modelcontextprotocol/hono@2.0.2':
+    resolution: {integrity: sha512-hXtSVm0S6d0EJWMVoaeAWevATQLzHrHiPuPBLxW5vM5OQJG+SFlm7D9iJT5cG3p84DDahCD4bAuqcCPdgNFAEw==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.3.0
+      hono: ^4.11.4
+
+  '@modelcontextprotocol/node@2.1.2':
+    resolution: {integrity: sha512-IIcIqBpr6NCQQs5DgJTgvbSOAw+3iaR/uquqg+e0nXCdudfjPg/80x0TseUnQx14AUAtE4fsJCEpJKPyb6WPVA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.4.0
 
   '@modelcontextprotocol/sdk@1.29.0':
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
@@ -2604,6 +2633,23 @@ snapshots:
   '@modelcontextprotocol/core@2.4.0':
     dependencies:
       zod: 4.6.7
+
+  '@modelcontextprotocol/express@2.0.2(@modelcontextprotocol/server@2.4.0)(express@5.2.1)':
+    dependencies:
+      '@modelcontextprotocol/server': 2.4.0
+      cors: 2.8.5
+      express: 5.2.1
+
+  '@modelcontextprotocol/hono@2.0.2(@modelcontextprotocol/server@2.4.0)(hono@4.12.14)':
+    dependencies:
+      '@modelcontextprotocol/server': 2.4.0
+      hono: 4.12.14
+
+  '@modelcontextprotocol/node@2.1.2(@modelcontextprotocol/server@2.4.0)':
+    dependencies:
+      '@hono/node-server': 1.19.14(hono@4.12.14)
+      '@modelcontextprotocol/server': 2.4.0
+      hono: 4.12.14
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.6.7)':
     dependencies:
