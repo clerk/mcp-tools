@@ -255,9 +255,9 @@ export { handler as GET, handler as POST, handler as DELETE };
 ```
 
 - Pass `browserSessionInstructions(destinationUrl)` as the server `instructions`. Some MCP clients, such as Codex, show agents only the server instructions until the agent searches for a tool, so without them an agent may open your app in a browser and stop at the sign-in page.
-- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. The `audience` option needs `@clerk/backend` 3.19.0, `@clerk/nextjs` 7.9.5, or `@clerk/express` 2.1.70 or later; older versions ignore it. The `mcpAuthClerk` helpers for Express and Hono do not check the audience, so add that check yourself before you register this tool behind them. To confirm that the check works, send a token that was issued to another OAuth application of the same instance, or for another resource: the MCP route must answer `401`.
+- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. The `audience` option needs `@clerk/backend` 3.19.0, `@clerk/nextjs` 7.9.5, or `@clerk/express` 2.1.70 or later; older versions ignore it. On Express and Hono, use `createMcpAuthClerk` (see [Express and Hono](#express-and-hono)): the older `mcpAuthClerk` helpers do not check the audience. To confirm that the check works, send a token that was issued to another OAuth application of the same instance, or for another resource: the MCP route must answer `401`.
 - Authenticate requests with `verifyClerkToken`, and set `requiredScopes` to the OAuth scopes the access token must carry. `requiredScopes` is required: pass `[]` when the tool needs no scope.
-- Step-up authorization (a `403` challenge that makes the MCP client ask the user to approve more scopes) needs `@modelcontextprotocol/server` 2.1 or later. The tool sets the SDK's `scopeChallenge` registration option, and you must pass `resourceMetadataUrl` on `authInfo`, as above; without it the challenge has no `resource_metadata`. The challenge asks for the token's granted scopes plus the missing ones, so the new grant does not drop access that other tools need. The SDK's own `requireScopes` helper challenges for the listed scopes only.
+- Step-up authorization (a `403` challenge that makes the MCP client ask the user to approve more scopes) needs `@modelcontextprotocol/server` 2.1 or later. On `@modelcontextprotocol/server` 2.0 the tool logs one `Clerk warning:` per tool and still returns its own error. The tool sets the SDK's `scopeChallenge` registration option, and you must pass `resourceMetadataUrl` on `authInfo`, as above; without it the challenge has no `resource_metadata`. The challenge asks for the token's granted scopes plus the missing ones, so the new grant does not drop access that other tools need. The SDK's own `requireScopes` helper challenges for the listed scopes only.
 - On `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` versions before 2.1 the tool still registers and works, but there is no step-up. A token without the required scopes gets the tool's own error, which tells the agent to ask the user to reconnect the MCP server and approve those scopes. The tool refuses before it calls Clerk. `createBrowserSessionTool` also throws a `Clerk error:` message when a scope is not a valid OAuth scope token.
 - Your MCP server and your app must use the same Clerk instance. `secretKey` is that instance's secret key (`sk_...`), and `destinationUrl` must be on a domain of that instance.
 - The agent can pass an absolute `path` such as `/settings` (with optional query and hash). It replaces the path of `destinationUrl`, and the tool refuses anything that would leave the app.
@@ -265,6 +265,77 @@ export { handler as GET, handler as POST, handler as DELETE };
 - Optional settings: `sessionMaxDurationInSeconds` sets the maximum length, in seconds, of the session the link starts. Clerk's default is 30 minutes, and a larger value makes the session longer. `agentName`, `apiUrl`, and `fetch` are also available. Requests to Clerk time out after 10 seconds.
 - To create a link outside of an MCP tool, use `createBrowserSession({ authInfo, path, taskDescription }, options)` from the same module. It resolves to `{ url, agentTaskId, redirectUrl }`. Use `validateBrowserSessionOptions(options)` to check the options at startup. When it throws a `BrowserSessionError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`), and `browserSessionErrorMessage(error)` returns the message the tool gives the agent.
 - The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs; with SDK 2.x, install `zod` 4.
+
+##### Express and Hono
+
+The `streamableHttpHandler` helpers for Express and Hono run on `@modelcontextprotocol/sdk` 1.x, which cannot send the step-up challenge. For this tool, serve MCP through the official `@modelcontextprotocol/server` 2.1 or later adapters, behind `createMcpAuthClerk`. It verifies the OAuth token with an `audience` check (a token for another resource gets `401`) and puts `resourceMetadataUrl` on the auth info, so you do not set either one yourself. Serve the protected resource metadata as in the Next.js setup above, with `resource` equal to `audience`. `createMcpAuthClerk` also reads the `aud` claim of a JWT access token itself, after Clerk verified it, and answers `401` unless `aud` overlaps `audience`, so a Clerk SDK older than the `audience` fix cannot let a token for another resource through. An opaque access token has no `aud` to read, so only Clerk's check covers it, and that needs `@clerk/backend` 3.19.0 or later (`@clerk/express` 2.1.70 or later). `createMcpAuthClerk` throws a `Clerk error:` message when `audience` is missing or empty. Pass `resourceMetadataUrl` only to replace the default, which is the URL the `401` response advertises; set it when a proxy changes the host or protocol seen by your server.
+
+Install `@modelcontextprotocol/server`, the adapters you use, `@modelcontextprotocol/express` and `@modelcontextprotocol/node` for Express or `@modelcontextprotocol/hono` for Hono. Express needs no `clerkMiddleware()`, but it reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` from the environment. The same `createBrowserSessionTool` registration works in both:
+
+```ts
+// Express
+import { createMcpExpressApp } from '@modelcontextprotocol/express';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import {
+  browserSessionInstructions,
+  createBrowserSessionTool,
+} from '@clerk/mcp-tools/create-browser-session';
+import { createMcpAuthClerk } from '@clerk/mcp-tools/express';
+
+const MCP_RESOURCE_URL = 'https://mcp.example.com/mcp';
+const browserSession = {
+  secretKey: process.env.CLERK_SECRET_KEY!,
+  destinationUrl: 'https://app.example.com/',
+  requiredScopes: ['email', 'user:org:read'],
+};
+
+const mcpHandler = toNodeHandler(
+  createMcpHandler(() => {
+    const server = new McpServer(
+      { name: 'my-server', version: '1.0.0' },
+      { instructions: browserSessionInstructions(browserSession.destinationUrl) },
+    );
+    server.registerTool(...createBrowserSessionTool(browserSession));
+    return server;
+  }),
+);
+
+const app = createMcpExpressApp();
+app.post('/mcp', createMcpAuthClerk({ audience: MCP_RESOURCE_URL }), (req, res) =>
+  mcpHandler(req, res, req.body),
+);
+```
+
+```ts
+// Hono
+import { clerkMiddleware } from '@clerk/hono';
+import { createMcpHonoApp } from '@modelcontextprotocol/hono';
+import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import {
+  browserSessionInstructions,
+  createBrowserSessionTool,
+} from '@clerk/mcp-tools/create-browser-session';
+import { createMcpAuthClerk } from '@clerk/mcp-tools/hono';
+
+const mcpHandler = createMcpHandler(() => {
+  const server = new McpServer(
+    { name: 'my-server', version: '1.0.0' },
+    { instructions: browserSessionInstructions(browserSession.destinationUrl) },
+  );
+  server.registerTool(...createBrowserSessionTool(browserSession));
+  return server;
+});
+
+const app = createMcpHonoApp();
+// The Hono helper reads the Clerk client that clerkMiddleware sets.
+app.use('/mcp', clerkMiddleware());
+app.all('/mcp', createMcpAuthClerk({ audience: MCP_RESOURCE_URL }), (c) =>
+  mcpHandler.fetch(c.req.raw, { authInfo: c.get('mcpAuth') }),
+);
+```
+
+`browserSession` and `MCP_RESOURCE_URL` are the same in both. Test the audience check as described in the list above. Without `clerkMiddleware()`, the Hono helper throws a `Clerk error:` message on the first request.
 
 ### Guide: building a client
 

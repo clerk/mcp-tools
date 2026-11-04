@@ -94,6 +94,26 @@ Middleware that enforces authentication for MCP requests. Extracts the bearer to
 
 Pre-configured middleware that verifies tokens using Clerk. Requires `clerkMiddleware()` to be mounted and `CLERK_PUBLISHABLE_KEY` to be set.
 
+It does not check which resource the token was issued for. Use `createMcpAuthClerk` when your tools act on the user's behalf.
+
+### `createMcpAuthClerk({ audience, resourceMetadataUrl? })`
+
+Creates the same kind of middleware as `mcpAuthClerk`, with an audience check. A token that was not issued for `audience` (your MCP server's resource URL, or an array of them) gets `401`. Clerk checks the audience, and the middleware also checks the `aud` claim of a JWT access token itself, so older Clerk SDKs that ignore `audience` still fail closed. Opaque tokens have no `aud` to read locally, so only Clerk's check covers them (needs `@clerk/backend` 3.19.0 or later). The auth info it stores as `c.get('mcpAuth')` carries `resourceMetadataUrl`, by default the protected resource metadata URL that the `401` response advertises, so that MCP SDK 2.1 or later can send the step-up challenge. Requires `clerkMiddleware()` to be mounted first, and throws a `Clerk error:` message when `audience` is missing or empty. To serve MCP with step-up, pass the auth info to the `@modelcontextprotocol/server` handler:
+
+```ts
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import { createMcpAuthClerk } from '@clerk/mcp-tools/hono';
+
+const mcpHandler = createMcpHandler(createServer);
+
+app.use('/mcp', clerkMiddleware());
+app.all('/mcp', createMcpAuthClerk({ audience: 'https://mcp.example.com/mcp' }), (c) =>
+  mcpHandler.fetch(c.req.raw, { authInfo: c.get('mcpAuth') }),
+);
+```
+
+See [Signed-in browser links for agents](../README.md#express-and-hono) for a complete setup.
+
 ### `protectedResourceHandler({ authServerUrl, properties? })`
 
 Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728). Derives the resource URL from the current request path.
