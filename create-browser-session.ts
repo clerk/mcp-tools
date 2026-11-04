@@ -10,6 +10,7 @@ import {
   safeErrorName,
 } from './backend-api';
 import {
+  isSdkV2Extra,
   type McpToolTuple,
   OPEN_WORLD_WRITE_ANNOTATIONS,
   toolAuthInfo,
@@ -387,6 +388,7 @@ export function createBrowserSessionTool(
   options: CreateBrowserSessionOptions,
 ): CreateBrowserSessionTool {
   const config = resolveBrowserSessionConfig(options);
+  let warnedStepUpUnsupported = false;
 
   const callback: CreateBrowserSessionTool[2] = async (input, extra) => {
     try {
@@ -405,6 +407,17 @@ export function createBrowserSessionTool(
       });
     } catch (error) {
       if (error instanceof BrowserSessionError) {
+        if (
+          error.code === 'insufficient_scope' &&
+          isSdkV2Extra(extra) &&
+          !warnedStepUpUnsupported
+        ) {
+          // SDK 2.1+ answers a missing scope with the step-up challenge before this callback runs, so this is SDK 2.0.
+          warnedStepUpUnsupported = true;
+          console.warn(
+            'Clerk warning: createBrowserSession found the token missing required scopes and returned a tool error. @modelcontextprotocol/server 2.1 or later sends the step-up challenge for missing scopes, so the user can approve them. Upgrade @modelcontextprotocol/server to 2.1 or later.',
+          );
+        }
         // The path is agent input and stays out of the log; `detail` holds only safe text.
         console.error(`Clerk error: createBrowserSession failed (${error.detail ?? error.code})`);
         return toolError(browserSessionErrorMessage(error));

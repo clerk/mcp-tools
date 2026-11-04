@@ -24,6 +24,14 @@ export function toolAuthInfo(extra: McpToolExtra): AuthInfo | undefined {
   return extra.http?.authInfo ?? extra.authInfo;
 }
 
+/**
+ * Whether a tool call has the MCP SDK 2.x shape (`extra.http`, which the 1.x SDK never sets). A tool that finds its
+ * scopes missing in this shape is on SDK 2.0: 2.1+ answers with the step-up challenge before the callback runs.
+ */
+export function isSdkV2Extra(extra: McpToolExtra): boolean {
+  return extra.http !== undefined;
+}
+
 /** The MCP SDK 2.1+ `scopeChallenge` registration option: the complete scope set to challenge for, or `undefined`. */
 export type ScopeChallengeHandler = (context: {
   authInfo?: AuthInfo;

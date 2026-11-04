@@ -427,6 +427,61 @@ describe('createBrowserSessionTool', () => {
     });
   });
 
+  describe('step-up warning', () => {
+    // The callback only sees missing scopes on MCP SDK 2.0: 2.1+ answers with the step-up challenge before it runs.
+    const v2Extra = (auth: AuthInfo) => ({ http: { authInfo: auth } });
+    const missing = {
+      ...authInfo,
+      scopes: ['profile'],
+      extra: { ...authInfo.extra, userId: 'user_SECRET' },
+    };
+
+    function warned() {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      return vi.spyOn(console, 'warn').mockImplementation(() => {});
+    }
+
+    test('warns once per tool when an SDK 2.x request is missing scopes', async () => {
+      const consoleWarn = warned();
+      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      const first = await tool[2]({}, v2Extra(missing));
+      await tool[2]({}, v2Extra(missing));
+      // The tool error still goes to the agent.
+      expect(first.isError).toBe(true);
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
+      const [message] = consoleWarn.mock.calls[0]!;
+      expect(message).toMatch(/^Clerk warning: /);
+      expect(message).toContain('@modelcontextprotocol/server');
+      expect(message).toContain('2.1');
+      expect(message).not.toMatch(/user_SECRET|email|https?:/);
+    });
+
+    test('warns once for each tool instance', async () => {
+      const consoleWarn = warned();
+      for (let i = 0; i < 2; i++) {
+        const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+        await tool[2]({}, v2Extra(missing));
+      }
+      expect(consoleWarn).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not warn on the SDK 1.x shape, where the tool error is expected', async () => {
+      const consoleWarn = warned();
+      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      const result = await tool[2]({}, { authInfo: missing });
+      expect(result.isError).toBe(true);
+      expect(consoleWarn).not.toHaveBeenCalled();
+    });
+
+    test('does not warn when every scope is present', async () => {
+      const consoleWarn = warned();
+      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      const result = await tool[2]({}, v2Extra({ ...authInfo, scopes: ['email'] }));
+      expect(result.isError).toBeUndefined();
+      expect(consoleWarn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('logging', () => {
     const redirectUrlErrors = {
       errors: [{ code: 'form_param_value_invalid', meta: { param_name: 'redirect_url' } }],
