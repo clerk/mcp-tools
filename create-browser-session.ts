@@ -174,7 +174,8 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
   return {
     client,
     destination,
-    requiredScopes: options.requiredScopes,
+    // A frozen copy: the caller emptying its array later must not turn the check off.
+    requiredScopes: Object.freeze([...options.requiredScopes]),
     agentName: options.agentName,
     sessionMaxDurationInSeconds: seconds,
   };

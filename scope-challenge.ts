@@ -63,9 +63,11 @@ export function scopeChallengeFor(requiredScopes: readonly string[]): ScopeChall
     throw new Error('Clerk error: scopeChallengeFor requiredScopes must be an array of scopes');
   }
   assertScopeTokens('scopeChallengeFor', 'requiredScopes', requiredScopes);
+  // A frozen copy: the caller emptying its array later must not turn the check off.
+  const required = Object.freeze([...requiredScopes]);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
-    const scopes = challengeScopes(requiredScopes, authInfo);
+    const scopes = challengeScopes(required, authInfo);
     return scopes && { scopes };
   };
 }

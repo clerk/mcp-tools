@@ -405,6 +405,28 @@ describe('createBrowserSessionTool', () => {
     );
   });
 
+  describe('required scopes', () => {
+    test('the tool keeps requiring the scopes after the array is emptied', async () => {
+      const scopes = ['a', 'b'];
+      const fetchImpl = okFetch();
+      const create = createBrowserSessionTool(options(fetchImpl, { requiredScopes: scopes }));
+      scopes.length = 0;
+      const result = await create[2]({}, { authInfo: { ...authInfo, scopes: ['a'] } });
+      expect(result.isError).toBe(true);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test('the registered scope challenge keeps the scopes after the array is emptied', () => {
+      const scopes = ['a'];
+      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: scopes }));
+      scopes.length = 0;
+      const config = tool[1] as { scopeChallenge?: (c: { authInfo?: AuthInfo }) => unknown };
+      expect(config.scopeChallenge?.({ authInfo: { ...authInfo, scopes: [] } })).toEqual({
+        scopes: ['a'],
+      });
+    });
+  });
+
   describe('logging', () => {
     const redirectUrlErrors = {
       errors: [{ code: 'form_param_value_invalid', meta: { param_name: 'redirect_url' } }],
@@ -481,6 +503,34 @@ describe('createBrowserSessionTool', () => {
       });
       expect(await callLogged(fetchImpl)).toBe(
         'Clerk error: createBrowserSession failed (TypeError)',
+      );
+    });
+
+    test.each(['TypeError.sk_test_abc', 'Error_pk_live_abc'])(
+      'leaves the error name %s, which embeds a key shape, out of the log',
+      async (name) => {
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+          const error = new Error('boom');
+          error.name = name;
+          throw error;
+        });
+        expect(await callLogged(fetchImpl)).toBe(
+          'Clerk error: createBrowserSession failed (unknown error)',
+        );
+      },
+    );
+
+    test('leaves a response code that embeds a key shape out of the log', async () => {
+      const body = { errors: [{ code: 'form_param_sk_live_abc' }] };
+      expect(await callLogged(statusFetch(422, body))).toBe(
+        'Clerk error: createBrowserSession failed (status 422)',
+      );
+    });
+
+    test('keeps a response code that only contains the letters of a key prefix', async () => {
+      const body = { errors: [{ code: 'task_description', meta: { param_name: 'desk_id' } }] };
+      expect(await callLogged(statusFetch(422, body))).toBe(
+        'Clerk error: createBrowserSession failed (status 422: task_description desk_id)',
       );
     });
 

@@ -33,8 +33,10 @@ export function parseAllowedUrl(value: string): URL | undefined {
 
 // Error codes, parameter names, and error names are identifiers. Anything else in them (a proxy's text, the link)
 // is dropped before it is logged.
-// Clerk key shapes (`sk_...`, `pk_...`) also match the identifier shape, so they are refused by prefix.
-export const IDENTIFIER_PATTERN = /^(?![sp]k_)[a-z][a-z0-9_.]{0,63}$/i;
+// Clerk key shapes (`sk_test_...`, `pk_live_...`) also match the identifier shape, so they are refused at the start
+// and after any `.` or `_` boundary. A plain substring such as `task_description` is not a key shape.
+export const IDENTIFIER_PATTERN =
+  /^(?![sp]k_)(?!.*[._][sp]k_(?:test|live)_)[a-z][a-z0-9_.]{0,63}$/i;
 
 /**
  * The name of `error` when it is safe to log, and `'unknown error'` otherwise. Only the name: a custom `fetch` can

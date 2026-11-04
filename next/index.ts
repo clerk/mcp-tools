@@ -7,6 +7,7 @@ import {
   generateProtectedResourceMetadata,
   scopeChallengeFor,
   verifyClerkToken,
+  type ScopeChallengeHandler,
 } from '../server';
 
 /**
@@ -149,3 +150,4 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
 
 // re-export the verifyClerkToken function for convenience
 export { scopeChallengeFor, verifyClerkToken };
+export type { ScopeChallengeHandler };

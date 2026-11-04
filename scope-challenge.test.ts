@@ -50,6 +50,15 @@ describe('scopeChallengeFor', () => {
     },
   );
 
+  test('keeps the scopes it was created with when the caller empties the array', () => {
+    const scopes = ['projects:read'];
+    const challenge = scopeChallengeFor(scopes);
+    scopes.length = 0;
+    expect(challenge({ authInfo: auth(['profile']) })).toEqual({
+      scopes: ['profile', 'projects:read'],
+    });
+  });
+
   test('throws for a required scopes value that is not an array', () => {
     expect(() => scopeChallengeFor('projects:read' as never)).toThrow(
       /^Clerk error: scopeChallengeFor requiredScopes must be an array/,
