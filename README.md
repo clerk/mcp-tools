@@ -793,7 +793,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 - `scopeChallengeFor`
   - **Description:** Builds the `scopeChallenge` registration option of MCP SDK 2.1 or later for a tool that needs `requiredScopes`. Before the tool runs, the SDK answers a token that lacks some of them with a `403` step-up challenge for the granted scopes followed by the missing ones. A request without auth info is left to the tool. Earlier SDK versions ignore the option. See [Step-up for your own tools](#step-up-for-your-own-tools).
   - **Params:** `requiredScopes: readonly string[]`
-  - **Returns:** `ScopeChallengeHandler` (also exported), which is `(context: { authInfo?: AuthInfo }) => { scopes: [string, ...string[]] } | undefined`
+  - **Returns:** `ScopeChallengeHandler` (also exported), which is `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`
 
 - `corsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
