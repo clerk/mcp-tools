@@ -35,7 +35,7 @@ function startServer() {
     const server = new McpServer({ name: 'customer', version: '0.0.0' });
     server.registerTool(
       'list_projects',
-      { description: 'Lists projects', scopeChallenge: scopeChallengeFor(TOOL_SCOPES) },
+      { description: 'Lists projects', scopeChallenge: scopeChallengeFor(...TOOL_SCOPES) },
       async () => {
         toolCalls();
         return { content: [{ type: 'text' as const, text: 'projects' }] };

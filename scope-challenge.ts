@@ -1,9 +1,9 @@
-// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` and `ScopeChallengeHandler` are public,
-// re-exported from `@clerk/mcp-tools/server`. This module is not a package entry point.
+// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` is public, re-exported from
+// `@clerk/mcp-tools/server`. This module is not a package entry point.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
-/** The MCP SDK 2.1+ `scopeChallenge` registration option: the complete scope set to challenge for, or `undefined`. */
-export type ScopeChallengeHandler = (context: {
+// Assignable to the SDK 2.1+ `ScopeChallengeHandler`, which this package cannot import: SDK 2.x is not a dependency.
+type ScopeChallengeHandler = (context: {
   authInfo?: AuthInfo;
 }) => { scopes: readonly [string, ...string[]] } | undefined;
 
@@ -53,22 +53,20 @@ function challengeScopes(
 /**
  * The `scopeChallenge` registration option for a tool that needs `requiredScopes`. MCP SDK 2.1+ calls it before the
  * tool runs and answers with the 403 step-up challenge for the granted scopes followed by the missing ones, so the
- * new grant keeps the old access. A request without auth info is left to the tool. Earlier SDK versions ignore the
- * option. Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
- * Throws a `Clerk error:` message when `requiredScopes` is not an array of scope-tokens.
+ * new grant keeps the old access. A request without auth info is left to the tool. MCP SDK 1.x has no such option.
+ * Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
+ * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
  * @example
- * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: scopeChallengeFor(['projects:read']) }, handler);
+ * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: scopeChallengeFor('projects:read') }, handler);
  */
-export function scopeChallengeFor(requiredScopes: readonly string[]): ScopeChallengeHandler {
-  if (!Array.isArray(requiredScopes)) {
-    throw new Error('Clerk error: scopeChallengeFor requiredScopes must be an array of scopes');
+export function scopeChallengeFor(...requiredScopes: string[]): ScopeChallengeHandler {
+  if (requiredScopes.length === 0) {
+    throw new Error('Clerk error: scopeChallengeFor needs at least one scope');
   }
   assertScopeTokens('scopeChallengeFor', 'requiredScopes', requiredScopes);
-  // A frozen copy: the caller emptying its array later must not turn the check off.
-  const required = Object.freeze([...requiredScopes]);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
-    const scopes = challengeScopes(required, authInfo);
+    const scopes = challengeScopes(requiredScopes, authInfo);
     return scopes && { scopes };
   };
 }
