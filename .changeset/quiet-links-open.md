@@ -12,6 +12,6 @@ Add `@clerk/mcp-tools/create-browser-session`, whose `createBrowserSessionTool` 
 
 `@clerk/mcp-tools/server` and `@clerk/mcp-tools/next` now export `scopeChallengeFor` (and the `ScopeChallengeHandler` type). It builds the `scopeChallenge` registration option of MCP SDK 2.1 or later from the scopes a tool needs, so any tool can send the step-up challenge.
 
-`createBrowserSessionTool` and `createBrowserSession` take a new `restricted` option, `true` by default, that limits the session the link starts to reads and refreshing its own session token. Clerk must confirm the restriction in its response: otherwise no link is returned and the error code is the new `restricted_not_applied`. Pass `restricted: false` for an ordinary session.
+`createBrowserSessionTool` and `createBrowserSession` take a new `restricted` option, `true` by default, that limits the session the link starts to reads and refreshing its own session token. Clerk must confirm the restriction in its response: otherwise no link is returned and the error code is the new `restricted_not_applied`. When Clerk does not confirm it, the tool also revokes the new session link on a best-effort basis. Pass `restricted: false` for an ordinary session.
 
 On MCP SDK 2.0, where a missing scope reaches the tool instead of the step-up challenge, the tool now logs one `Clerk warning:` per tool that says to upgrade `@modelcontextprotocol/server` to 2.1 or later.

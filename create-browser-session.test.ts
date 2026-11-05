@@ -126,8 +126,48 @@ describe('createBrowserSession', () => {
     expect(textOf(result)).toContain('Do not retry');
     expect(consoleError).toHaveBeenCalledTimes(1);
     expect(consoleError.mock.calls[0]![0]).toBe(
-      'Clerk error: createBrowserSession failed (restricted_not_applied)',
+      'Clerk error: createBrowserSession failed (agent_task_id agttsk_1)',
     );
+  });
+
+  describe('revoke on refusal', () => {
+    function revokeCalls(fetchImpl: ReturnType<typeof okFetch>) {
+      return fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/revoke'));
+    }
+
+    test('revokes the task Clerk created when it does not confirm the restriction', async () => {
+      const fetchImpl = okFetch({ restricted: false });
+      await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
+        browserSessionError('restricted_not_applied'),
+      );
+      const calls = revokeCalls(fetchImpl);
+      expect(calls).toHaveLength(1);
+      expect(String(calls[0]![0])).toBe('https://api.clerk.test/v1/agents/tasks/agttsk_1/revoke');
+      expect(calls[0]![1]?.method).toBe('POST');
+    });
+
+    test('still refuses when the revoke fails', async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+        if (String(url).endsWith('/revoke')) throw new TypeError('network down');
+        return Response.json({ url: LINK, agent_task_id: 'agttsk_1', restricted: false });
+      });
+      await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
+        browserSessionError('restricted_not_applied'),
+      );
+      expect(revokeCalls(fetchImpl)).toHaveLength(1);
+    });
+
+    test('does not revoke when the restriction is confirmed', async () => {
+      const fetchImpl = okFetch();
+      await createBrowserSession({ authInfo }, options(fetchImpl));
+      expect(revokeCalls(fetchImpl)).toHaveLength(0);
+    });
+
+    test('does not revoke when restricted is false', async () => {
+      const fetchImpl = okFetch({ restricted: undefined });
+      await createBrowserSession({ authInfo }, options(fetchImpl, { restricted: false }));
+      expect(revokeCalls(fetchImpl)).toHaveLength(0);
+    });
   });
 
   test('uses the agent name option, task description, and path', async () => {
@@ -476,29 +516,17 @@ describe('createBrowserSessionTool', () => {
       return vi.spyOn(console, 'warn').mockImplementation(() => {});
     }
 
-    test('warns once per tool when an SDK 2.x request is missing scopes', async () => {
+    test('warns once per tool, with a message that carries no request data', async () => {
       const consoleWarn = warned();
       const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
-      const first = await tool[2]({}, v2Extra(missing));
+      const first = await tool[2]({}, v2Extra({ ...missing, token: 'TOKEN_SECRET' }));
       await tool[2]({}, v2Extra(missing));
       // The tool error still goes to the agent.
       expect(first.isError).toBe(true);
       expect(consoleWarn).toHaveBeenCalledTimes(1);
-      const [message] = consoleWarn.mock.calls[0]!;
-      expect(message).toMatch(/^Clerk warning: /);
-      expect(message).toContain('@modelcontextprotocol/server');
-      expect(message).toContain('2.1');
-      expect(message).not.toMatch(/user_SECRET|email|https?:/);
-    });
-
-    test('names the SDK version to upgrade to', async () => {
-      const consoleWarn = warned();
-      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
-      await tool[2]({}, v2Extra({ ...missing, token: 'TOKEN_SECRET' }));
-      const [message] = consoleWarn.mock.calls[0]!;
-      expect(message).toContain('@modelcontextprotocol/server 2.1');
-      expect(message).toContain('scopeChallenge');
-      expect(message).not.toMatch(/TOKEN_SECRET|user_SECRET/);
+      expect(consoleWarn.mock.calls[0]![0]).toBe(
+        "Clerk warning: create_browser_session returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.",
+      );
     });
 
     test('warns once for each tool instance', async () => {
@@ -514,6 +542,14 @@ describe('createBrowserSessionTool', () => {
       const consoleWarn = warned();
       const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
       const result = await tool[2]({}, { authInfo: missing });
+      expect(result.isError).toBe(true);
+      expect(consoleWarn).not.toHaveBeenCalled();
+    });
+
+    test('does not warn when an SDK 2.x request ends in another error', async () => {
+      const consoleWarn = warned();
+      const tool = createBrowserSessionTool(options(okFetch()));
+      const result = await tool[2]({ path: '//evil.example' }, v2Extra(authInfo));
       expect(result.isError).toBe(true);
       expect(consoleWarn).not.toHaveBeenCalled();
     });

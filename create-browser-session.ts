@@ -37,10 +37,12 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
   /** Scopes the token must carry. Missing scopes refuse the request before any API call. Pass `[]` for none. */
   requiredScopes: readonly string[];
   /**
-   * Limits the session the link starts to reads and refreshing its own session token: it cannot touch the session
-   * (switch the active session or organization), sign out, change the user's own profile, or switch or write to
-   * organizations. Defaults to `true`; pass `false` for an ordinary session. When `true`, the link is refused with
-   * `restricted_not_applied` unless Clerk confirms the restriction in its response.
+   * Limits the session the link starts. Clerk's Frontend API refuses every write from that session except refreshing
+   * its own session token: touch, switching the active session or organization, sign-out, the user's own profile and
+   * organization writes, reverification, and OAuth consent and approval. Clerk enforces this, not your app's own
+   * backend, which sees an ordinary signed-in session unless it checks for an agent session itself. Defaults to
+   * `true`; pass `false` for an ordinary session. When `true`, the link is refused with `restricted_not_applied`
+   * unless Clerk confirms the restriction in its response.
    */
   restricted?: boolean;
 };
@@ -149,7 +151,7 @@ function sessionError(
 type BrowserSessionConfig = Pick<
   CreateBrowserSessionOptions,
   'requiredScopes' | 'agentName' | 'sessionMaxDurationInSeconds'
-> & { restricted: boolean } & { client: BackendApiClient; destination: URL };
+> & { restricted: boolean; client: BackendApiClient; destination: URL };
 
 function parseDestinationUrl(destinationUrl: string): URL {
   const destination = parseAllowedUrl(destinationUrl);
@@ -281,6 +283,15 @@ const agentTaskResponseSchema = z.object({
   restricted: z.unknown().optional(),
 });
 
+// Best effort: Clerk already created the task, and the refusal must not depend on the revoke.
+async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): Promise<void> {
+  try {
+    await client.post(`/v1/agents/tasks/${encodeURIComponent(agentTaskId)}/revoke`, {});
+  } catch {
+    // The caller refuses the link either way.
+  }
+}
+
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
  * The user comes from `authInfo` (set by `verifyClerkToken`), never from tool input.
@@ -337,7 +348,8 @@ async function requestBrowserSession(
   }
   // Older Clerk versions ignore `restricted`, so only this confirmation proves the session is limited.
   if (config.restricted && result.data.restricted !== true) {
-    throw sessionError('restricted_not_applied');
+    await revokeAgentTask(config.client, result.data.agent_task_id);
+    throw sessionError('restricted_not_applied', `agent_task_id ${result.data.agent_task_id}`);
   }
   return { url: result.data.url, agentTaskId: result.data.agent_task_id, redirectUrl };
 }
@@ -406,6 +418,15 @@ export function browserSessionErrorMessage(error: BrowserSessionError): string {
   return ERROR_COPY[error.code].agent(error);
 }
 
+function once(fn: () => void): () => void {
+  let called = false;
+  return () => {
+    if (called) return;
+    called = true;
+    fn();
+  };
+}
+
 /**
  * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`.
  * Throws when the options cannot work.
@@ -414,7 +435,13 @@ export function createBrowserSessionTool(
   options: CreateBrowserSessionOptions,
 ): CreateBrowserSessionTool {
   const config = resolveBrowserSessionConfig(options);
-  let warnedStepUpUnsupported = false;
+  // SDK 2.1+ answers a missing scope with the step-up challenge before the callback runs, so a tool that sees one is
+  // on SDK 2.0.
+  const warnStepUpUnsupported = once(() =>
+    console.warn(
+      `Clerk warning: ${CREATE_BROWSER_SESSION_TOOL_NAME} returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.`,
+    ),
+  );
 
   const callback: CreateBrowserSessionTool[2] = async (input, extra) => {
     try {
@@ -433,17 +460,7 @@ export function createBrowserSessionTool(
       });
     } catch (error) {
       if (error instanceof BrowserSessionError) {
-        if (
-          error.code === 'insufficient_scope' &&
-          isSdkV2Extra(extra) &&
-          !warnedStepUpUnsupported
-        ) {
-          // SDK 2.1+ answers a missing scope with the step-up challenge before this callback runs, so this is SDK 2.0.
-          warnedStepUpUnsupported = true;
-          console.warn(
-            "Clerk warning: create_browser_session returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.",
-          );
-        }
+        if (error.code === 'insufficient_scope' && isSdkV2Extra(extra)) warnStepUpUnsupported();
         // The path is agent input and stays out of the log; `detail` holds only safe text.
         console.error(`Clerk error: createBrowserSession failed (${error.detail ?? error.code})`);
         return toolError(browserSessionErrorMessage(error));
