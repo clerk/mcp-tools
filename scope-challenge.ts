@@ -64,14 +64,17 @@ function challengeScopes(
  */
 export function scopeChallengeFor(...requiredScopes: string[]): ScopeChallenge {
   assertRequiredScopes('scopeChallengeFor', requiredScopes);
-  // Frozen because it is exposed on the result: changing it would change the challenge.
+  // Frozen and read-only on the result: `assertScopes` reads it, so a change would check other scopes than the challenge.
   const required = Object.freeze(requiredScopes);
   const challenge: ScopeChallengeHandler = ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
     const scopes = challengeScopes(required, authInfo);
     return scopes && { scopes };
   };
-  return Object.assign(challenge, { requiredScopes: required });
+  return Object.defineProperty(challenge, 'requiredScopes', {
+    value: required,
+    enumerable: true,
+  }) as ScopeChallenge;
 }
 
 function isScopeChallenge(value: unknown): value is ScopeChallenge {

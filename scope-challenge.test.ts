@@ -52,6 +52,16 @@ describe('scopeChallengeFor', () => {
     expect(Object.isFrozen(challenge.requiredScopes)).toBe(true);
   });
 
+  test('does not let its scopes be replaced, so assertScopes checks what the challenge checks', () => {
+    const challenge = scopeChallengeFor('projects:read');
+    expect(() => {
+      (challenge as { requiredScopes: readonly string[] }).requiredScopes = ['profile'];
+    }).toThrow(TypeError);
+    expect(() => assertScopes({ authInfo: auth(['profile']) }, challenge)).toThrow(
+      'The token is missing required scopes: projects:read',
+    );
+  });
+
   test('throws when given no scopes', () => {
     expect(() => scopeChallengeFor()).toThrow(
       /^Clerk error: scopeChallengeFor needs at least one scope/,
