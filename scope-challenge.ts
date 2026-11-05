@@ -1,13 +1,11 @@
-// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` and `assertScopes` are public,
-// re-exported from `@clerk/mcp-tools/server`. This module is not a package entry point.
+// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` is public, re-exported from
+// `@clerk/mcp-tools/server`. This module is not a package entry point.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 // Assignable to the SDK 2.1+ `ScopeChallengeHandler`, which this package cannot import: SDK 2.x is not a dependency.
 type ScopeChallengeHandler = (context: {
   authInfo?: AuthInfo;
 }) => { scopes: readonly [string, ...string[]] } | undefined;
-
-type ScopeChallenge = ScopeChallengeHandler & { readonly requiredScopes: readonly string[] };
 
 // An RFC 6749 scope-token: no space, `"`, `\`, or control character, so it fits a space-separated list and a quoted
 // `WWW-Authenticate` value.
@@ -57,73 +55,18 @@ function challengeScopes(
  * tool runs and answers with the 403 step-up challenge for the granted scopes followed by the missing ones, so the
  * new grant keeps the old access. A request without auth info is left to the tool. MCP SDK 1.x has no such option.
  * Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
- * The result also carries `requiredScopes`, so `assertScopes(ctx, result)` checks the same scopes in the tool.
  * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
  * @example
  * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: scopeChallengeFor('projects:read') }, handler);
  */
-export function scopeChallengeFor(...requiredScopes: string[]): ScopeChallenge {
-  assertRequiredScopes('scopeChallengeFor', requiredScopes);
-  // Frozen and read-only on the result: `assertScopes` reads it, so a change would check other scopes than the challenge.
-  const required = Object.freeze(requiredScopes);
-  const challenge: ScopeChallengeHandler = ({ authInfo }) => {
+export function scopeChallengeFor(...requiredScopes: string[]): ScopeChallengeHandler {
+  if (requiredScopes.length === 0) {
+    throw new Error('Clerk error: scopeChallengeFor needs at least one scope');
+  }
+  assertScopeTokens('scopeChallengeFor', 'requiredScopes', requiredScopes);
+  return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
-    const scopes = challengeScopes(required, authInfo);
+    const scopes = challengeScopes(requiredScopes, authInfo);
     return scopes && { scopes };
   };
-  return Object.defineProperty(challenge, 'requiredScopes', {
-    value: required,
-    enumerable: true,
-  }) as ScopeChallenge;
-}
-
-function isScopeChallenge(value: unknown): value is ScopeChallenge {
-  return typeof value === 'function' && Array.isArray((value as ScopeChallenge).requiredScopes);
-}
-
-/** The second argument of a tool callback: `RequestHandlerExtra` on MCP SDK 1.x, `ServerContext` on 2.x. */
-type ToolCallContext = { authInfo?: AuthInfo; http?: { authInfo?: AuthInfo } };
-
-/**
- * Throws when the tool call's access token lacks any of the required scopes, given as the result of
- * `scopeChallengeFor` or as separate arguments. MCP SDK 1.x and 2.x turn the error into a tool error whose text names
- * the missing scopes. Call it at the start of a tool: the `scopeChallengeFor` challenge only takes effect over HTTP on
- * SDK 2.1+ and for requests with auth info.
- * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
- * @example
- * const projectsRead = scopeChallengeFor('projects:read');
- * server.registerTool('list_projects', { scopeChallenge: projectsRead }, async (args, ctx) => {
- *   assertScopes(ctx, projectsRead);
- *   // ...
- * });
- */
-export function assertScopes(context: ToolCallContext, challenge: ScopeChallenge): void;
-export function assertScopes(context: ToolCallContext, ...requiredScopes: string[]): void;
-export function assertScopes(context: ToolCallContext, ...scopes: unknown[]): void {
-  const [first] = scopes;
-  const requiredScopes =
-    scopes.length === 1 && isScopeChallenge(first) ? first.requiredScopes : scopes;
-  assertRequiredScopes('assertScopes', requiredScopes);
-  const authInfo = context.http?.authInfo ?? context.authInfo;
-  if (authInfo === undefined) {
-    throw new Error(
-      `This tool needs an access token with these scopes: ${requiredScopes.join(', ')}`,
-    );
-  }
-  const missing = missingScopes(requiredScopes, authInfo);
-  if (missing.length > 0) {
-    throw new Error(
-      `The token is missing required scopes: ${missing.join(', ')}. Reconnect to approve them.`,
-    );
-  }
-}
-
-function assertRequiredScopes(
-  caller: string,
-  requiredScopes: readonly unknown[],
-): asserts requiredScopes is readonly string[] {
-  if (requiredScopes.length === 0) {
-    throw new Error(`Clerk error: ${caller} needs at least one scope`);
-  }
-  assertScopeTokens(caller, 'requiredScopes', requiredScopes);
 }
