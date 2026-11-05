@@ -37,10 +37,10 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
   /** Scopes the token must carry. Missing scopes refuse the request before any API call. Pass `[]` for none. */
   requiredScopes: readonly string[];
   /**
-   * Limits the session the link starts. Clerk's Frontend API refuses every write from that session except refreshing
-   * its own session token: touch, switching the active session or organization, sign-out, the user's own profile and
-   * organization writes, reverification, and OAuth consent and approval. Clerk enforces this, not your app's own
-   * backend, which sees an ordinary signed-in session unless it checks for an agent session itself. Defaults to
+   * Limits the session the link starts. Clerk's Frontend API refuses these writes from that session: touch, switching
+   * the active session or organization, sign-out, the user's own profile and organization writes, reverification, and
+   * OAuth consent and approval. The one exception is refreshing its own session token. Clerk enforces this, not your
+   * app's own backend, which sees an ordinary signed-in session unless it checks for an agent session itself. Defaults to
    * `true`; pass `false` for an ordinary session. When `true`, the link is refused with `restricted_not_applied`
    * unless Clerk confirms the restriction in its response.
    */
@@ -284,12 +284,28 @@ const agentTaskResponseSchema = z.object({
 });
 
 // Best effort: Clerk already created the task, and the refusal must not depend on the revoke.
-async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): Promise<void> {
+// Resolves to whether Clerk accepted the revoke.
+async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): Promise<boolean> {
   try {
-    await client.post(`/v1/agents/tasks/${encodeURIComponent(agentTaskId)}/revoke`, {});
+    const response = await client.post(
+      `/v1/agents/tasks/${encodeURIComponent(agentTaskId)}/revoke`,
+      {},
+    );
+    return response.ok;
   } catch {
-    // The caller refuses the link either way.
+    return false;
   }
+}
+
+// Scopes contain `:`, so they do not fit IDENTIFIER_PATTERN. Only a Clerk key shape (`sk_...`, `pk_...`) at the start
+// or after a `.`, `_`, or `:` boundary is dropped.
+const KEY_SHAPED_SCOPE = /(?:^|[._:])[sp]k_/i;
+
+function insufficientScopeDetail(missing: readonly string[]): string {
+  const loggable = missing.filter((scope) => !KEY_SHAPED_SCOPE.test(scope));
+  const parts = ['insufficient_scope:', ...loggable];
+  if (loggable.length < missing.length) parts.push('(key-shaped scope omitted)');
+  return parts.join(' ');
 }
 
 /**
@@ -313,7 +329,7 @@ async function requestBrowserSession(
 
   const missing = missingScopes(config.requiredScopes, authInfo);
   if (missing.length > 0) {
-    throw sessionError('insufficient_scope', `insufficient_scope: ${missing.join(' ')}`, missing);
+    throw sessionError('insufficient_scope', insufficientScopeDetail(missing), missing);
   }
 
   const redirectUrl = resolveRedirectUrl(config.destination, request.path);
@@ -347,11 +363,21 @@ async function requestBrowserSession(
     throw sessionError('unavailable', `unreadable response with status ${response.status}`);
   }
   // Older Clerk versions ignore `restricted`, so only this confirmation proves the session is limited.
+  const { agent_task_id: agentTaskId, url } = result.data;
+  const validId = IDENTIFIER_PATTERN.test(agentTaskId);
   if (config.restricted && result.data.restricted !== true) {
-    await revokeAgentTask(config.client, result.data.agent_task_id);
-    throw sessionError('restricted_not_applied', `agent_task_id ${result.data.agent_task_id}`);
+    // An id that is not an identifier is never logged or put in a request path.
+    if (!validId) throw sessionError('restricted_not_applied', 'agent_task_id invalid');
+    const revoked = await revokeAgentTask(config.client, agentTaskId);
+    throw sessionError(
+      'restricted_not_applied',
+      `agent_task_id ${agentTaskId}${revoked ? '' : ' revoke_failed'}`,
+    );
   }
-  return { url: result.data.url, agentTaskId: result.data.agent_task_id, redirectUrl };
+  if (!validId) {
+    throw sessionError('unavailable', `unreadable response with status ${response.status}`);
+  }
+  return { url, agentTaskId, redirectUrl };
 }
 
 /**

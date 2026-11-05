@@ -62,8 +62,8 @@ function metadata(origin: string, path: string): Response | undefined {
     return Response.json({
       resource: `${origin}/mcp`,
       authorization_servers: [origin],
-      // More than the tool needs: a client that ignored the challenge's `scope` would ask for this list instead.
-      scopes_supported: ['profile', ...REQUIRED_SCOPES],
+      // Differs from the challenge's `scope`, so a client that ignored it would ask for this list instead.
+      scopes_supported: ['profile', 'offline_access', ...REQUIRED_SCOPES],
     });
   }
   if (path === '/.well-known/oauth-authorization-server') {

@@ -157,6 +157,66 @@ describe('createBrowserSession', () => {
       expect(revokeCalls(fetchImpl)).toHaveLength(1);
     });
 
+    test('marks the log when Clerk answers the revoke with an error status', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+        String(url).endsWith('/revoke')
+          ? Response.json({ errors: [{ code: 'BODY_TEXT' }] }, { status: 500 })
+          : Response.json({ url: LINK, agent_task_id: 'agttsk_1', restricted: false }),
+      );
+      const tool = createBrowserSessionTool(options(fetchImpl));
+      await tool[2]({}, { authInfo });
+      expect(revokeCalls(fetchImpl)).toHaveLength(1);
+      expect(consoleError.mock.calls[0]![0]).toBe(
+        'Clerk error: createBrowserSession failed (agent_task_id agttsk_1 revoke_failed)',
+      );
+    });
+
+    test('marks the log when the revoke request throws', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+        if (String(url).endsWith('/revoke')) throw new TypeError('network down');
+        return Response.json({ url: LINK, agent_task_id: 'agttsk_1', restricted: false });
+      });
+      await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
+      expect(consoleError.mock.calls[0]![0]).toBe(
+        'Clerk error: createBrowserSession failed (agent_task_id agttsk_1 revoke_failed)',
+      );
+    });
+
+    test.each([
+      ['a key shape', 'prefix_sk_live_LEAK'],
+      ['a newline', 'agttsk_1\nINJECTED'],
+      ['a path traversal', '..'],
+      ['the link', LINK],
+    ])(
+      'logs nothing of an agent_task_id that is %s, and sends no revoke',
+      async (_name, agentTaskId) => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const fetchImpl = okFetch({ agent_task_id: agentTaskId, restricted: false });
+        const tool = createBrowserSessionTool(options(fetchImpl));
+        const result = await tool[2]({}, { authInfo });
+        expect(result.isError).toBe(true);
+        expect(revokeCalls(fetchImpl)).toHaveLength(0);
+        expect(consoleError).toHaveBeenCalledTimes(1);
+        expect(consoleError.mock.calls[0]![0]).toBe(
+          'Clerk error: createBrowserSession failed (agent_task_id invalid)',
+        );
+        expect(JSON.stringify(result)).not.toMatch(/LEAK|INJECTED|SECRET_TICKET/);
+        await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
+          browserSessionError('restricted_not_applied'),
+        );
+      },
+    );
+
+    test('treats a confirmed response with an invalid agent_task_id as unreadable', async () => {
+      const fetchImpl = okFetch({ agent_task_id: 'prefix_sk_live_LEAK' });
+      await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
+        browserSessionError('unavailable'),
+      );
+      expect(revokeCalls(fetchImpl)).toHaveLength(0);
+    });
+
     test('does not revoke when the restriction is confirmed', async () => {
       const fetchImpl = okFetch();
       await createBrowserSession({ authInfo }, options(fetchImpl));
@@ -590,6 +650,17 @@ describe('createBrowserSessionTool', () => {
       expect(await callLogged(statusFetch(422, redirectUrlErrors))).toBe(
         'Clerk error: createBrowserSession failed (status 422: form_param_value_invalid redirect_url)',
       );
+    });
+
+    test('leaves a key-shaped missing scope out of the log', async () => {
+      const message = await callLogged(okFetch(), {
+        requiredScopes: ['email', 'sk_test_SCOPELEAK'],
+        auth: { ...authInfo, scopes: [] },
+      });
+      expect(message).toBe(
+        'Clerk error: createBrowserSession failed (insufficient_scope: email (key-shaped scope omitted))',
+      );
+      expect(message).not.toMatch(/SCOPELEAK/);
     });
 
     test('leaves unexpected error codes and parameters out of the log', async () => {
