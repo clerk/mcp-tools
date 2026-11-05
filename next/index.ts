@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { type McpClientStore, completeAuthWithCode } from '../client';
 import {
+  assertScopes,
   corsHeaders,
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
@@ -148,4 +149,4 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
 }
 
 // re-export the verifyClerkToken function for convenience
-export { scopeChallengeFor, verifyClerkToken };
+export { assertScopes, scopeChallengeFor, verifyClerkToken };

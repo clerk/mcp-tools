@@ -1,7 +1,7 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { describe, expect, test } from 'vitest';
 
-import { scopeChallengeFor } from './server';
+import { assertScopes, scopeChallengeFor } from './server';
 
 function auth(scopes: string[] | undefined): AuthInfo {
   return { token: 't', clientId: 'client_1', scopes: scopes as string[] };
@@ -46,6 +46,12 @@ describe('scopeChallengeFor', () => {
     },
   );
 
+  test('exposes its scopes, frozen so they cannot change the challenge', () => {
+    const challenge = scopeChallengeFor('projects:read');
+    expect(challenge.requiredScopes).toEqual(['projects:read']);
+    expect(Object.isFrozen(challenge.requiredScopes)).toBe(true);
+  });
+
   test('throws when given no scopes', () => {
     expect(() => scopeChallengeFor()).toThrow(
       /^Clerk error: scopeChallengeFor needs at least one scope/,
@@ -56,6 +62,72 @@ describe('scopeChallengeFor', () => {
     // @ts-expect-error scopes are separate arguments
     expect(() => scopeChallengeFor(['projects:read'])).toThrow(
       /^Clerk error: scopeChallengeFor requiredScopes must contain only scope tokens/,
+    );
+  });
+});
+
+describe('assertScopes', () => {
+  test('passes when the MCP SDK 2.x context has every required scope', () => {
+    expect(() =>
+      assertScopes({ http: { authInfo: auth(['profile', 'projects:read']) } }, 'projects:read'),
+    ).not.toThrow();
+  });
+
+  test('passes when the MCP SDK 1.x extra has every required scope', () => {
+    expect(() =>
+      assertScopes({ authInfo: auth(['projects:read']) }, 'projects:read'),
+    ).not.toThrow();
+  });
+
+  test('throws naming only the missing scopes', () => {
+    expect(() =>
+      assertScopes(
+        { http: { authInfo: auth(['projects:read']) } },
+        'projects:read',
+        'projects:write',
+        'teams:read',
+      ),
+    ).toThrow(
+      'The token is missing required scopes: projects:write, teams:read. Reconnect to approve them.',
+    );
+  });
+
+  test('checks the scopes of a scopeChallengeFor result', () => {
+    const projectsRead = scopeChallengeFor('projects:read', 'projects:write');
+    expect(() =>
+      assertScopes({ authInfo: auth(['projects:read', 'projects:write']) }, projectsRead),
+    ).not.toThrow();
+    expect(() => assertScopes({ authInfo: auth(['projects:read']) }, projectsRead)).toThrow(
+      'The token is missing required scopes: projects:write',
+    );
+  });
+
+  test('throws a Clerk error for a challenge that is not from scopeChallengeFor', () => {
+    const sdkChallenge = () => undefined;
+    // @ts-expect-error only scopeChallengeFor results carry their scopes
+    expect(() => assertScopes({ authInfo: auth([]) }, sdkChallenge)).toThrow(
+      /^Clerk error: assertScopes requiredScopes must contain only scope tokens/,
+    );
+  });
+
+  test('throws when the call has no auth info', () => {
+    expect(() => assertScopes({}, 'projects:read')).toThrow(
+      'This tool needs an access token with these scopes: projects:read',
+    );
+  });
+
+  test('treats auth info without scopes as granting none', () => {
+    expect(() => assertScopes({ authInfo: auth(undefined) }, 'projects:read')).toThrow(
+      'The token is missing required scopes: projects:read',
+    );
+  });
+
+  test('throws a Clerk error when given no scopes or an invalid scope', () => {
+    expect(() => assertScopes({ authInfo: auth([]) })).toThrow(
+      /^Clerk error: assertScopes needs at least one scope/,
+    );
+    expect(() => assertScopes({ authInfo: auth([]) }, 'a b')).toThrow(
+      /^Clerk error: assertScopes requiredScopes must contain only scope tokens/,
     );
   });
 });

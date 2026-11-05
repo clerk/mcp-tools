@@ -114,7 +114,9 @@ These adapters handle the MCP protocol details and integrate with your authentic
 When a tool needs an OAuth scope that the access token lacks, the MCP server can answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", ...`. MCP clients answer that by asking the user to approve more scopes. MCP SDK 2.1 or later (`@modelcontextprotocol/server`, which Vercel's `mcp-handler` 2.x also uses) sends this challenge before the tool runs, from the `scopeChallenge` option of `registerTool`. `scopeChallengeFor` from `@clerk/mcp-tools/server` (also exported from `@clerk/mcp-tools/next`) builds that option from the scopes the tool needs:
 
 ```ts
-import { scopeChallengeFor } from '@clerk/mcp-tools/server';
+import { assertScopes, scopeChallengeFor } from '@clerk/mcp-tools/server';
+
+const projectsRead = scopeChallengeFor('projects:read');
 
 server.registerTool(
   'list_projects',
@@ -122,19 +124,22 @@ server.registerTool(
     title: 'List projects',
     description: 'Lists the projects of the signed-in user.',
     inputSchema: {},
-    scopeChallenge: scopeChallengeFor('projects:read'),
+    scopeChallenge: projectsRead,
   },
-  async () => {
+  async (args, ctx) => {
+    assertScopes(ctx, projectsRead);
     // ...
   },
 );
 ```
 
+The SDK sends the challenge only over HTTP (`createMcpHandler` or the Streamable HTTP transport), on SDK 2.1 or later, and only for requests with auth info. `assertScopes` covers the other cases inside the tool: it throws when the token lacks a scope, and the SDK turns that into a tool error that names the missing scopes. Pass it the result of `scopeChallengeFor` so the scopes are listed once. It works with the second callback argument of SDK 1.x and 2.x, and on SDK 1.x, where there is no challenge, it takes the scopes directly: `assertScopes(ctx, 'projects:read')`.
+
 - Pass `resourceMetadataUrl` on the `authInfo` you give the SDK (for example `{ ...authInfo, resourceMetadataUrl }`). Without it, the challenge has no `resource_metadata`.
 - The challenge lists the granted scopes followed by the missing ones. Some MCP clients request exactly the challenged scopes, so listing only the missing ones could drop access that other tools need. The SDK's own `requireScopes` helper lists the required scopes only.
 - List every scope your tools need in `scopes_supported` of your protected resource metadata, and enable them for the OAuth application. MCP clients choose the scopes to request from the challenge, then from that list.
-- MCP SDK 1.x has no `scopeChallenge` option, and TypeScript rejects it there. The `streamableHttpHandler` adapters in `@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono` run SDK 1.x, so a tool behind them must check its scopes itself.
-- `scopeChallengeFor` throws a `Clerk error:` message when it is given no scopes or a scope that is not a valid OAuth scope token.
+- MCP SDK 1.x has no `scopeChallenge` option, and TypeScript rejects it there. The `streamableHttpHandler` adapters in `@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono` run SDK 1.x, so tools behind them use `assertScopes` alone.
+- `scopeChallengeFor` and `assertScopes` throw a `Clerk error:` message when they are given no scopes or a scope that is not a valid OAuth scope token.
 
 #### Collecting feedback from agents
 
@@ -692,7 +697,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 - `scopeChallengeFor`
   - **Description:** Builds the `scopeChallenge` registration option of MCP SDK 2.1 or later for a tool that needs `requiredScopes`. Before the tool runs, the SDK answers a token that lacks some of them with a `403` step-up challenge for the granted scopes followed by the missing ones. A request without auth info is left to the tool. SDK 1.x has no such option. See [Step-up for your own tools](#step-up-for-your-own-tools).
   - **Params:** `...requiredScopes: string[]`, one or more scopes as separate arguments
-  - **Returns:** the function to pass as the `scopeChallenge` option, `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`
+  - **Returns:** the function to pass as the `scopeChallenge` option, `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`, with a frozen `requiredScopes` array that `assertScopes` reads
+
+- `assertScopes`
+  - **Description:** Throws when the access token of a tool call lacks any of `requiredScopes`, or the call has no auth info. MCP SDK 1.x and 2.x turn the error into a tool error that names the missing scopes. Call it at the start of a tool. See [Step-up for your own tools](#step-up-for-your-own-tools).
+  - **Params:** `context` (the second argument of the tool callback), then either the result of `scopeChallengeFor` or `...requiredScopes: string[]`
+  - **Returns:** `void`
 
 - `corsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
