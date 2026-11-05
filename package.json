@@ -98,7 +98,7 @@
     "@clerk/express": "^2.1.5",
     "@clerk/hono": "^0.1.15",
     "@clerk/nextjs": "^7.2.3",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.4.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
