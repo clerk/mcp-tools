@@ -18,9 +18,9 @@ import { sentBody, textOf } from './mcp-harness';
 
 const LINK = 'https://app.example.com/v1/tickets/accept?ticket=customer_ticket';
 
-function clerkFetch() {
+function clerkFetch(restricted?: boolean) {
   return vi.fn<typeof fetch>(async () =>
-    Response.json({ object: 'agent_task', agent_task_id: 'agttsk_1', url: LINK }),
+    Response.json({ object: 'agent_task', agent_task_id: 'agttsk_1', url: LINK, restricted }),
   );
 }
 
@@ -47,8 +47,8 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
-async function connect(kind: CustomerServerKind, token: string) {
-  const fetchImpl = clerkFetch();
+async function connect(kind: CustomerServerKind, token: string, restricted = true) {
+  const fetchImpl = clerkFetch(restricted);
   const server = await startCustomerServer(kind, fetchImpl);
   servers.push(server);
   const { provider, redirects } = authProvider(token);
@@ -73,7 +73,16 @@ describe.each<CustomerServerKind>(['v1-route', 'v2-registration'])(
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(sentBody(fetchImpl)).toMatchObject({
         on_behalf_of: { user_id: 'user_1' },
+        restricted: true,
       });
+    });
+
+    test('returns a tool error and no link when Clerk does not confirm restricted', async () => {
+      const { client } = await connect(kind, TOKENS.full.token, false);
+      const result = await callBrowserSession(client);
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain(LINK);
+      expect(textOf(result)).toContain('required restrictions');
     });
   },
 );

@@ -39,8 +39,8 @@ function options(
   };
 }
 
-// The full Backend API response; only url and agent_task_id are read.
-function okFetch() {
+// The full Backend API response; only url, agent_task_id, and restricted are read.
+function okFetch(patch: Record<string, unknown> = {}) {
   return vi.fn<typeof fetch>(async () =>
     Response.json({
       object: 'agent_task',
@@ -48,6 +48,8 @@ function okFetch() {
       agent_task_id: 'agttsk_1',
       task_id: 'tsk_1',
       url: LINK,
+      restricted: true,
+      ...patch,
     }),
   );
 }
@@ -86,6 +88,7 @@ describe('createBrowserSession', () => {
     expect(sentBody(fetchImpl)).toEqual({
       on_behalf_of: { user_id: 'user_1' },
       permissions: '*',
+      restricted: true,
       agent_name: 'mcp:client_1',
       task_description: 'Signed-in browser session requested through MCP',
       redirect_url: 'https://app.example.com/',
@@ -95,6 +98,36 @@ describe('createBrowserSession', () => {
       agentTaskId: 'agttsk_1',
       redirectUrl: 'https://app.example.com/',
     });
+  });
+
+  test('sends restricted: false, and skips the response check, when the option is false', async () => {
+    const fetchImpl = okFetch({ restricted: undefined });
+    const result = await createBrowserSession(
+      { authInfo },
+      options(fetchImpl, { restricted: false }),
+    );
+    expect(sentBody(fetchImpl)).toMatchObject({ restricted: false });
+    expect(result.url).toBe(LINK);
+  });
+
+  test.each([
+    ['missing', undefined],
+    ['false', false],
+    ['not a boolean', 'true'],
+  ])('refuses the link when Clerk reports restricted as %s', async (_name, value) => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tool = createBrowserSessionTool(options(okFetch({ restricted: value })));
+    await expect(
+      createBrowserSession({ authInfo }, options(okFetch({ restricted: value }))),
+    ).rejects.toMatchObject(browserSessionError('restricted_not_applied'));
+    const result = await tool[2]({}, { authInfo });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(LEAKS);
+    expect(textOf(result)).toContain('Do not retry');
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0]![0]).toBe(
+      'Clerk error: createBrowserSession failed (restricted_not_applied)',
+    );
   });
 
   test('uses the agent name option, task description, and path', async () => {
@@ -305,6 +338,7 @@ describe('validateBrowserSessionOptions', () => {
     ['fractional session length', { sessionMaxDurationInSeconds: 1.5 }],
     ['non-string agentName', { agentName: 123 as unknown as string }],
     ['non-function fetch', { fetch: 123 as unknown as typeof fetch }],
+    ['non-boolean restricted', { restricted: 'yes' as unknown as boolean }],
   ])('rejects %s', (_name, patch) => {
     expect(() => validateBrowserSessionOptions({ ...base, ...patch })).toThrow(/^Clerk error: /);
   });
@@ -323,6 +357,7 @@ describe('browserSessionErrorMessage', () => {
     ['unauthorized', 'Do not retry'],
     ['rate_limited', 'Wait'],
     ['unavailable', 'Try again at most once'],
+    ['restricted_not_applied', 'required restrictions'],
   ] as const)('tells the agent what to do for %s', (code, hint) => {
     expect(browserSessionErrorMessage(new BrowserSessionError(code, 'detail'))).toContain(hint);
   });
@@ -454,6 +489,16 @@ describe('createBrowserSessionTool', () => {
       expect(message).toContain('@modelcontextprotocol/server');
       expect(message).toContain('2.1');
       expect(message).not.toMatch(/user_SECRET|email|https?:/);
+    });
+
+    test('names the SDK version to upgrade to', async () => {
+      const consoleWarn = warned();
+      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      await tool[2]({}, v2Extra({ ...missing, token: 'TOKEN_SECRET' }));
+      const [message] = consoleWarn.mock.calls[0]!;
+      expect(message).toContain('@modelcontextprotocol/server 2.1');
+      expect(message).toContain('scopeChallenge');
+      expect(message).not.toMatch(/TOKEN_SECRET|user_SECRET/);
     });
 
     test('warns once for each tool instance', async () => {

@@ -36,6 +36,13 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
   sessionMaxDurationInSeconds?: number;
   /** Scopes the token must carry. Missing scopes refuse the request before any API call. Pass `[]` for none. */
   requiredScopes: readonly string[];
+  /**
+   * Limits the session the link starts to reads and refreshing its own session token: it cannot touch the session
+   * (switch the active session or organization), sign out, change the user's own profile, or switch or write to
+   * organizations. Defaults to `true`; pass `false` for an ordinary session. When `true`, the link is refused with
+   * `restricted_not_applied` unless Clerk confirms the restriction in its response.
+   */
+  restricted?: boolean;
 };
 
 export type CreateBrowserSessionRequest = {
@@ -63,7 +70,8 @@ export type BrowserSessionErrorCode =
   | 'insufficient_scope'
   | 'unauthorized'
   | 'rate_limited'
-  | 'unavailable';
+  | 'unavailable'
+  | 'restricted_not_applied';
 
 export class BrowserSessionError extends Error {
   constructor(
@@ -120,6 +128,11 @@ const ERROR_COPY = {
     agent: () =>
       'Clerk could not create a sign-in link right now, and a link may already exist. Try again at most once, then continue without it or ask the user to sign in.',
   },
+  restricted_not_applied: {
+    message: 'Clerk did not confirm the restrictions on the sign-in link',
+    agent: () =>
+      'The browser session could not be created with the required restrictions. Do not retry. Ask the user to contact the server operator.',
+  },
 } satisfies Record<
   BrowserSessionErrorCode,
   { message: string; agent: (error: BrowserSessionError) => string }
@@ -136,7 +149,7 @@ function sessionError(
 type BrowserSessionConfig = Pick<
   CreateBrowserSessionOptions,
   'requiredScopes' | 'agentName' | 'sessionMaxDurationInSeconds'
-> & { client: BackendApiClient; destination: URL };
+> & { restricted: boolean } & { client: BackendApiClient; destination: URL };
 
 function parseDestinationUrl(destinationUrl: string): URL {
   const destination = parseAllowedUrl(destinationUrl);
@@ -172,9 +185,13 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
       'Clerk error: createBrowserSession sessionMaxDurationInSeconds must be a positive integer',
     );
   }
+  if (options.restricted !== undefined && typeof options.restricted !== 'boolean') {
+    throw new Error('Clerk error: createBrowserSession restricted must be a boolean');
+  }
   return {
     client,
     destination,
+    restricted: options.restricted ?? true,
     // A frozen copy: the caller emptying its array later must not turn the check off.
     requiredScopes: Object.freeze([...options.requiredScopes]),
     agentName: options.agentName,
@@ -258,7 +275,11 @@ function errorForStatus(status: number, errors: readonly ApiError[]): BrowserSes
   return sessionError('unavailable', detail);
 }
 
-const agentTaskResponseSchema = z.object({ url: z.string(), agent_task_id: z.string() });
+const agentTaskResponseSchema = z.object({
+  url: z.string(),
+  agent_task_id: z.string(),
+  restricted: z.unknown().optional(),
+});
 
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
@@ -290,6 +311,7 @@ async function requestBrowserSession(
   const body = {
     on_behalf_of: { user_id: authInfo.extra.userId },
     permissions: '*',
+    restricted: config.restricted,
     agent_name: agentName,
     task_description: request.taskDescription?.trim() || DEFAULT_TASK_DESCRIPTION,
     redirect_url: redirectUrl,
@@ -312,6 +334,10 @@ async function requestBrowserSession(
   const result = agentTaskResponseSchema.safeParse(responseBody);
   if (!result.success) {
     throw sessionError('unavailable', `unreadable response with status ${response.status}`);
+  }
+  // Older Clerk versions ignore `restricted`, so only this confirmation proves the session is limited.
+  if (config.restricted && result.data.restricted !== true) {
+    throw sessionError('restricted_not_applied');
   }
   return { url: result.data.url, agentTaskId: result.data.agent_task_id, redirectUrl };
 }
@@ -415,7 +441,7 @@ export function createBrowserSessionTool(
           // SDK 2.1+ answers a missing scope with the step-up challenge before this callback runs, so this is SDK 2.0.
           warnedStepUpUnsupported = true;
           console.warn(
-            'Clerk warning: createBrowserSession found the token missing required scopes and returned a tool error. @modelcontextprotocol/server 2.1 or later sends the step-up challenge for missing scopes, so the user can approve them. Upgrade @modelcontextprotocol/server to 2.1 or later.',
+            "Clerk warning: create_browser_session returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.",
           );
         }
         // The path is agent input and stays out of the log; `detail` holds only safe text.
