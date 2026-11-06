@@ -44,10 +44,10 @@ function isScopeToken(scope: unknown): scope is string {
 }
 
 /** Throws a `Clerk error:` message when `scopes` has a value that is not a scope-token. */
-export function assertScopeTokens(caller: string, option: string, scopes: readonly unknown[]) {
+export function assertScopeTokens(option: string, scopes: readonly unknown[]) {
   if (!scopes.every(isScopeToken)) {
     throw new Error(
-      `Clerk error: ${caller} ${option} must contain only scope tokens: no empty strings, spaces, quotes, backslashes, or control characters`,
+      `Clerk error: ${option} must contain only scope tokens: no empty strings, spaces, quotes, backslashes, or control characters`,
     );
   }
 }
@@ -93,7 +93,7 @@ export function requireAdditionalScopes<const T extends readonly [string, ...str
   if (requiredScopes.length === 0) {
     throw new Error('Clerk error: requireAdditionalScopes needs at least one scope');
   }
-  assertScopeTokens('requireAdditionalScopes', 'requiredScopes', requiredScopes);
+  assertScopeTokens('requireAdditionalScopes requiredScopes', requiredScopes);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
     const scopes = challengeScopes(requiredScopes, authInfo);

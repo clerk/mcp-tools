@@ -36,10 +36,10 @@ type BearerResult =
   | { ok: false; status: 401 | 403; challenge: string; error: string };
 
 /** Throws a `Clerk error:` message when the options cannot produce a valid challenge. */
-export function assertMcpAuthOptions(caller: string, options: McpAuthOptions | undefined) {
-  assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
+export function assertMcpAuthOptions(options: McpAuthOptions | undefined) {
+  assertScopeTokens('requiredScopes', options?.requiredScopes ?? []);
   if (options?.resourceUrl !== undefined && !URL.canParse(options.resourceUrl)) {
-    throw new Error(`Clerk error: ${caller} resourceUrl must be an absolute URL`);
+    throw new Error('Clerk error: resourceUrl must be an absolute URL');
   }
 }
 
