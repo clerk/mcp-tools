@@ -602,6 +602,11 @@ describe('createBrowserSessionTool', () => {
         scopes: ['a'],
       });
     });
+
+    test('registers no scope challenge when requiredScopes is empty', () => {
+      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: [] }));
+      expect(tool[1]).not.toHaveProperty('scopeChallenge');
+    });
   });
 
   describe('step-up warning', () => {
@@ -923,7 +928,7 @@ describe('createBrowserSessionTool on MCP SDK v2', () => {
 
   test('creates the link for the user in ctx.http.authInfo', async () => {
     const fetchImpl = okFetch();
-    // `options` sets `requiredScopes: []`, so the registration scope challenge never fires.
+    // `options` sets `requiredScopes: []`, so the tool registers no scope challenge.
     const response = await callTool(fetchImpl, authInfo);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('agttsk_1');
