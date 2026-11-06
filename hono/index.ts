@@ -82,7 +82,7 @@ export function mcpAuth(
   verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
   options?: McpAuthOptions,
 ): MiddlewareHandler {
-  assertMcpAuthOptions(options);
+  assertMcpAuthOptions('mcpAuth', options);
 
   return async (c: Context, next: Next) => {
     const result = await authenticateBearer({
@@ -115,6 +115,8 @@ export function mcpAuth(
  * a 403 challenge.
  */
 export function clerkMcpAuth(options: ClerkMcpAuthOptions): MiddlewareHandler {
+  assertMcpAuthOptions('clerkMcpAuth', options);
+
   return mcpAuth((token, c) => {
     const client = (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
     if (!client) throw new Error('Clerk error: clerkMcpAuth needs clerkMiddleware() to run first');

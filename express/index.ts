@@ -51,7 +51,7 @@ export function mcpAuth(
   verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
   options?: McpAuthOptions,
 ) {
-  assertMcpAuthOptions(options);
+  assertMcpAuthOptions('mcpAuth', options);
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const result = await authenticateBearer({
@@ -98,6 +98,7 @@ export function mcpAuth(
  * ```
  */
 export function clerkMcpAuth(options: ClerkMcpAuthOptions) {
+  assertMcpAuthOptions('clerkMcpAuth', options);
   return mcpAuth(
     (token) => verifyClerkOAuthToken(clerkClient, token, options.resourceUrl),
     options,

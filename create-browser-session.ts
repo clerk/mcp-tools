@@ -191,7 +191,7 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
       'Clerk error: createBrowserSession requiredScopes must be an array of scopes; pass [] to require none',
     );
   }
-  assertScopeTokens('createBrowserSession requiredScopes', options.requiredScopes);
+  assertScopeTokens('createBrowserSession', 'requiredScopes', options.requiredScopes);
   // Missing scopes go in the log, so a scope shaped like a Clerk key would leak one.
   if (options.requiredScopes.some((scope) => KEY_SHAPE.test(scope))) {
     throw new Error(
