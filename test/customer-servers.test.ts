@@ -20,7 +20,12 @@ const LINK = 'https://app.example.com/v1/tickets/accept?ticket=customer_ticket';
 
 function clerkFetch(restricted?: boolean) {
   return vi.fn<typeof fetch>(async () =>
-    Response.json({ object: 'agent_task', agent_task_id: 'agttsk_1', url: LINK, session_restricted: restricted }),
+    Response.json({
+      object: 'agent_task',
+      agent_task_id: 'agttsk_1',
+      url: LINK,
+      session_restricted: restricted,
+    }),
   );
 }
 
@@ -118,7 +123,7 @@ describe('create_browser_session on a v1-route server (MCP SDK 1.x)', () => {
   });
 });
 
-describe('a customer tool with scopeChallengeFor on a v2-own-tool server (MCP SDK 2.1+)', () => {
+describe('a customer tool with requireAdditionalScopes on a v2-own-tool server (MCP SDK 2.1+)', () => {
   test('steps up a token without the tool scopes, keeping the granted ones', async () => {
     const { client, fetchImpl, redirects } = await connect('v2-own-tool', TOKENS.profileOnly.token);
     await expect(client.callTool({ name: OWN_TOOL_NAME, arguments: {} })).rejects.toBeInstanceOf(

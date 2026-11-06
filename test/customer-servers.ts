@@ -8,12 +8,12 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
 import { createBrowserSessionTool } from '../create-browser-session';
-import { scopeChallengeFor } from '../server';
+import { requireAdditionalScopes } from '../server';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
 
 export const OWN_TOOL_NAME = 'list_projects';
-export const OWN_TOOL_SCOPES = ['projects:read'];
+export const OWN_TOOL_SCOPES = ['projects:read'] as const;
 
 /** Bearer tokens the servers accept, and the scopes each one grants. */
 export const TOKENS = {
@@ -153,7 +153,7 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
     });
   },
 
-  // The customer's own tool, instrumented with `scopeChallengeFor`.
+  // The customer's own tool, instrumented with `requireAdditionalScopes`.
   'v2-own-tool': (origin) => {
     const mcpHandler = createMcpHandler(() => {
       const server = new McpServerV2({ name: 'customer-own-tool', version: '0.0.0' });
@@ -161,7 +161,7 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
         OWN_TOOL_NAME,
         {
           description: 'Lists projects',
-          scopeChallenge: scopeChallengeFor(OWN_TOOL_SCOPES),
+          scopeChallenge: requireAdditionalScopes(...OWN_TOOL_SCOPES),
         },
         async () => ({ content: [{ type: 'text' as const, text: 'projects' }] }),
       );

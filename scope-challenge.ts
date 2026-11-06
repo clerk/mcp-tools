@@ -1,14 +1,43 @@
-// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` and `ScopeChallengeHandler` are public,
-// re-exported from `@clerk/mcp-tools/server`. This module is not a package entry point.
+// Scope helpers for the MCP step-up scope challenge. Only `requireAdditionalScopes` is public, re-exported from
+// `@clerk/mcp-tools/server`. This module is not a package entry point.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
-import type { ScopeChallengeHandler } from './mcp-tool';
-
-export type { ScopeChallengeHandler };
+// Assignable to the SDK 2.1+ `ScopeChallengeHandler`, which this package cannot import: SDK 2.x is not a dependency.
+type ScopeChallengeHandler = (context: {
+  authInfo?: AuthInfo;
+}) => { scopes: readonly [string, ...string[]] } | undefined;
 
 // An RFC 6749 scope-token: no space, `"`, `\`, or control character, so it fits a space-separated list and a quoted
 // `WWW-Authenticate` value.
 const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+
+type Chars<S extends string> = S extends `${infer C}${infer R}` ? C | Chars<R> : never;
+
+type LowercaseLetter = Chars<'abcdefghijklmnopqrstuvwxyz'>;
+
+// The characters `SCOPE_TOKEN` allows.
+type ScopeTokenChar =
+  | LowercaseLetter
+  | Uppercase<LowercaseLetter>
+  | Chars<'0123456789'>
+  | Chars<"!#$%&'()*+,-./:;<=>?@[]^_`{|}~">;
+
+type HasOnlyScopeTokenChars<S extends string> = S extends `${infer C}${infer R}`
+  ? C extends ScopeTokenChar
+    ? HasOnlyScopeTokenChars<R>
+    : false
+  : true;
+
+// A wide `string` passes: only literals can be checked before run time.
+type ScopeToken<S extends string> = string extends S
+  ? S
+  : S extends ''
+    ? `invalid scope token: ${S}`
+    : HasOnlyScopeTokenChars<S> extends true
+      ? S
+      : `invalid scope token: ${S}`;
+
+type ScopeTokens<T extends readonly string[]> = { [K in keyof T]: ScopeToken<T[K]> };
 
 function isScopeToken(scope: unknown): scope is string {
   return typeof scope === 'string' && SCOPE_TOKEN.test(scope);
@@ -52,22 +81,22 @@ function challengeScopes(
 /**
  * The `scopeChallenge` registration option for a tool that needs `requiredScopes`. MCP SDK 2.1+ calls it before the
  * tool runs and answers with the 403 step-up challenge for the granted scopes followed by the missing ones, so the
- * new grant keeps the old access. A request without auth info is left to the tool. Earlier SDK versions ignore the
- * option. Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
- * Throws a `Clerk error:` message when `requiredScopes` is not an array of scope-tokens.
+ * new grant keeps the old access. A request without auth info is left to the tool. MCP SDK 1.x has no such option.
+ * Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
+ * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
  * @example
- * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: scopeChallengeFor(['projects:read']) }, handler);
+ * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: requireAdditionalScopes('projects:read') }, handler);
  */
-export function scopeChallengeFor(requiredScopes: readonly string[]): ScopeChallengeHandler {
-  if (!Array.isArray(requiredScopes)) {
-    throw new Error('Clerk error: scopeChallengeFor requiredScopes must be an array of scopes');
+export function requireAdditionalScopes<const T extends readonly [string, ...string[]]>(
+  ...requiredScopes: ScopeTokens<T>
+): ScopeChallengeHandler {
+  if (requiredScopes.length === 0) {
+    throw new Error('Clerk error: requireAdditionalScopes needs at least one scope');
   }
-  assertScopeTokens('scopeChallengeFor', 'requiredScopes', requiredScopes);
-  // A frozen copy: the caller emptying its array later must not turn the check off.
-  const required = Object.freeze([...requiredScopes]);
+  assertScopeTokens('requireAdditionalScopes', 'requiredScopes', requiredScopes);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
-    const scopes = challengeScopes(required, authInfo);
+    const scopes = challengeScopes(requiredScopes, authInfo);
     return scopes && { scopes };
   };
 }
