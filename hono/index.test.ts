@@ -338,7 +338,7 @@ describe('mcpAuthClerk', () => {
       clientId: 'client-1',
       scopes: ['read', 'email'],
       userId: 'user-1',
-    } as ReturnType<typeof getAuth>);
+    } as unknown as ReturnType<typeof getAuth>);
 
     const app = new Hono();
     app.post('/mcp', mcpAuthClerk, (c) => c.json(c.get('mcpAuth')));

@@ -11,6 +11,26 @@ type ScopeChallengeHandler = (context: {
 // `WWW-Authenticate` value.
 const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 
+type Chars<S extends string, Acc = never> = S extends `${infer C}${infer R}` ? Chars<R, Acc | C> : Acc;
+
+// The characters `SCOPE_TOKEN` allows.
+type ScopeTokenChar = Chars<"!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~">;
+
+// A wide `string` passes: only literals can be checked before run time.
+type IsScopeToken<S extends string> = string extends S
+  ? true
+  : S extends `${infer C}${infer R}`
+    ? C extends ScopeTokenChar
+      ? R extends ''
+        ? true
+        : IsScopeToken<R>
+      : false
+    : false;
+
+type ScopeTokens<T extends readonly string[]> = {
+  [K in keyof T]: IsScopeToken<T[K]> extends true ? T[K] : `invalid scope token: ${T[K]}`;
+};
+
 function isScopeToken(scope: unknown): scope is string {
   return typeof scope === 'string' && SCOPE_TOKEN.test(scope);
 }
@@ -55,12 +75,13 @@ function challengeScopes(
  * tool runs and answers with the 403 step-up challenge for the granted scopes followed by the missing ones, so the
  * new grant keeps the old access. A request without auth info is left to the tool. MCP SDK 1.x has no such option.
  * Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
- * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
+ * TypeScript rejects a call without scopes or with a string literal that is not a scope-token. At run time it throws a
+ * `Clerk error:` message when no scope is given or a scope is not a scope-token.
  * @example
  * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: requireAdditionalScopes('projects:read') }, handler);
  */
-export function requireAdditionalScopes(
-  ...requiredScopes: readonly [string, ...string[]]
+export function requireAdditionalScopes<const T extends readonly [string, ...string[]]>(
+  ...requiredScopes: ScopeTokens<T>
 ): ScopeChallengeHandler {
   if (requiredScopes.length === 0) {
     throw new Error('Clerk error: requireAdditionalScopes needs at least one scope');
