@@ -34,7 +34,10 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
    * Must be a positive integer.
    */
   sessionMaxDurationInSeconds?: number;
-  /** Scopes the token must carry. Missing scopes refuse the request before any API call. Pass `[]` for none. */
+  /**
+   * Scopes the token must carry. Missing scopes refuse the request before any API call. Prefer a scope dedicated to this
+   * tool over one that most clients get, such as `profile`. Pass `[]` for none.
+   */
   requiredScopes: readonly string[];
   /**
    * Limits the session the link starts. Clerk's Frontend API refuses these writes from that session: touch, switching
@@ -283,6 +286,20 @@ const agentTaskResponseSchema = z.object({
   restricted: z.unknown().optional(),
 });
 
+// A Clerk key shape (`sk_...`, `pk_...`) at the start or after a `.`, `_`, `:`, or `-` boundary, for text that does
+// not fit IDENTIFIER_PATTERN.
+const KEY_SHAPE = /(?:^|[._:-])[sp]k_/i;
+
+// An agent_task_id that fails IDENTIFIER_PATTERN (too long, or a character such as `-` that a future id format could
+// use) must stay out of the log, but it can still name the task to revoke when it is one plain path segment. No `.`,
+// so `encodeURIComponent` cannot leave a `.` or `..` segment that the URL parser would resolve to another endpoint,
+// and no key shape, so a custom `fetch` that logs request URLs never sees one.
+const REVOCABLE_TASK_ID = /^[a-z0-9_-]{1,128}$/i;
+
+function isRevocableTaskId(agentTaskId: string): boolean {
+  return REVOCABLE_TASK_ID.test(agentTaskId) && !KEY_SHAPE.test(agentTaskId);
+}
+
 // Best effort: Clerk already created the task, and the refusal must not depend on the revoke.
 // Resolves to whether Clerk accepted the revoke.
 async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): Promise<boolean> {
@@ -297,12 +314,9 @@ async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): P
   }
 }
 
-// Scopes contain `:`, so they do not fit IDENTIFIER_PATTERN. Only a Clerk key shape (`sk_...`, `pk_...`) at the start
-// or after a `.`, `_`, or `:` boundary is dropped.
-const KEY_SHAPED_SCOPE = /(?:^|[._:])[sp]k_/i;
-
+// Scopes contain `:`, so they do not fit IDENTIFIER_PATTERN; only a key-shaped scope is dropped.
 function insufficientScopeDetail(missing: readonly string[]): string {
-  const loggable = missing.filter((scope) => !KEY_SHAPED_SCOPE.test(scope));
+  const loggable = missing.filter((scope) => !KEY_SHAPE.test(scope));
   const parts = ['insufficient_scope:', ...loggable];
   if (loggable.length < missing.length) parts.push('(key-shaped scope omitted)');
   return parts.join(' ');
@@ -366,12 +380,16 @@ async function requestBrowserSession(
   const { agent_task_id: agentTaskId, url } = result.data;
   const validId = IDENTIFIER_PATTERN.test(agentTaskId);
   if (config.restricted && result.data.restricted !== true) {
-    // An id that is not an identifier is never logged or put in a request path.
-    if (!validId) throw sessionError('restricted_not_applied', 'agent_task_id invalid');
+    // An id that is not an identifier is never logged. It is still revoked when it is a safe path segment. Otherwise
+    // nothing safely names the task, so it is left to expire: the link is never returned or logged, and it works once,
+    // for about an hour.
+    if (!validId && !isRevocableTaskId(agentTaskId)) {
+      throw sessionError('restricted_not_applied', 'agent_task_id invalid revoke_skipped');
+    }
     const revoked = await revokeAgentTask(config.client, agentTaskId);
     throw sessionError(
       'restricted_not_applied',
-      `agent_task_id ${agentTaskId}${revoked ? '' : ' revoke_failed'}`,
+      `agent_task_id ${validId ? agentTaskId : 'invalid'}${revoked ? '' : ' revoke_failed'}`,
     );
   }
   if (!validId) {

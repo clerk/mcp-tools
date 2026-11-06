@@ -186,8 +186,11 @@ describe('createBrowserSession', () => {
 
     test.each([
       ['a key shape', 'prefix_sk_live_LEAK'],
+      ['a key shape after a hyphen', 'agttsk-sk_live_LEAK'],
       ['a newline', 'agttsk_1\nINJECTED'],
       ['a path traversal', '..'],
+      ['a dot segment', '.'],
+      ['empty', ''],
       ['the link', LINK],
     ])(
       'logs nothing of an agent_task_id that is %s, and sends no revoke',
@@ -199,8 +202,9 @@ describe('createBrowserSession', () => {
         expect(result.isError).toBe(true);
         expect(revokeCalls(fetchImpl)).toHaveLength(0);
         expect(consoleError).toHaveBeenCalledTimes(1);
+        // Nothing safely names the task, so the log says the revoke was skipped and the link is left to expire.
         expect(consoleError.mock.calls[0]![0]).toBe(
-          'Clerk error: createBrowserSession failed (agent_task_id invalid)',
+          'Clerk error: createBrowserSession failed (agent_task_id invalid revoke_skipped)',
         );
         expect(JSON.stringify(result)).not.toMatch(/LEAK|INJECTED|SECRET_TICKET/);
         await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
@@ -208,6 +212,44 @@ describe('createBrowserSession', () => {
         );
       },
     );
+
+    // Not identifiers, so never logged, but each is one plain path segment that can still name the task to revoke.
+    test.each([
+      ['has a hyphen', 'agttsk_0f8fad5b-d9cb-469f-a165-70867728950e'],
+      ['is longer than 64 characters', `agttsk_${'a'.repeat(64)}`],
+    ])('revokes an agent_task_id that %s without logging it', async (_name, agentTaskId) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const fetchImpl = okFetch({ agent_task_id: agentTaskId, restricted: false });
+      const result = await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toMatch(LEAKS);
+      const calls = revokeCalls(fetchImpl);
+      expect(calls).toHaveLength(1);
+      expect(String(calls[0]![0])).toBe(
+        `https://api.clerk.test/v1/agents/tasks/${agentTaskId}/revoke`,
+      );
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      expect(consoleError.mock.calls[0]![0]).toBe(
+        'Clerk error: createBrowserSession failed (agent_task_id invalid)',
+      );
+      await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
+        browserSessionError('restricted_not_applied'),
+      );
+    });
+
+    test('marks the log, without the id, when the revoke of an invalid agent_task_id fails', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+        String(url).endsWith('/revoke')
+          ? Response.json({}, { status: 404 })
+          : Response.json({ url: LINK, agent_task_id: 'agttsk-1', restricted: false }),
+      );
+      await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
+      expect(revokeCalls(fetchImpl)).toHaveLength(1);
+      expect(consoleError.mock.calls[0]![0]).toBe(
+        'Clerk error: createBrowserSession failed (agent_task_id invalid revoke_failed)',
+      );
+    });
 
     test('treats a confirmed response with an invalid agent_task_id as unreadable', async () => {
       const fetchImpl = okFetch({ agent_task_id: 'prefix_sk_live_LEAK' });
