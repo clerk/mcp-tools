@@ -130,6 +130,55 @@ describe('createBrowserSession', () => {
     );
   });
 
+  describe('organizationId', () => {
+    test('sends session_organization_id and returns the link when Clerk confirms it', async () => {
+      const fetchImpl = okFetch({ session_organization_id: 'org_1' });
+      const result = await createBrowserSession(
+        { authInfo, organizationId: 'org_1' },
+        options(fetchImpl),
+      );
+      expect(sentBody(fetchImpl)).toMatchObject({ session_organization_id: 'org_1' });
+      expect(result.url).toBe(LINK);
+    });
+
+    test.each([
+      ['missing', undefined, true],
+      ['another organization', 'org_2', true],
+      ['null', null, true],
+      ['missing on an unrestricted link', undefined, false],
+    ])(
+      'refuses and revokes the link when Clerk reports session_organization_id as %s',
+      async (_name, value, restricted) => {
+        const fetchImpl = okFetch({ session_organization_id: value });
+        await expect(
+          createBrowserSession(
+            { authInfo, organizationId: 'org_1' },
+            options(fetchImpl, { restricted }),
+          ),
+        ).rejects.toMatchObject(browserSessionError('restricted_not_applied'));
+        expect(fetchImpl.mock.calls.map(([url]) => String(url))).toContain(
+          'https://api.clerk.test/v1/agents/tasks/agttsk_1/revoke',
+        );
+      },
+    );
+
+    test.each([
+      [404, 'organization_not_found_or_unauthorized'],
+      [422, 'agent_task_organization_required'],
+    ])('maps %i %s to organization_rejected', async (status, code) => {
+      const fetchImpl = statusFetch(status, {
+        errors: [apiError(code, 'session_organization_id')],
+      });
+      await expect(
+        createBrowserSession({ authInfo, organizationId: 'org_1' }, options(fetchImpl)),
+      ).rejects.toMatchObject(
+        browserSessionError('organization_rejected', {
+          detail: `status ${status}: ${code} session_organization_id`,
+        }),
+      );
+    });
+  });
+
   describe('revoke on refusal', () => {
     function revokeCalls(fetchImpl: ReturnType<typeof okFetch>) {
       return fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/revoke'));
@@ -508,6 +557,7 @@ describe('browserSessionErrorMessage', () => {
     ['rate_limited', 'Wait'],
     ['unavailable', 'Try again at most once'],
     ['restricted_not_applied', 'required restrictions'],
+    ['organization_rejected', 'choose a workspace they belong to'],
   ] as const)('tells the agent what to do for %s', (code, hint) => {
     expect(browserSessionErrorMessage(new BrowserSessionError(code, 'detail'))).toContain(hint);
   });

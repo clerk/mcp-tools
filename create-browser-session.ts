@@ -57,6 +57,11 @@ export type CreateBrowserSessionRequest = {
   path?: string;
   /** Short description of why the link is needed. */
   taskDescription?: string;
+  /**
+   * Organization the session starts in, and with `restricted`, the only one it can use. Clerk defaults to the user's last
+   * active organization. When set, the link is refused with `restricted_not_applied` unless Clerk confirms it.
+   */
+  organizationId?: string;
 };
 
 export type BrowserSession = {
@@ -76,6 +81,7 @@ export type BrowserSessionErrorCode =
   | 'unauthorized'
   | 'rate_limited'
   | 'unavailable'
+  | 'organization_rejected'
   | 'restricted_not_applied';
 
 export class BrowserSessionError extends Error {
@@ -132,6 +138,11 @@ const ERROR_COPY = {
     message: 'Clerk could not create a sign-in link',
     agent: () =>
       'Clerk could not create a sign-in link right now, and a link may already exist. Try again at most once, then continue without it or ask the user to sign in.',
+  },
+  organization_rejected: {
+    message: 'Clerk refused the organization for the sign-in link',
+    agent: () =>
+      'Clerk refused the workspace for this sign-in link: the user may no longer belong to it, or the app requires one. Do not retry. Ask the user to reconnect this MCP server and choose a workspace they belong to.',
   },
   restricted_not_applied: {
     message: 'Clerk did not confirm the restrictions on the sign-in link',
@@ -274,10 +285,20 @@ function statusDetail(status: number, errors: readonly ApiError[]): string {
   return details.length > 0 ? `status ${status}: ${details.join(', ')}` : `status ${status}`;
 }
 
+const ORGANIZATION_ERROR_CODES = new Set([
+  'organization_not_found_or_unauthorized',
+  'agent_task_organization_required',
+]);
+
 function errorForStatus(status: number, errors: readonly ApiError[]): BrowserSessionError {
   const detail = statusDetail(status, errors);
   if (status === 401 || status === 403) return sessionError('unauthorized', detail);
   if (status === 429) return sessionError('rate_limited', detail);
+  if (
+    errors.some((error) => error.code !== undefined && ORGANIZATION_ERROR_CODES.has(error.code))
+  ) {
+    return sessionError('organization_rejected', detail);
+  }
   // Clerk checks the redirect URL's scheme and host, never its path, so this is the destination's configuration.
   if (status === 422 && errors.some((error) => error.meta?.param_name === 'redirect_url')) {
     return sessionError('destination_rejected', detail);
@@ -290,6 +311,7 @@ const agentTaskResponseSchema = z.object({
   url: z.string(),
   agent_task_id: z.string(),
   session_restricted: z.unknown().optional(),
+  session_organization_id: z.unknown().optional(),
 });
 
 // A Clerk key shape (`sk_...`, `pk_...`) at the start or after a `.`, `_`, `:`, or `-` boundary, for text that does
@@ -351,6 +373,9 @@ async function requestBrowserSession(
     on_behalf_of: { user_id: authInfo.extra.userId },
     permissions: '*',
     session_restricted: config.restricted,
+    ...(request.organizationId !== undefined && {
+      session_organization_id: request.organizationId,
+    }),
     agent_name: agentName,
     task_description: request.taskDescription?.trim() || DEFAULT_TASK_DESCRIPTION,
     redirect_url: redirectUrl,
@@ -374,10 +399,15 @@ async function requestBrowserSession(
   if (!result.success) {
     throw sessionError('unavailable', `unreadable response with status ${response.status}`);
   }
-  // Older Clerk versions ignore `session_restricted`, so only this confirmation proves the session is limited.
+  // Older Clerk versions ignore `session_restricted` and `session_organization_id`, so only this confirmation proves
+  // the session is limited.
   const { agent_task_id: agentTaskId, url } = result.data;
   const validId = IDENTIFIER_PATTERN.test(agentTaskId);
-  if (config.restricted && result.data.session_restricted !== true) {
+  const unconfirmed =
+    (config.restricted && result.data.session_restricted !== true) ||
+    (request.organizationId !== undefined &&
+      result.data.session_organization_id !== request.organizationId);
+  if (unconfirmed) {
     // An id that is not an identifier is never logged. It is still revoked when it is a safe path segment. Otherwise
     // nothing safely names the task, so it is left to expire: the link is never returned or logged, and it works once,
     // for about an hour.
