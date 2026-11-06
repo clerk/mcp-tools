@@ -83,8 +83,7 @@ function challengeScopes(
  * tool runs and answers with the 403 step-up challenge for the granted scopes followed by the missing ones, so the
  * new grant keeps the old access. A request without auth info is left to the tool. MCP SDK 1.x has no such option.
  * Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
- * TypeScript rejects a call without scopes or with a string literal that is not a scope-token. At run time it throws a
- * `Clerk error:` message when no scope is given or a scope is not a scope-token.
+ * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
  * @example
  * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: requireAdditionalScopes('projects:read') }, handler);
  */

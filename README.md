@@ -135,7 +135,7 @@ server.registerTool(
 - Enable every scope your tools need for the OAuth application. Its scope settings and the user's approval decide what a token can get. `scopes_supported` in your protected resource metadata only guides what clients request: MCP clients request the scopes named in a challenge, and otherwise usually the whole `scopes_supported` list. A `401` usually names no scope, so that list is what a client requests on its first connection. Listing only baseline scopes there encourages clients to request extra scopes through step-up, though a client can still request them up front. Listing a scope there makes clients request it on first connection, which is usually the only way clients without step-up support ask for it.
 - The SDK sends the challenge only over HTTP (`createMcpHandler` or the Streamable HTTP transport) and for requests with auth info. Elsewhere, including stdio, the tool runs without it.
 - MCP SDK 1.x has no `scopeChallenge` option, and TypeScript rejects it there. The `streamableHttpHandler` adapters in `@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono` run SDK 1.x, so a tool behind them must check its scopes itself.
-- `requireAdditionalScopes` needs at least one scope, and every scope must be a valid OAuth scope token: no empty string, space, quote, backslash, control character or non-ASCII character. TypeScript rejects a call without scopes or with a string literal that breaks this. Scopes it cannot check before run time, such as a `string` variable, throw a `Clerk error:` message when `requireAdditionalScopes` is called.
+- `requireAdditionalScopes` throws a `Clerk error:` message when it is given no scopes or a scope that is not a valid OAuth scope token.
 
 #### Collecting feedback from agents
 
