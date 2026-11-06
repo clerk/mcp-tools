@@ -1,13 +1,21 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
+import {
+  type BackendApiClient,
+  type BackendApiOptions,
+  createBackendApiClient,
+  safeErrorName,
+} from './backend-api';
+import {
+  type McpToolExtra,
+  type McpToolTuple,
+  OPEN_WORLD_WRITE_ANNOTATIONS,
+  toolAuthInfo,
+  toolError,
+  toolResult,
+} from './mcp-tool';
 import { isClerkAuthInfo } from './server';
-
-const DEFAULT_API_URL = 'https://api.clerk.com';
-
-// Well under MCP clients' own request timeouts, so a stalled API still gets the agent the "continue" message.
-const REQUEST_TIMEOUT_MS = 10_000;
 
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
@@ -93,13 +101,8 @@ export type FeedbackReport = {
   metadata?: Record<string, unknown>;
 };
 
-export type SubmitFeedbackOptions = {
-  /** Secret key of the Clerk instance the feedback belongs to. */
-  secretKey: string;
-  /** Origin of the Clerk Backend API. Defaults to https://api.clerk.com. */
-  apiUrl?: string;
-  fetch?: typeof fetch;
-};
+/** `secretKey` is the secret key of the Clerk instance the feedback belongs to. */
+export type SubmitFeedbackOptions = BackendApiOptions;
 
 export type SubmitFeedbackToolOptions = SubmitFeedbackOptions & {
   /** Name and version of your MCP server, shown with each report. The name defaults to the request's host. */
@@ -123,20 +126,16 @@ export class FeedbackSubmissionError extends Error {
  */
 export async function submitFeedback(
   report: FeedbackReport,
-  { secretKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = fetch }: SubmitFeedbackOptions,
+  options: SubmitFeedbackOptions,
 ): Promise<SubmittedFeedback> {
-  if (!isAllowedApiUrl(apiUrl)) {
-    throw new Error('Clerk error: apiUrl must use HTTPS or loopback HTTP');
-  }
-  const response = await fetchImpl(new URL('/v1/feedback', apiUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${secretKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(report),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  return postFeedback(createBackendApiClient('submitFeedback', options), report);
+}
+
+async function postFeedback(
+  client: BackendApiClient,
+  report: FeedbackReport,
+): Promise<SubmittedFeedback> {
+  const response = await client.post('/v1/feedback', report);
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok || !isSubmittedFeedback(body)) {
     throw new FeedbackSubmissionError(response.status, body);
@@ -163,22 +162,18 @@ function bareToolNames(operation: string) {
     .slice(0, MAX_OPERATION_LENGTH);
 }
 
-type FeedbackInput = z.infer<z.ZodObject<typeof submitFeedbackInputSchema>>;
-
 /**
- * The parts of the callback's second argument this tool reads. The MCP SDK v1 passes the first three
- * fields (`RequestHandlerExtra`) and v2 passes the last two (`ServerContext`), so both versions' arguments
- * are assignable to it.
+ * The parts of the callback's second argument this tool reads. The MCP SDK v1 passes `authInfo`,
+ * `_meta`, and `requestInfo` (`RequestHandlerExtra`) and v2 passes `http` and `mcpReq` (`ServerContext`), so both
+ * versions' arguments are assignable to it.
  */
-export type FeedbackToolExtra = {
-  authInfo?: AuthInfo;
+export type FeedbackToolExtra = McpToolExtra & {
   _meta?: Record<string, unknown>;
   requestInfo?: {
     headers?: Record<string, string | string[] | undefined>;
     url?: URL;
   };
   http?: {
-    authInfo?: AuthInfo;
     req?: Pick<Request, 'headers' | 'url'>;
   };
   mcpReq?: {
@@ -187,27 +182,13 @@ export type FeedbackToolExtra = {
   };
 };
 
-type SubmitFeedbackToolCallback = (
-  input: FeedbackInput,
-  extra: FeedbackToolExtra,
-) => Promise<{
-  content: { type: 'text'; text: string }[];
-  structuredContent?: { feedback_id: string; received: boolean };
-  isError?: boolean;
-}>;
-
 /** Arguments for `McpServer.registerTool`, on MCP SDK v1 and v2. */
-export type SubmitFeedbackTool = [
-  name: typeof SUBMIT_FEEDBACK_TOOL_NAME,
-  config: {
-    title: string;
-    description: string;
-    inputSchema: typeof submitFeedbackInputSchema;
-    outputSchema: typeof submitFeedbackOutputSchema;
-    annotations: ToolAnnotations;
-  },
-  callback: SubmitFeedbackToolCallback,
-];
+export type SubmitFeedbackTool = McpToolTuple<
+  typeof SUBMIT_FEEDBACK_TOOL_NAME,
+  typeof submitFeedbackInputSchema,
+  typeof submitFeedbackOutputSchema,
+  FeedbackToolExtra
+>;
 
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 
@@ -302,23 +283,9 @@ function source(
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
 // identity that verifyClerkToken produced.
 function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
-  const userId = authInfo?.extra?.userId;
-  if (!isClerkAuthInfo(authInfo) || typeof userId !== 'string') {
-    return {};
-  }
-  return { user_id: userId, client_id: authInfo?.clientId || undefined };
-}
-
-function isAllowedApiUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === 'https:' ||
-      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-    );
-  } catch {
-    return false;
-  }
+  return isClerkAuthInfo(authInfo)
+    ? { user_id: authInfo.extra.userId, client_id: authInfo.clientId || undefined }
+    : {};
 }
 
 // After a timeout, a lost connection, or an unreadable 2xx response, Clerk may already have stored the report.
@@ -326,19 +293,16 @@ function wasRejected(error: unknown): error is FeedbackSubmissionError {
   return error instanceof FeedbackSubmissionError && (error.status < 200 || error.status >= 300);
 }
 
-// Only the status or error name: a custom fetch's error message could echo the Authorization header.
+// Only the status or a safe error name: a custom fetch's error message could echo the Authorization header.
 function failureReason(error: unknown) {
   if (error instanceof FeedbackSubmissionError) {
     return `status ${error.status}`;
   }
-  return error instanceof Error ? error.name : 'unknown error';
+  return safeErrorName(error);
 }
 
-function toolError(text: string) {
-  return {
-    isError: true,
-    content: [{ type: 'text' as const, text: `${text} Do not retry; continue with the task.` }],
-  };
+function feedbackToolError(text: string) {
+  return toolError(`${text} Do not retry; continue with the task.`);
 }
 
 /**
@@ -348,43 +312,32 @@ function toolError(text: string) {
  * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
-  if (!options.secretKey?.trim()) {
-    throw new Error('Clerk error: submitFeedbackTool requires the secretKey of a Clerk instance');
-  }
-  if (options.apiUrl !== undefined && !isAllowedApiUrl(options.apiUrl)) {
-    throw new Error('Clerk error: submitFeedbackTool apiUrl must use HTTPS or loopback HTTP');
-  }
+  const client = createBackendApiClient('submitFeedbackTool', options);
 
-  const callback: SubmitFeedbackToolCallback = async (input, extra) => {
+  const callback: SubmitFeedbackTool[2] = async (input, extra) => {
     try {
-      const { id } = await submitFeedback(
-        {
-          ...input,
-          operation: input.operation && bareToolNames(input.operation),
-          source: source(extra, options.server),
-          reporter: reporter(extra),
-          ...identityFromAuthInfo(extra.http?.authInfo ?? extra.authInfo),
-        },
-        options,
-      );
+      const { id } = await postFeedback(client, {
+        ...input,
+        operation: input.operation && bareToolNames(input.operation),
+        source: source(extra, options.server),
+        reporter: reporter(extra),
+        ...identityFromAuthInfo(toolAuthInfo(extra)),
+      });
       const result = { feedback_id: id, received: true };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result) }],
-        structuredContent: result,
-      };
+      return toolResult(JSON.stringify(result), result);
     } catch (error) {
       const reason = failureReason(error);
       if (!wasRejected(error)) {
         console.error(
           `Clerk error: submit_feedback could not confirm the feedback was stored (${reason})`,
         );
-        return toolError('Feedback may not have been received.');
+        return feedbackToolError('Feedback may not have been received.');
       }
       console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
       if (error.status === 429) {
-        return toolError('Feedback limit reached for now.');
+        return feedbackToolError('Feedback limit reached for now.');
       }
-      return toolError('Feedback could not be sent.');
+      return feedbackToolError('Feedback could not be sent.');
     }
   };
 
@@ -395,12 +348,7 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
       description: SUBMIT_FEEDBACK_DESCRIPTION,
       inputSchema: submitFeedbackInputSchema,
       outputSchema: submitFeedbackOutputSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      annotations: OPEN_WORLD_WRITE_ANNOTATIONS,
     },
     callback,
   ];

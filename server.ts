@@ -100,12 +100,12 @@ export async function fetchClerkAuthorizationServerMetadata({
  * as `authData to the MCP SDK.
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
  * @param token - The token to verify
- * @returns AuthInfo type, see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`
+ * @returns A `ClerkAuthInfo`, which is an `AuthInfo` (see `import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";`), or `undefined`
  */
 export function verifyClerkToken(
   auth: MachineAuthObject<'oauth_token'>,
   token: string | undefined,
-): AuthInfo | undefined {
+): ClerkAuthInfo | undefined {
   if (!token) return undefined;
 
   if (!auth.isAuthenticated) {
@@ -142,10 +142,16 @@ export function verifyClerkToken(
 }
 
 /**
+ * Auth info produced by `verifyClerkToken`. `clientId` can be empty when the `AuthInfo` was built by hand.
+ */
+export type ClerkAuthInfo = AuthInfo & { extra: { userId: string; verifiedBy: 'clerk' } };
+
+/**
  * Whether `authInfo` came from `verifyClerkToken`, so its `clientId` and `extra.userId` are Clerk ids.
  */
-export function isClerkAuthInfo(authInfo: AuthInfo | undefined): boolean {
-  return authInfo?.extra?.verifiedBy === 'clerk';
+export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is ClerkAuthInfo {
+  const userId = authInfo?.extra?.userId;
+  return authInfo?.extra?.verifiedBy === 'clerk' && typeof userId === 'string' && userId !== '';
 }
 
 export { requireAdditionalScopes } from './scope-challenge';
