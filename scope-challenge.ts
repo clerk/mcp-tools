@@ -11,25 +11,33 @@ type ScopeChallengeHandler = (context: {
 // `WWW-Authenticate` value.
 const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 
-type Chars<S extends string, Acc = never> = S extends `${infer C}${infer R}` ? Chars<R, Acc | C> : Acc;
+type Chars<S extends string> = S extends `${infer C}${infer R}` ? C | Chars<R> : never;
+
+type LowercaseLetter = Chars<'abcdefghijklmnopqrstuvwxyz'>;
 
 // The characters `SCOPE_TOKEN` allows.
-type ScopeTokenChar = Chars<"!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~">;
+type ScopeTokenChar =
+  | LowercaseLetter
+  | Uppercase<LowercaseLetter>
+  | Chars<'0123456789'>
+  | Chars<"!#$%&'()*+,-./:;<=>?@[]^_`{|}~">;
+
+type HasOnlyScopeTokenChars<S extends string> = S extends `${infer C}${infer R}`
+  ? C extends ScopeTokenChar
+    ? HasOnlyScopeTokenChars<R>
+    : false
+  : true;
 
 // A wide `string` passes: only literals can be checked before run time.
-type IsScopeToken<S extends string> = string extends S
-  ? true
-  : S extends `${infer C}${infer R}`
-    ? C extends ScopeTokenChar
-      ? R extends ''
-        ? true
-        : IsScopeToken<R>
-      : false
-    : false;
+type ScopeToken<S extends string> = string extends S
+  ? S
+  : S extends ''
+    ? `invalid scope token: ${S}`
+    : HasOnlyScopeTokenChars<S> extends true
+      ? S
+      : `invalid scope token: ${S}`;
 
-type ScopeTokens<T extends readonly string[]> = {
-  [K in keyof T]: IsScopeToken<T[K]> extends true ? T[K] : `invalid scope token: ${T[K]}`;
-};
+type ScopeTokens<T extends readonly string[]> = { [K in keyof T]: ScopeToken<T[K]> };
 
 function isScopeToken(scope: unknown): scope is string {
   return typeof scope === 'string' && SCOPE_TOKEN.test(scope);
