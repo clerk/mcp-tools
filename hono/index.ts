@@ -1,9 +1,18 @@
 import { getAuth } from '@clerk/hono';
+import type { ClerkHonoVariables } from '@clerk/hono/types';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
+import {
+  type ClerkMcpAuthOptions,
+  type McpAuthOptions,
+  assertMcpAuthOptions,
+  authenticateBearer,
+  resourceMetadataUrlFor,
+  verifyClerkOAuthToken,
+} from '../bearer-auth';
 import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
@@ -62,33 +71,63 @@ export async function authServerMetadataHandlerClerk(c: Context) {
   return c.json(metadata);
 }
 
+/**
+ * Hono middleware that enforces authentication for MCP requests.
+ * @param verifyToken - Verifies a token and returns the auth data, or `undefined` to reject it
+ * @param options - The public `resourceUrl` of this endpoint and the `requiredScopes` every request needs
+ * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
+ * a 403 challenge.
+ */
 export function mcpAuth(
   verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
+  options?: McpAuthOptions,
 ): MiddlewareHandler {
+  assertMcpAuthOptions('mcpAuth', options);
+
   return async (c: Context, next: Next) => {
-    const authHeader = c.req.header('authorization');
+    const result = await authenticateBearer({
+      authorization: c.req.header('authorization'),
+      resourceMetadataUrl: options?.resourceUrl
+        ? resourceMetadataUrlFor(options.resourceUrl)
+        : getPRMUrl(c),
+      requiredScopes: options?.requiredScopes,
+      verifyToken: (token) => verifyToken(token, c),
+    });
 
-    if (!authHeader) {
-      return unauthorized(c);
+    if (!result.ok) {
+      return c.json(
+        { error: result.error },
+        { status: result.status, headers: { 'WWW-Authenticate': result.challenge } },
+      );
     }
 
-    const [scheme, token, ...rest] = authHeader.trim().split(/\s+/);
-
-    if (scheme?.toLowerCase() !== 'bearer' || !token || rest.length > 0) {
-      return unauthorized(c);
-    }
-
-    const authData = await verifyToken(token, c);
-
-    if (!authData) {
-      return c.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    c.set('mcpAuth', authData);
+    c.set('mcpAuth', result.authInfo);
     await next();
   };
 }
 
+/**
+ * Hono middleware that enforces authentication for MCP requests and verifies the OAuth access token with Clerk,
+ * including that its audience is this endpoint. `clerkMiddleware()` must run first.
+ * @param options - `resourceUrl`, the exact URL clients use for this endpoint, and the `requiredScopes` every request
+ * needs
+ * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
+ * a 403 challenge.
+ */
+export function clerkMcpAuth(options: ClerkMcpAuthOptions): MiddlewareHandler {
+  assertMcpAuthOptions('clerkMcpAuth', options);
+
+  return mcpAuth((token, c) => {
+    const client = (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
+    if (!client) throw new Error('Clerk error: clerkMcpAuth needs clerkMiddleware() to run first');
+    return verifyClerkOAuthToken(client, token, options.resourceUrl);
+  }, options);
+}
+
+/**
+ * Hono middleware that enforces authentication for MCP requests and verifies the OAuth access token using Clerk.
+ * @deprecated This does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
+ */
 export const mcpAuthClerk = mcpAuth(async (token, c) => {
   const authData = getAuth(c, { acceptsToken: 'oauth_token' });
   if (!authData.isAuthenticated) return undefined;
@@ -136,14 +175,4 @@ function getResourceUrl(c: Context): string {
 function getPRMUrl(c: Context): string {
   const url = new URL(c.req.url);
   return `${url.origin}/.well-known/oauth-protected-resource${url.pathname}`;
-}
-
-function unauthorized(c: Context) {
-  return c.json(
-    { error: 'Unauthorized' },
-    {
-      status: 401,
-      headers: { 'WWW-Authenticate': `Bearer resource_metadata=${getPRMUrl(c)}` },
-    },
-  );
 }

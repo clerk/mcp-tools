@@ -2,8 +2,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { describe, expect, test, vi } from 'vitest';
-import { streamableHttpHandler } from './index';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+
+vi.mock('@clerk/express', () => ({
+  getAuth: vi.fn(),
+  clerkClient: { authenticateRequest: vi.fn() },
+}));
+
+import { clerkClient, getAuth } from '@clerk/express';
+import { clerkMcpAuth, mcpAuth, mcpAuthClerk, streamableHttpHandler } from './index';
 
 const mcpHeaders = {
   'Content-Type': 'application/json',
@@ -51,6 +58,212 @@ function postInitialize(baseUrl: string) {
     body: initializeBody,
   });
 }
+
+async function request(
+  middleware: express.RequestHandler,
+  { path = '/mcp', authorization }: { path?: string; authorization?: string } = {},
+) {
+  const app = express();
+  app.post('/mcp', middleware, (req, res) => {
+    res.json({ auth: (req as unknown as { auth: unknown }).auth });
+  });
+
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const { port } = server.address() as AddressInfo;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: 'POST',
+      headers: authorization === undefined ? {} : { Authorization: authorization },
+      signal: AbortSignal.timeout(2000),
+    });
+    return {
+      status: res.status,
+      challenge: res.headers.get('WWW-Authenticate'),
+      body: await res.json(),
+      origin: `http://127.0.0.1:${port}`,
+    };
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+const reject = async () => undefined;
+const metadataUrl = 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp';
+const resourceUrl = 'https://mcp.example.com/mcp';
+
+describe('mcpAuth', () => {
+  test('works as a middleware without await', () => {
+    expect(() => express().post('/mcp', mcpAuth(reject))).not.toThrow();
+  });
+
+  test('sends a quoted challenge when the Authorization header is missing', async () => {
+    const res = await request(mcpAuth(reject));
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Unauthorized' });
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
+    );
+  });
+
+  test('leaves the query string out of resource_metadata', async () => {
+    const res = await request(mcpAuth(reject), { path: '/mcp?x=1' });
+
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
+    );
+  });
+
+  test('derives resource_metadata from resourceUrl instead of the request', async () => {
+    const res = await request(mcpAuth(reject, { resourceUrl }));
+
+    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}"`);
+  });
+
+  test.each(['Bearer', 'Basic abc', 'Bearer a b'])(
+    'answers the malformed header %j with a 401 challenge and does not verify it',
+    async (authorization) => {
+      const verifyToken = vi.fn(reject);
+
+      const res = await request(mcpAuth(verifyToken, { resourceUrl }), { authorization });
+
+      expect(res.status).toBe(401);
+      expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}"`);
+      expect(verifyToken).not.toHaveBeenCalled();
+    },
+  );
+
+  test('adds invalid_token to the challenge when the token is rejected', async () => {
+    const res = await request(mcpAuth(reject, { resourceUrl }), { authorization: 'Bearer bad' });
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
+  });
+
+  test('returns 403 with the granted and missing scopes when requiredScopes are missing', async () => {
+    const res = await request(
+      mcpAuth(async () => ({ token: 't', scopes: ['openid'], clientId: 'c' }), {
+        resourceUrl,
+        requiredScopes: ['profile', 'email'],
+      }),
+      { authorization: 'Bearer t' },
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'insufficient_scope' });
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", scope="openid profile email"`,
+    );
+  });
+
+  test('sets req.auth and calls next when the token has every required scope', async () => {
+    const authInfo = { token: 't', scopes: ['profile'], clientId: 'c' };
+
+    const res = await request(
+      mcpAuth(async () => authInfo, { requiredScopes: ['profile'] }),
+      {
+        authorization: 'Bearer t',
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ auth: authInfo });
+  });
+
+  test('throws at setup for an invalid resourceUrl or scope', () => {
+    expect(() => mcpAuth(reject, { resourceUrl: '/mcp' })).toThrow(
+      'Clerk error: mcpAuth resourceUrl must be an absolute URL',
+    );
+    expect(() => mcpAuth(reject, { requiredScopes: ['a b'] })).toThrow(
+      'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
+    );
+  });
+});
+
+describe('mcpAuthClerk', () => {
+  test('answers a bare Bearer header with a 401 instead of hanging', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const res = await request(mcpAuthClerk, { authorization: 'Bearer' });
+    await new Promise((resolve) => setImmediate(resolve));
+    process.off('unhandledRejection', unhandled);
+
+    expect(res.status).toBe(401);
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(getAuth).not.toHaveBeenCalled();
+  });
+});
+
+describe('clerkMcpAuth', () => {
+  const authenticateRequest = vi.mocked(clerkClient.authenticateRequest);
+  const authenticated = (scopes: string[]) =>
+    ({
+      isAuthenticated: true,
+      toAuth: () => ({
+        isAuthenticated: true,
+        tokenType: 'oauth_token',
+        clientId: 'client-1',
+        scopes,
+        userId: 'user-1',
+      }),
+    }) as never;
+
+  beforeEach(() => {
+    authenticateRequest.mockReset();
+  });
+
+  test('asks Clerk to check the audience and sets req.auth', async () => {
+    authenticateRequest.mockResolvedValue(authenticated(['profile']));
+
+    const res = await request(clerkMcpAuth({ resourceUrl, requiredScopes: ['profile'] }), {
+      authorization: 'Bearer token-1',
+    });
+
+    expect(res.status).toBe(200);
+    const [verified, options] = authenticateRequest.mock.calls[0]!;
+    expect(verified.headers.get('authorization')).toBe('Bearer token-1');
+    expect(options).toEqual({ acceptsToken: 'oauth_token', audience: resourceUrl });
+    expect(res.body.auth).toMatchObject({ clientId: 'client-1', extra: { userId: 'user-1' } });
+  });
+
+  test('answers a rejected token with the invalid_token challenge', async () => {
+    authenticateRequest.mockResolvedValue({ isAuthenticated: false } as never);
+
+    const res = await request(clerkMcpAuth({ resourceUrl }), { authorization: 'Bearer bad' });
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
+  });
+
+  test('answers a verification failure with the invalid_token challenge', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    authenticateRequest.mockRejectedValue(new Error('network down'));
+
+    const res = await request(clerkMcpAuth({ resourceUrl }), { authorization: 'Bearer t' });
+
+    expect(res.status).toBe(401);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  test('answers a token without the required scopes with a 403 challenge', async () => {
+    authenticateRequest.mockResolvedValue(authenticated(['openid']));
+
+    const res = await request(clerkMcpAuth({ resourceUrl, requiredScopes: ['profile'] }), {
+      authorization: 'Bearer t',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", scope="openid profile"`,
+    );
+  });
+});
 
 describe('streamableHttpHandler', () => {
   test('handles an MCP initialize request and returns 200', async () => {
