@@ -39,7 +39,7 @@ function options(
   };
 }
 
-// The full Backend API response; only url, agent_task_id, and restricted are read.
+// The full Backend API response; only url, agent_task_id, and session_restricted are read.
 function okFetch(patch: Record<string, unknown> = {}) {
   return vi.fn<typeof fetch>(async () =>
     Response.json({
@@ -48,7 +48,7 @@ function okFetch(patch: Record<string, unknown> = {}) {
       agent_task_id: 'agttsk_1',
       task_id: 'tsk_1',
       url: LINK,
-      restricted: true,
+      session_restricted: true,
       ...patch,
     }),
   );
@@ -88,7 +88,7 @@ describe('createBrowserSession', () => {
     expect(sentBody(fetchImpl)).toEqual({
       on_behalf_of: { user_id: 'user_1' },
       permissions: '*',
-      restricted: true,
+      session_restricted: true,
       agent_name: 'mcp:client_1',
       task_description: 'Signed-in browser session requested through MCP',
       redirect_url: 'https://app.example.com/',
@@ -100,13 +100,13 @@ describe('createBrowserSession', () => {
     });
   });
 
-  test('sends restricted: false, and skips the response check, when the option is false', async () => {
-    const fetchImpl = okFetch({ restricted: undefined });
+  test('sends session_restricted: false, and skips the response check, when the option is false', async () => {
+    const fetchImpl = okFetch({ session_restricted: undefined });
     const result = await createBrowserSession(
       { authInfo },
       options(fetchImpl, { restricted: false }),
     );
-    expect(sentBody(fetchImpl)).toMatchObject({ restricted: false });
+    expect(sentBody(fetchImpl)).toMatchObject({ session_restricted: false });
     expect(result.url).toBe(LINK);
   });
 
@@ -114,11 +114,11 @@ describe('createBrowserSession', () => {
     ['missing', undefined],
     ['false', false],
     ['not a boolean', 'true'],
-  ])('refuses the link when Clerk reports restricted as %s', async (_name, value) => {
+  ])('refuses the link when Clerk reports session_restricted as %s', async (_name, value) => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const tool = createBrowserSessionTool(options(okFetch({ restricted: value })));
+    const tool = createBrowserSessionTool(options(okFetch({ session_restricted: value })));
     await expect(
-      createBrowserSession({ authInfo }, options(okFetch({ restricted: value }))),
+      createBrowserSession({ authInfo }, options(okFetch({ session_restricted: value }))),
     ).rejects.toMatchObject(browserSessionError('restricted_not_applied'));
     const result = await tool[2]({}, { authInfo });
     expect(result.isError).toBe(true);
@@ -136,7 +136,7 @@ describe('createBrowserSession', () => {
     }
 
     test('revokes the task Clerk created when it does not confirm the restriction', async () => {
-      const fetchImpl = okFetch({ restricted: false });
+      const fetchImpl = okFetch({ session_restricted: false });
       await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
         browserSessionError('restricted_not_applied'),
       );
@@ -149,7 +149,7 @@ describe('createBrowserSession', () => {
     test('still refuses when the revoke fails', async () => {
       const fetchImpl = vi.fn<typeof fetch>(async (url) => {
         if (String(url).endsWith('/revoke')) throw new TypeError('network down');
-        return Response.json({ url: LINK, agent_task_id: 'agttsk_1', restricted: false });
+        return Response.json({ url: LINK, agent_task_id: 'agttsk_1', session_restricted: false });
       });
       await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
         browserSessionError('restricted_not_applied'),
@@ -162,7 +162,7 @@ describe('createBrowserSession', () => {
       const fetchImpl = vi.fn<typeof fetch>(async (url) =>
         String(url).endsWith('/revoke')
           ? Response.json({ errors: [{ code: 'BODY_TEXT' }] }, { status: 500 })
-          : Response.json({ url: LINK, agent_task_id: 'agttsk_1', restricted: false }),
+          : Response.json({ url: LINK, agent_task_id: 'agttsk_1', session_restricted: false }),
       );
       const tool = createBrowserSessionTool(options(fetchImpl));
       await tool[2]({}, { authInfo });
@@ -176,7 +176,7 @@ describe('createBrowserSession', () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       const fetchImpl = vi.fn<typeof fetch>(async (url) => {
         if (String(url).endsWith('/revoke')) throw new TypeError('network down');
-        return Response.json({ url: LINK, agent_task_id: 'agttsk_1', restricted: false });
+        return Response.json({ url: LINK, agent_task_id: 'agttsk_1', session_restricted: false });
       });
       await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
       expect(consoleError.mock.calls[0]![0]).toBe(
@@ -196,7 +196,7 @@ describe('createBrowserSession', () => {
       'logs nothing of an agent_task_id that is %s, and sends no revoke',
       async (_name, agentTaskId) => {
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-        const fetchImpl = okFetch({ agent_task_id: agentTaskId, restricted: false });
+        const fetchImpl = okFetch({ agent_task_id: agentTaskId, session_restricted: false });
         const tool = createBrowserSessionTool(options(fetchImpl));
         const result = await tool[2]({}, { authInfo });
         expect(result.isError).toBe(true);
@@ -219,7 +219,7 @@ describe('createBrowserSession', () => {
       ['is longer than 64 characters', `agttsk_${'a'.repeat(64)}`],
     ])('revokes an agent_task_id that %s without logging it', async (_name, agentTaskId) => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const fetchImpl = okFetch({ agent_task_id: agentTaskId, restricted: false });
+      const fetchImpl = okFetch({ agent_task_id: agentTaskId, session_restricted: false });
       const result = await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).not.toMatch(LEAKS);
@@ -242,7 +242,7 @@ describe('createBrowserSession', () => {
       const fetchImpl = vi.fn<typeof fetch>(async (url) =>
         String(url).endsWith('/revoke')
           ? Response.json({}, { status: 404 })
-          : Response.json({ url: LINK, agent_task_id: 'agttsk-1', restricted: false }),
+          : Response.json({ url: LINK, agent_task_id: 'agttsk-1', session_restricted: false }),
       );
       await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
       expect(revokeCalls(fetchImpl)).toHaveLength(1);
@@ -266,7 +266,7 @@ describe('createBrowserSession', () => {
     });
 
     test('does not revoke when restricted is false', async () => {
-      const fetchImpl = okFetch({ restricted: undefined });
+      const fetchImpl = okFetch({ session_restricted: undefined });
       await createBrowserSession({ authInfo }, options(fetchImpl, { restricted: false }));
       expect(revokeCalls(fetchImpl)).toHaveLength(0);
     });

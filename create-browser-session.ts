@@ -283,7 +283,7 @@ function errorForStatus(status: number, errors: readonly ApiError[]): BrowserSes
 const agentTaskResponseSchema = z.object({
   url: z.string(),
   agent_task_id: z.string(),
-  restricted: z.unknown().optional(),
+  session_restricted: z.unknown().optional(),
 });
 
 // A Clerk key shape (`sk_...`, `pk_...`) at the start or after a `.`, `_`, `:`, or `-` boundary, for text that does
@@ -352,7 +352,7 @@ async function requestBrowserSession(
   const body = {
     on_behalf_of: { user_id: authInfo.extra.userId },
     permissions: '*',
-    restricted: config.restricted,
+    session_restricted: config.restricted,
     agent_name: agentName,
     task_description: request.taskDescription?.trim() || DEFAULT_TASK_DESCRIPTION,
     redirect_url: redirectUrl,
@@ -376,10 +376,10 @@ async function requestBrowserSession(
   if (!result.success) {
     throw sessionError('unavailable', `unreadable response with status ${response.status}`);
   }
-  // Older Clerk versions ignore `restricted`, so only this confirmation proves the session is limited.
+  // Older Clerk versions ignore `session_restricted`, so only this confirmation proves the session is limited.
   const { agent_task_id: agentTaskId, url } = result.data;
   const validId = IDENTIFIER_PATTERN.test(agentTaskId);
-  if (config.restricted && result.data.restricted !== true) {
+  if (config.restricted && result.data.session_restricted !== true) {
     // An id that is not an identifier is never logged. It is still revoked when it is a safe path segment. Otherwise
     // nothing safely names the task, so it is left to expire: the link is never returned or logged, and it works once,
     // for about an hour.

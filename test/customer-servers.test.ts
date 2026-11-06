@@ -20,7 +20,7 @@ const LINK = 'https://app.example.com/v1/tickets/accept?ticket=customer_ticket';
 
 function clerkFetch(restricted?: boolean) {
   return vi.fn<typeof fetch>(async () =>
-    Response.json({ object: 'agent_task', agent_task_id: 'agttsk_1', url: LINK, restricted }),
+    Response.json({ object: 'agent_task', agent_task_id: 'agttsk_1', url: LINK, session_restricted: restricted }),
   );
 }
 
@@ -73,11 +73,11 @@ describe.each<CustomerServerKind>(['v1-route', 'v2-registration'])(
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(sentBody(fetchImpl)).toMatchObject({
         on_behalf_of: { user_id: 'user_1' },
-        restricted: true,
+        session_restricted: true,
       });
     });
 
-    test('returns a tool error and no link when Clerk does not confirm restricted', async () => {
+    test('returns a tool error and no link when Clerk does not confirm session_restricted', async () => {
       const { client } = await connect(kind, TOKENS.full.token, false);
       const result = await callBrowserSession(client);
       expect(result.isError).toBe(true);
