@@ -59,7 +59,9 @@ function challengeScopes(
  * @example
  * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: requireAdditionalScopes('projects:read') }, handler);
  */
-export function requireAdditionalScopes(...requiredScopes: string[]): ScopeChallengeHandler {
+export function requireAdditionalScopes(
+  ...requiredScopes: readonly [string, ...string[]]
+): ScopeChallengeHandler {
   if (requiredScopes.length === 0) {
     throw new Error('Clerk error: requireAdditionalScopes needs at least one scope');
   }

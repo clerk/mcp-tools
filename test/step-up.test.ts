@@ -12,7 +12,7 @@ import { requireAdditionalScopes } from '../server';
 const ORIGIN = 'https://mcp.example.com';
 const MCP_URL = new URL('/mcp', ORIGIN);
 const RESOURCE_METADATA_URL = `${ORIGIN}/.well-known/oauth-protected-resource/mcp`;
-const TOOL_SCOPES = ['projects:read'];
+const TOOL_SCOPES = ['projects:read'] as const;
 
 const TOKENS: Record<string, string[]> = {
   // A scope outside `TOOL_SCOPES`, so a step-up must keep it to prove granted scopes are kept.

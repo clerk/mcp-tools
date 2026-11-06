@@ -47,6 +47,7 @@ describe('requireAdditionalScopes', () => {
   );
 
   test('throws when given no scopes', () => {
+    // @ts-expect-error at least one scope is required
     expect(() => requireAdditionalScopes()).toThrow(
       /^Clerk error: requireAdditionalScopes needs at least one scope/,
     );
