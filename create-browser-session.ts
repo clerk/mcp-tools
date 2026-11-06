@@ -181,6 +181,12 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
     );
   }
   assertScopeTokens('createBrowserSession', 'requiredScopes', options.requiredScopes);
+  // Missing scopes go in the log, so a scope shaped like a Clerk key would leak one.
+  if (options.requiredScopes.some((scope) => KEY_SHAPE.test(scope))) {
+    throw new Error(
+      'Clerk error: createBrowserSession requiredScopes must not contain a Clerk key',
+    );
+  }
   if (options.agentName !== undefined && typeof options.agentName !== 'string') {
     throw new Error('Clerk error: createBrowserSession agentName must be a string');
   }
@@ -314,14 +320,6 @@ async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): P
   }
 }
 
-// Scopes contain `:`, so they do not fit IDENTIFIER_PATTERN; only a key-shaped scope is dropped.
-function insufficientScopeDetail(missing: readonly string[]): string {
-  const loggable = missing.filter((scope) => !KEY_SHAPE.test(scope));
-  const parts = ['insufficient_scope:', ...loggable];
-  if (loggable.length < missing.length) parts.push('(key-shaped scope omitted)');
-  return parts.join(' ');
-}
-
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
  * The user comes from `authInfo` (set by `verifyClerkToken`), never from tool input.
@@ -343,7 +341,7 @@ async function requestBrowserSession(
 
   const missing = missingScopes(config.requiredScopes, authInfo);
   if (missing.length > 0) {
-    throw sessionError('insufficient_scope', insufficientScopeDetail(missing), missing);
+    throw sessionError('insufficient_scope', missing.join(' '), missing);
   }
 
   const redirectUrl = resolveRedirectUrl(config.destination, request.path);
@@ -471,6 +469,14 @@ function once(fn: () => void): () => void {
   };
 }
 
+// SDK 2.1+ answers a missing scope with the step-up challenge before the callback runs, so a tool that sees one is on
+// SDK 2.0. Module-level, so servers that build the tool per request still warn once.
+const warnStepUpUnsupported = once(() =>
+  console.warn(
+    `Clerk warning: ${CREATE_BROWSER_SESSION_TOOL_NAME} returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.`,
+  ),
+);
+
 /**
  * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`.
  * Throws when the options cannot work.
@@ -479,14 +485,6 @@ export function createBrowserSessionTool(
   options: CreateBrowserSessionOptions,
 ): CreateBrowserSessionTool {
   const config = resolveBrowserSessionConfig(options);
-  // SDK 2.1+ answers a missing scope with the step-up challenge before the callback runs, so a tool that sees one is
-  // on SDK 2.0.
-  const warnStepUpUnsupported = once(() =>
-    console.warn(
-      `Clerk warning: ${CREATE_BROWSER_SESSION_TOOL_NAME} returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.`,
-    ),
-  );
-
   const callback: CreateBrowserSessionTool[2] = async (input, extra) => {
     try {
       const link = await requestBrowserSession(
@@ -506,7 +504,9 @@ export function createBrowserSessionTool(
       if (error instanceof BrowserSessionError) {
         if (error.code === 'insufficient_scope' && isSdkV2Extra(extra)) warnStepUpUnsupported();
         // The path is agent input and stays out of the log; `detail` holds only safe text.
-        console.error(`Clerk error: createBrowserSession failed (${error.detail ?? error.code})`);
+        console.error(
+          `Clerk error: createBrowserSession failed (${error.code}${error.detail ? `: ${error.detail}` : ''})`,
+        );
         return toolError(browserSessionErrorMessage(error));
       }
       // Not the message or stack: they could carry the link or the key.

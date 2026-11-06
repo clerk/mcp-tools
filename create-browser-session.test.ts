@@ -126,7 +126,7 @@ describe('createBrowserSession', () => {
     expect(textOf(result)).toContain('Do not retry');
     expect(consoleError).toHaveBeenCalledTimes(1);
     expect(consoleError.mock.calls[0]![0]).toBe(
-      'Clerk error: createBrowserSession failed (agent_task_id agttsk_1)',
+      'Clerk error: createBrowserSession failed (restricted_not_applied: agent_task_id agttsk_1)',
     );
   });
 
@@ -168,7 +168,7 @@ describe('createBrowserSession', () => {
       await tool[2]({}, { authInfo });
       expect(revokeCalls(fetchImpl)).toHaveLength(1);
       expect(consoleError.mock.calls[0]![0]).toBe(
-        'Clerk error: createBrowserSession failed (agent_task_id agttsk_1 revoke_failed)',
+        'Clerk error: createBrowserSession failed (restricted_not_applied: agent_task_id agttsk_1 revoke_failed)',
       );
     });
 
@@ -180,7 +180,7 @@ describe('createBrowserSession', () => {
       });
       await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
       expect(consoleError.mock.calls[0]![0]).toBe(
-        'Clerk error: createBrowserSession failed (agent_task_id agttsk_1 revoke_failed)',
+        'Clerk error: createBrowserSession failed (restricted_not_applied: agent_task_id agttsk_1 revoke_failed)',
       );
     });
 
@@ -204,7 +204,7 @@ describe('createBrowserSession', () => {
         expect(consoleError).toHaveBeenCalledTimes(1);
         // Nothing safely names the task, so the log says the revoke was skipped and the link is left to expire.
         expect(consoleError.mock.calls[0]![0]).toBe(
-          'Clerk error: createBrowserSession failed (agent_task_id invalid revoke_skipped)',
+          'Clerk error: createBrowserSession failed (restricted_not_applied: agent_task_id invalid revoke_skipped)',
         );
         expect(JSON.stringify(result)).not.toMatch(/LEAK|INJECTED|SECRET_TICKET/);
         await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
@@ -230,7 +230,7 @@ describe('createBrowserSession', () => {
       );
       expect(consoleError).toHaveBeenCalledTimes(1);
       expect(consoleError.mock.calls[0]![0]).toBe(
-        'Clerk error: createBrowserSession failed (agent_task_id invalid)',
+        'Clerk error: createBrowserSession failed (restricted_not_applied: agent_task_id invalid)',
       );
       await expect(createBrowserSession({ authInfo }, options(fetchImpl))).rejects.toMatchObject(
         browserSessionError('restricted_not_applied'),
@@ -247,7 +247,7 @@ describe('createBrowserSession', () => {
       await createBrowserSessionTool(options(fetchImpl))[2]({}, { authInfo });
       expect(revokeCalls(fetchImpl)).toHaveLength(1);
       expect(consoleError.mock.calls[0]![0]).toBe(
-        'Clerk error: createBrowserSession failed (agent_task_id invalid revoke_failed)',
+        'Clerk error: createBrowserSession failed (restricted_not_applied: agent_task_id invalid revoke_failed)',
       );
     });
 
@@ -474,6 +474,8 @@ describe('validateBrowserSessionOptions', () => {
     ['required scope with a backslash', { requiredScopes: ['a\\b'] }],
     ['required scope with a control character', { requiredScopes: ['a\nb'] }],
     ['non-string required scope', { requiredScopes: [1 as unknown as string] }],
+    ['required scope shaped like a secret key', { requiredScopes: ['sk_test_abc'] }],
+    ['required scope that embeds a key shape', { requiredScopes: ['scope:pk_live_abc'] }],
     ['missing requiredScopes', { requiredScopes: undefined as unknown as string[] }],
     ['zero session length', { sessionMaxDurationInSeconds: 0 }],
     ['negative session length', { sessionMaxDurationInSeconds: -5 }],
@@ -483,6 +485,12 @@ describe('validateBrowserSessionOptions', () => {
     ['non-boolean restricted', { restricted: 'yes' as unknown as boolean }],
   ])('rejects %s', (_name, patch) => {
     expect(() => validateBrowserSessionOptions({ ...base, ...patch })).toThrow(/^Clerk error: /);
+  });
+
+  test('accepts scopes that only contain the letters of a key prefix', () => {
+    expect(() =>
+      validateBrowserSessionOptions({ ...base, requiredScopes: ['desk:read', 'task_list'] }),
+    ).not.toThrow();
   });
 
   test('createBrowserSession validates its options', async () => {
@@ -623,9 +631,16 @@ describe('createBrowserSessionTool', () => {
       return vi.spyOn(console, 'warn').mockImplementation(() => {});
     }
 
-    test('warns once per tool, with a message that carries no request data', async () => {
+    // The warning is module-level, so each test loads the module fresh to start unwarned.
+    async function freshTool(patch: Partial<CreateBrowserSessionOptions> = {}) {
+      vi.resetModules();
+      const module = await import('./create-browser-session');
+      return module.createBrowserSessionTool(options(okFetch(), patch));
+    }
+
+    test('warns once, with a message that carries no request data', async () => {
       const consoleWarn = warned();
-      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      const tool = await freshTool({ requiredScopes: ['email'] });
       const first = await tool[2]({}, v2Extra({ ...missing, token: 'TOKEN_SECRET' }));
       await tool[2]({}, v2Extra(missing));
       // The tool error still goes to the agent.
@@ -636,18 +651,19 @@ describe('createBrowserSessionTool', () => {
       );
     });
 
-    test('warns once for each tool instance', async () => {
+    test('warns once when the tool is built for each request', async () => {
       const consoleWarn = warned();
-      for (let i = 0; i < 2; i++) {
-        const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
-        await tool[2]({}, v2Extra(missing));
-      }
-      expect(consoleWarn).toHaveBeenCalledTimes(2);
+      const first = await freshTool({ requiredScopes: ['email'] });
+      await first[2]({}, v2Extra(missing));
+      const { createBrowserSessionTool: create } = await import('./create-browser-session');
+      const second = create(options(okFetch(), { requiredScopes: ['email'] }));
+      await second[2]({}, v2Extra(missing));
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
     });
 
     test('does not warn on the SDK 1.x shape, where the tool error is expected', async () => {
       const consoleWarn = warned();
-      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      const tool = await freshTool({ requiredScopes: ['email'] });
       const result = await tool[2]({}, { authInfo: missing });
       expect(result.isError).toBe(true);
       expect(consoleWarn).not.toHaveBeenCalled();
@@ -655,7 +671,7 @@ describe('createBrowserSessionTool', () => {
 
     test('does not warn when an SDK 2.x request ends in another error', async () => {
       const consoleWarn = warned();
-      const tool = createBrowserSessionTool(options(okFetch()));
+      const tool = await freshTool();
       const result = await tool[2]({ path: '//evil.example' }, v2Extra(authInfo));
       expect(result.isError).toBe(true);
       expect(consoleWarn).not.toHaveBeenCalled();
@@ -663,7 +679,7 @@ describe('createBrowserSessionTool', () => {
 
     test('does not warn when every scope is present', async () => {
       const consoleWarn = warned();
-      const tool = createBrowserSessionTool(options(okFetch(), { requiredScopes: ['email'] }));
+      const tool = await freshTool({ requiredScopes: ['email'] });
       const result = await tool[2]({}, v2Extra({ ...authInfo, scopes: ['email'] }));
       expect(result.isError).toBeUndefined();
       expect(consoleWarn).not.toHaveBeenCalled();
@@ -695,32 +711,30 @@ describe('createBrowserSessionTool', () => {
 
     test('logs the status and the error codes and parameters of a failed response', async () => {
       expect(await callLogged(statusFetch(422, redirectUrlErrors))).toBe(
-        'Clerk error: createBrowserSession failed (status 422: form_param_value_invalid redirect_url)',
+        'Clerk error: createBrowserSession failed (destination_rejected: status 422: form_param_value_invalid redirect_url)',
       );
     });
 
-    test('leaves a key-shaped missing scope out of the log', async () => {
-      const message = await callLogged(okFetch(), {
-        requiredScopes: ['email', 'sk_test_SCOPELEAK'],
-        auth: { ...authInfo, scopes: [] },
-      });
-      expect(message).toBe(
-        'Clerk error: createBrowserSession failed (insufficient_scope: email (key-shaped scope omitted))',
-      );
-      expect(message).not.toMatch(/SCOPELEAK/);
+    test('logs the missing scopes of a refused request', async () => {
+      expect(
+        await callLogged(okFetch(), {
+          requiredScopes: ['email', 'user:org:read'],
+          auth: { ...authInfo, scopes: [] },
+        }),
+      ).toBe('Clerk error: createBrowserSession failed (insufficient_scope: email user:org:read)');
     });
 
     test('leaves unexpected error codes and parameters out of the log', async () => {
       const body = { errors: [{ code: `x ${SECRET}`, meta: { param_name: LINK } }] };
       expect(await callLogged(statusFetch(422, body))).toBe(
-        'Clerk error: createBrowserSession failed (status 422)',
+        'Clerk error: createBrowserSession failed (rejected: status 422)',
       );
     });
 
     test('leaves a secret key shaped error code out of the log', async () => {
       const body = { errors: [{ code: SECRET, meta: { param_name: 'redirect_url' } }] };
       expect(await callLogged(statusFetch(422, body))).toBe(
-        'Clerk error: createBrowserSession failed (status 422: redirect_url)',
+        'Clerk error: createBrowserSession failed (destination_rejected: status 422: redirect_url)',
       );
     });
 
@@ -731,13 +745,13 @@ describe('createBrowserSessionTool', () => {
         throw error;
       });
       expect(await callLogged(fetchImpl)).toBe(
-        'Clerk error: createBrowserSession failed (unknown error)',
+        'Clerk error: createBrowserSession failed (unavailable: unknown error)',
       );
     });
 
     test('logs the status and code of an unauthorized response', async () => {
       expect(await callLogged(statusFetch(401))).toBe(
-        'Clerk error: createBrowserSession failed (status 401: some_error)',
+        'Clerk error: createBrowserSession failed (unauthorized: status 401: some_error)',
       );
     });
 
@@ -756,7 +770,7 @@ describe('createBrowserSessionTool', () => {
         throw new TypeError(`fetch failed ${SECRET} ${LINK}`);
       });
       expect(await callLogged(fetchImpl)).toBe(
-        'Clerk error: createBrowserSession failed (TypeError)',
+        'Clerk error: createBrowserSession failed (unavailable: TypeError)',
       );
     });
 
@@ -769,7 +783,7 @@ describe('createBrowserSessionTool', () => {
           throw error;
         });
         expect(await callLogged(fetchImpl)).toBe(
-          'Clerk error: createBrowserSession failed (unknown error)',
+          'Clerk error: createBrowserSession failed (unavailable: unknown error)',
         );
       },
     );
@@ -777,14 +791,14 @@ describe('createBrowserSessionTool', () => {
     test('leaves a response code that embeds a key shape out of the log', async () => {
       const body = { errors: [{ code: 'form_param_sk_live_abc' }] };
       expect(await callLogged(statusFetch(422, body))).toBe(
-        'Clerk error: createBrowserSession failed (status 422)',
+        'Clerk error: createBrowserSession failed (rejected: status 422)',
       );
     });
 
     test('keeps a response code that only contains the letters of a key prefix', async () => {
       const body = { errors: [{ code: 'task_description', meta: { param_name: 'desk_id' } }] };
       expect(await callLogged(statusFetch(422, body))).toBe(
-        'Clerk error: createBrowserSession failed (status 422: task_description desk_id)',
+        'Clerk error: createBrowserSession failed (rejected: status 422: task_description desk_id)',
       );
     });
 
@@ -795,7 +809,7 @@ describe('createBrowserSessionTool', () => {
         throw error;
       });
       expect(await callLogged(fetchImpl)).toBe(
-        'Clerk error: createBrowserSession failed (unknown error)',
+        'Clerk error: createBrowserSession failed (unavailable: unknown error)',
       );
     });
   });
