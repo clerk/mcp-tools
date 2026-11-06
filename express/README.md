@@ -28,11 +28,14 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createClerkClient, MachineAuthObject, clerkMiddleware } from '@clerk/express';
 import {
-  mcpAuthClerk,
+  clerkMcpAuth,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/express';
+
+const MCP_RESOURCE_URL = 'https://mcp.example.com/mcp';
+const REQUIRED_SCOPES = ['profile', 'email'];
 
 const app = express();
 app.use(clerkMiddleware());
@@ -73,11 +76,16 @@ app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk()
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceHandlerClerk({
-    scopes_supported: ['profile', 'email'],
+    resource: MCP_RESOURCE_URL,
+    scopes_supported: REQUIRED_SCOPES,
   }),
 );
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
+app.post(
+  '/mcp',
+  clerkMcpAuth({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
+  streamableHttpHandler(createServer),
+);
 
 app.listen(3000);
 ```
@@ -160,6 +168,8 @@ Generic authentication middleware that allows you to implement custom token veri
 **Parameters:**
 
 - `verifyToken: (token: string, req: express.Request) => Promise<any | false>` - Function that verifies the token and returns auth data or false
+- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy.
+- `options.requiredScopes` (optional) - Scopes every request needs
 
 **Example:**
 
@@ -184,10 +194,41 @@ The middleware will:
 - Check for the `Authorization` header
 - Extract the Bearer token
 - Call your `verifyToken` function
-- Return a 401 response with proper `WWW-Authenticate` header if authentication fails
+- Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected
+- Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 
+### `clerkMcpAuth`
+
+Authentication middleware that verifies OAuth access tokens with Clerk, including that their audience is this endpoint.
+
+**Parameters:**
+
+- `options.resourceUrl` - The exact URL clients use for this endpoint. Clerk rejects a token whose `aud` claim does not include it.
+- `options.requiredScopes` (optional) - Scopes every request needs
+
+**Example:**
+
+```ts
+import { clerkMcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+
+app.post(
+  '/mcp',
+  clerkMcpAuth({
+    resourceUrl: 'https://mcp.example.com/mcp',
+    requiredScopes: ['profile', 'email'],
+  }),
+  streamableHttpHandler(createServer),
+);
+```
+
+The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
+
+Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
+
 ### `mcpAuthClerk`
+
+**Deprecated:** this middleware does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
 
 Pre-configured authentication middleware for Clerk that automatically handles OAuth token verification.
 
@@ -366,9 +407,10 @@ The publishable key is used for generating OAuth metadata, while the secret key 
 
 The middleware automatically handles common authentication errors:
 
-- **Missing Authorization header**: Returns 401 with `WWW-Authenticate` header pointing to your protected resource metadata
-- **Invalid token format**: Throws an error with details about the expected format
-- **Token verification failure**: Returns 401 with error details
+- **Missing Authorization header**: Returns 401 with a `WWW-Authenticate` header pointing to your protected resource metadata
+- **Invalid token format**: Returns 401 with the same challenge
+- **Token verification failure**: Returns 401 with the same challenge plus `error="invalid_token"`
+- **Missing required scopes**: Returns 403 with the same challenge plus `error="insufficient_scope"` and `scope`
 
 ## Integration with Existing Express Apps
 
@@ -383,12 +425,13 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 
 // Apply middleware in the order you need
-app.use(cors());
+// Browser-based MCP clients can only read the challenge if it is exposed
+app.use(cors({ exposedHeaders: ['WWW-Authenticate'] }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 app.post(
   '/mcp',
-  mcpAuthClerk, // MCP authentication
+  clerkMcpAuth({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
   streamableHttpHandler(createServer), // MCP request handling
 );
 ```

@@ -1,8 +1,16 @@
-import { getAuth } from '@clerk/express';
+import { clerkClient, getAuth } from '@clerk/express';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type express from 'express';
+import {
+  type ClerkMcpAuthOptions,
+  type McpAuthOptions,
+  assertMcpAuthOptions,
+  authenticateBearer,
+  resourceMetadataUrlFor,
+  verifyClerkOAuthToken,
+} from '../bearer-auth';
 import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
@@ -14,6 +22,10 @@ import {
  * Express middleware that enforces authentication for MCP requests.
  * @param verifyToken - A function that verifies a token and returns either the
  * auth data or false
+ * @param options - The public `resourceUrl` of this endpoint and the
+ * `requiredScopes` every request needs
+ * @returns The middleware. A missing or rejected token gets a 401 challenge,
+ * and a token without `requiredScopes` gets a 403 challenge.
  * @example
  * ```ts
  * function createServer() {
@@ -35,47 +47,67 @@ import {
  * app.post("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
  * ```
  */
-export async function mcpAuth(
+export function mcpAuth(
   verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
+  options?: McpAuthOptions,
 ) {
+  assertMcpAuthOptions('mcpAuth', options);
+
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const prmUrl = getPRMUrl(req);
+    const result = await authenticateBearer({
+      authorization: req.headers.authorization,
+      resourceMetadataUrl: options?.resourceUrl
+        ? resourceMetadataUrlFor(options.resourceUrl)
+        : getPRMUrl(req),
+      requiredScopes: options?.requiredScopes,
+      verifyToken: (token) => verifyToken(token, req),
+    });
 
-    if (!req.headers.authorization) {
-      return res
-        .status(401)
-        .set({
-          'WWW-Authenticate': `Bearer resource_metadata=${prmUrl}`,
-        })
-        .send({
-          error: 'Unauthorized',
-        });
-    }
-
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.split(' ')[1];
-
-    if (!token) {
-      throw new Error(
-        `Invalid authorization header value, expected Bearer <token>, received ${authHeader}`,
-      );
-    }
-
-    const authData = await verifyToken(token, req);
-
-    if (!authData) {
-      return res.status(401).json({ error: 'Unauthorized' });
+    if (!result.ok) {
+      res
+        .status(result.status)
+        .set('WWW-Authenticate', result.challenge)
+        .json({ error: result.error });
+      return;
     }
 
     // @ts-expect-error - we're monkey patching this on purpose
-    req.auth = authData;
+    req.auth = result.authInfo;
 
     next();
   };
 }
 
 /**
+ * Express middleware that enforces authentication for MCP requests and verifies the OAuth access token with Clerk,
+ * including that its audience is this endpoint.
+ * @param options - `resourceUrl`, the exact URL clients use for this endpoint,
+ * and the `requiredScopes` every request needs
+ * @returns The middleware. A missing or rejected token gets a 401 challenge,
+ * and a token without `requiredScopes` gets a 403 challenge.
+ * @example
+ * ```ts
+ * app.post(
+ *   "/mcp",
+ *   clerkMcpAuth({
+ *     resourceUrl: "https://mcp.example.com/mcp",
+ *     requiredScopes: ["profile", "email"],
+ *   }),
+ *   streamableHttpHandler(createServer),
+ * );
+ * ```
+ */
+export function clerkMcpAuth(options: ClerkMcpAuthOptions) {
+  assertMcpAuthOptions('clerkMcpAuth', options);
+  return mcpAuth(
+    (token) => verifyClerkOAuthToken(clerkClient, token, options.resourceUrl),
+    options,
+  );
+}
+
+/**
  * Express middleware that enforces authentication for MCP requests and automatically verifies the OAuth access token using Clerk.
+ * @deprecated This does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
  * @example
  * ```ts
  * function createServer() {
@@ -92,21 +124,13 @@ export async function mcpAuth(
  * app.post("/mcp", mcpAuthClerk, streamableHttpHandler(createServer));
  * ```
  */
-export async function mcpAuthClerk(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-): Promise<void> {
-  (
-    await mcpAuth(async (token, req: express.Request) => {
-      const authData = getAuth(req, { acceptsToken: 'oauth_token' });
+export const mcpAuthClerk = mcpAuth(async (token, req) => {
+  const authData = getAuth(req, { acceptsToken: 'oauth_token' });
 
-      if (!authData.isAuthenticated) return undefined;
+  if (!authData.isAuthenticated) return undefined;
 
-      return verifyClerkToken(authData, token);
-    })
-  )(req, res, next);
-}
+  return verifyClerkToken(authData, token);
+});
 
 /**
  * An express handler that returns OAuth protected resource metadata.
@@ -196,9 +220,8 @@ function getResourceUrl(req: express.Request) {
 // Get given a request, generate a protected resource metadata url for the
 // given resource url
 function getPRMUrl(req: express.Request) {
-  return `${req.protocol}://${req.get(
-    'host',
-  )}/.well-known/oauth-protected-resource${req.originalUrl}`;
+  const [pathname] = req.originalUrl.split('?');
+  return `${req.protocol}://${req.get('host')}/.well-known/oauth-protected-resource${pathname}`;
 }
 
 /**

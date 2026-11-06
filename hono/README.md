@@ -22,14 +22,20 @@ npm install @clerk/hono
 import { Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clerkMiddleware } from '@clerk/hono';
+import { cors } from 'hono/cors';
 import {
-  mcpAuthClerk,
+  clerkMcpAuth,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/hono';
 
+const MCP_RESOURCE_URL = 'https://mcp.example.com/mcp';
+const REQUIRED_SCOPES = ['profile', 'email'];
+
 const app = new Hono();
+// Browser-based MCP clients can only read the challenge if it is exposed
+app.use('*', cors({ origin: '*', exposeHeaders: ['WWW-Authenticate'] }));
 app.use('*', clerkMiddleware());
 
 function createServer() {
@@ -40,9 +46,19 @@ function createServer() {
   return server;
 }
 
-app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
+app.get(
+  '/.well-known/oauth-protected-resource/mcp',
+  protectedResourceHandlerClerk({
+    resource: MCP_RESOURCE_URL,
+    scopes_supported: REQUIRED_SCOPES,
+  }),
+);
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
+app.post(
+  '/mcp',
+  clerkMcpAuth({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
+  streamableHttpHandler(createServer),
+);
 
 export default app;
 ```
@@ -86,11 +102,22 @@ export default app;
 
 ## Reference
 
-### `mcpAuth(verifyToken)`
+### `mcpAuth(verifyToken, options?)`
 
-Middleware that enforces authentication for MCP requests. Extracts the bearer token from the `Authorization` header, calls `verifyToken`, and stores the result in Hono context for downstream handlers (`c.get('mcpAuth')`). Returns `401` with a `WWW-Authenticate` header if auth fails.
+Middleware that enforces authentication for MCP requests. Extracts the bearer token from the `Authorization` header, calls `verifyToken`, and stores the result in Hono context for downstream handlers (`c.get('mcpAuth')`). Returns `401` with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, adding `error="invalid_token"` for a rejected token.
+
+- `options.resourceUrl`: the exact URL clients use for this endpoint. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy.
+- `options.requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by the missing ones, so the new grant keeps the old access.
+
+### `clerkMcpAuth({ resourceUrl, requiredScopes? })`
+
+Middleware that verifies OAuth access tokens with Clerk, including that their audience is `resourceUrl`, and otherwise behaves like `mcpAuth`. Requires `clerkMiddleware()` to be mounted first.
+
+Your Clerk instance must issue the `aud` claim. Require `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
 ### `mcpAuthClerk`
+
+**Deprecated:** this middleware does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
 
 Pre-configured middleware that verifies tokens using Clerk. Requires `clerkMiddleware()` to be mounted and `CLERK_PUBLISHABLE_KEY` to be set.
 

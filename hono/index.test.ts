@@ -31,12 +31,15 @@ import {
   protectedResourceHandler,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
+  clerkMcpAuth,
   mcpAuth,
   mcpAuthClerk,
   streamableHttpHandler,
 } from './index';
 
 const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+const BARE_CHALLENGE =
+  'Bearer resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"';
 const mcpHeaders = {
   'Content-Type': 'application/json',
   Accept: 'application/json, text/event-stream',
@@ -214,7 +217,7 @@ describe('mcpAuth', () => {
     const res = await app.request('http://localhost/mcp');
     expect(res.status).toBe(401);
     const wwwAuth = res.headers.get('WWW-Authenticate');
-    expect(wwwAuth).toMatch(/^Bearer resource_metadata=/);
+    expect(wwwAuth).toBe(BARE_CHALLENGE);
   });
 
   test('returns 401 when verifyToken returns undefined', async () => {
@@ -229,6 +232,69 @@ describe('mcpAuth', () => {
       headers: { Authorization: 'Bearer bad-token' },
     });
     expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, error="invalid_token"`);
+  });
+
+  test('returns 403 with the granted and missing scopes when requiredScopes are missing', async () => {
+    const app = new Hono();
+    app.get(
+      '/mcp',
+      mcpAuth(async () => ({ token: 't', scopes: ['openid'], clientId: 'c' }), {
+        requiredScopes: ['profile', 'email'],
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'insufficient_scope' });
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      `${BARE_CHALLENGE}, error="insufficient_scope", scope="openid profile email"`,
+    );
+  });
+
+  test('allows a token that has every required scope', async () => {
+    const app = new Hono();
+    app.get(
+      '/mcp',
+      mcpAuth(async () => ({ token: 't', scopes: ['profile', 'email'], clientId: 'c' }), {
+        requiredScopes: ['profile', 'email'],
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  test('derives resource_metadata from resourceUrl instead of the request', async () => {
+    const app = new Hono();
+    app.get(
+      '/mcp',
+      mcpAuth(async () => undefined, { resourceUrl: 'https://mcp.example.com/mcp' }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://internal:3000/mcp');
+
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  test('throws at setup for an invalid resourceUrl or scope', () => {
+    expect(() => mcpAuth(async () => undefined, { resourceUrl: '/mcp' })).toThrow(
+      'Clerk error: mcpAuth resourceUrl must be an absolute URL',
+    );
+    expect(() => mcpAuth(async () => undefined, { requiredScopes: ['a b'] })).toThrow(
+      'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
+    );
   });
 
   test('calls next and stores authInfo in context when token is valid', async () => {
@@ -277,7 +343,7 @@ describe('mcpAuth', () => {
     });
     expect(res.status).toBe(401);
     const wwwAuth = res.headers.get('WWW-Authenticate');
-    expect(wwwAuth).toMatch(/^Bearer resource_metadata=/);
+    expect(wwwAuth).toBe(BARE_CHALLENGE);
   });
 
   test('returns 401 and does not verify when Authorization scheme is not Bearer', async () => {
@@ -295,7 +361,7 @@ describe('mcpAuth', () => {
 
     expect(res.status).toBe(401);
     expect(verifyToken).not.toHaveBeenCalled();
-    expect(res.headers.get('WWW-Authenticate')).toMatch(/^Bearer resource_metadata=/);
+    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
   });
 
   test('returns 401 and does not verify when Bearer header has extra parts', async () => {
@@ -313,7 +379,86 @@ describe('mcpAuth', () => {
 
     expect(res.status).toBe(401);
     expect(verifyToken).not.toHaveBeenCalled();
-    expect(res.headers.get('WWW-Authenticate')).toMatch(/^Bearer resource_metadata=/);
+    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+  });
+});
+
+describe('clerkMcpAuth', () => {
+  const resourceUrl = 'https://mcp.example.com/mcp';
+  const clerk = { authenticateRequest: vi.fn() };
+
+  function clerkApp() {
+    const app = new Hono();
+    app.use(async (c, next) => {
+      c.set('clerk' as never, clerk as never);
+      await next();
+    });
+    app.post('/mcp', clerkMcpAuth({ resourceUrl, requiredScopes: ['profile'] }), (c) =>
+      c.json(c.get('mcpAuth')),
+    );
+    return app;
+  }
+
+  const post = (app: Hono) =>
+    app.request('http://internal/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-1' },
+    });
+
+  beforeEach(() => {
+    clerk.authenticateRequest.mockReset();
+  });
+
+  test('asks Clerk to check the audience and passes the auth info on', async () => {
+    clerk.authenticateRequest.mockResolvedValue({
+      isAuthenticated: true,
+      toAuth: () => ({
+        isAuthenticated: true,
+        tokenType: 'oauth_token',
+        clientId: 'client-1',
+        scopes: ['profile'],
+        userId: 'user-1',
+      }),
+    });
+
+    const res = await post(clerkApp());
+
+    expect(res.status).toBe(200);
+    const [request, options] = clerk.authenticateRequest.mock.calls[0]!;
+    expect(request.headers.get('authorization')).toBe('Bearer token-1');
+    expect(options).toEqual({ acceptsToken: 'oauth_token', audience: resourceUrl });
+    expect(await res.json()).toMatchObject({ clientId: 'client-1', token: 'token-1' });
+  });
+
+  test('answers a rejected token with the invalid_token challenge', async () => {
+    clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
+
+    const res = await post(clerkApp());
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+    );
+  });
+
+  test('answers a verification failure with the invalid_token challenge', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    clerk.authenticateRequest.mockRejectedValue(new Error('network down'));
+
+    const res = await post(clerkApp());
+
+    expect(res.status).toBe(401);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  test('fails with a Clerk error when clerkMiddleware has not run', async () => {
+    const app = new Hono();
+    app.post('/mcp', clerkMcpAuth({ resourceUrl }), (c) => c.json({ ok: true }));
+
+    const res = await post(app);
+
+    expect(res.status).toBe(500);
   });
 });
 
