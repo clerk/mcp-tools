@@ -67,7 +67,7 @@ export function missingScopes(required: readonly string[], authInfo: AuthInfo): 
  * The scopes to challenge for when `authInfo` lacks some of `required`, and `undefined` otherwise: the granted ones
  * followed by the missing ones, so the new grant keeps the old access.
  */
-function challengeScopes(
+export function challengeScopes(
   required: readonly string[],
   authInfo: AuthInfo,
 ): [string, ...string[]] | undefined {

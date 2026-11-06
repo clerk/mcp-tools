@@ -54,11 +54,9 @@ export function protectedResourceHandler({
   authServerUrl: string;
 }): (req: Request) => Response {
   return (req: Request): Response => {
-    const origin = new URL(req.url).origin;
-
     const metadata = generateProtectedResourceMetadata({
       authServerUrl: authServerUrl,
-      resourceUrl: origin,
+      resourceUrl: getResourceUrl(req),
     });
 
     return Response.json(metadata, {
@@ -82,8 +80,6 @@ export function protectedResourceHandlerClerk(
   properties?: Record<string, unknown>,
 ): (req: Request) => Response {
   return (req: Request): Response => {
-    const origin = new URL(req.url).origin;
-
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
       throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
@@ -91,7 +87,7 @@ export function protectedResourceHandlerClerk(
 
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey,
-      resourceUrl: origin,
+      resourceUrl: getResourceUrl(req),
       properties,
     });
 
@@ -145,6 +141,14 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
       headers: corsHeaders,
     });
   };
+}
+
+// The resource a protected resource metadata route describes: `/mcp` for `/.well-known/oauth-protected-resource/mcp`,
+// and the bare origin for the root route.
+function getResourceUrl(req: Request): string {
+  const { origin, pathname } = new URL(req.url);
+  const resourcePath = pathname.replace('/.well-known/oauth-protected-resource', '');
+  return `${origin}${resourcePath.replace(/\/$/, '')}`;
 }
 
 // re-export the verifyClerkToken function for convenience
