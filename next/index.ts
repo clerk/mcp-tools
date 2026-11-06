@@ -5,7 +5,7 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
-  scopeChallengeFor,
+  requireAdditionalScopes,
   verifyClerkToken,
 } from '../server';
 
@@ -148,4 +148,4 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
 }
 
 // re-export the verifyClerkToken function for convenience
-export { scopeChallengeFor, verifyClerkToken };
+export { requireAdditionalScopes, verifyClerkToken };

@@ -1,4 +1,4 @@
-// Scope helpers for the MCP step-up scope challenge. Only `scopeChallengeFor` is public, re-exported from
+// Scope helpers for the MCP step-up scope challenge. Only `requireAdditionalScopes` is public, re-exported from
 // `@clerk/mcp-tools/server`. This module is not a package entry point.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
@@ -57,13 +57,13 @@ function challengeScopes(
  * Pass `resourceMetadataUrl` on `authInfo` so that the challenge carries `resource_metadata`.
  * Throws a `Clerk error:` message when no scope is given or a scope is not a scope-token.
  * @example
- * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: scopeChallengeFor('projects:read') }, handler);
+ * server.registerTool('list_projects', { title, description, inputSchema, scopeChallenge: requireAdditionalScopes('projects:read') }, handler);
  */
-export function scopeChallengeFor(...requiredScopes: string[]): ScopeChallengeHandler {
+export function requireAdditionalScopes(...requiredScopes: string[]): ScopeChallengeHandler {
   if (requiredScopes.length === 0) {
-    throw new Error('Clerk error: scopeChallengeFor needs at least one scope');
+    throw new Error('Clerk error: requireAdditionalScopes needs at least one scope');
   }
-  assertScopeTokens('scopeChallengeFor', 'requiredScopes', requiredScopes);
+  assertScopeTokens('requireAdditionalScopes', 'requiredScopes', requiredScopes);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
     const scopes = challengeScopes(requiredScopes, authInfo);

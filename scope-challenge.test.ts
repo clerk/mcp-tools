@@ -1,37 +1,37 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { describe, expect, test } from 'vitest';
 
-import { scopeChallengeFor } from './server';
+import { requireAdditionalScopes } from './server';
 
 function auth(scopes: string[] | undefined): AuthInfo {
   return { token: 't', clientId: 'client_1', scopes: scopes as string[] };
 }
 
-describe('scopeChallengeFor', () => {
+describe('requireAdditionalScopes', () => {
   test('challenges for the granted scopes followed by the missing ones', () => {
-    const challenge = scopeChallengeFor('projects:read', 'projects:write');
+    const challenge = requireAdditionalScopes('projects:read', 'projects:write');
     expect(challenge({ authInfo: auth(['profile', 'projects:read']) })).toEqual({
       scopes: ['profile', 'projects:read', 'projects:write'],
     });
   });
 
   test('returns undefined when every required scope is granted', () => {
-    const challenge = scopeChallengeFor('projects:read');
+    const challenge = requireAdditionalScopes('projects:read');
     expect(challenge({ authInfo: auth(['profile', 'projects:read']) })).toBeUndefined();
   });
 
   test('leaves a request without auth info to the tool', () => {
-    expect(scopeChallengeFor('projects:read')({})).toBeUndefined();
+    expect(requireAdditionalScopes('projects:read')({})).toBeUndefined();
   });
 
   test('treats auth info without scopes as granting none', () => {
-    expect(scopeChallengeFor('projects:read')({ authInfo: auth(undefined) })).toEqual({
+    expect(requireAdditionalScopes('projects:read')({ authInfo: auth(undefined) })).toEqual({
       scopes: ['projects:read'],
     });
   });
 
   test('drops a granted scope that is not a scope-token', () => {
-    const challenge = scopeChallengeFor('projects:read');
+    const challenge = requireAdditionalScopes('projects:read');
     expect(challenge({ authInfo: auth(['bad"scope', 'profile']) })).toEqual({
       scopes: ['profile', 'projects:read'],
     });
@@ -40,22 +40,22 @@ describe('scopeChallengeFor', () => {
   test.each([['a b'], [''], ['a"b'], ['a\\b']])(
     'throws for the invalid required scope %j',
     (scope) => {
-      expect(() => scopeChallengeFor('projects:read', scope)).toThrow(
-        /^Clerk error: scopeChallengeFor requiredScopes must contain only scope tokens/,
+      expect(() => requireAdditionalScopes('projects:read', scope)).toThrow(
+        /^Clerk error: requireAdditionalScopes requiredScopes must contain only scope tokens/,
       );
     },
   );
 
   test('throws when given no scopes', () => {
-    expect(() => scopeChallengeFor()).toThrow(
-      /^Clerk error: scopeChallengeFor needs at least one scope/,
+    expect(() => requireAdditionalScopes()).toThrow(
+      /^Clerk error: requireAdditionalScopes needs at least one scope/,
     );
   });
 
   test('throws when given an array instead of separate scopes', () => {
     // @ts-expect-error scopes are separate arguments
-    expect(() => scopeChallengeFor(['projects:read'])).toThrow(
-      /^Clerk error: scopeChallengeFor requiredScopes must contain only scope tokens/,
+    expect(() => requireAdditionalScopes(['projects:read'])).toThrow(
+      /^Clerk error: requireAdditionalScopes requiredScopes must contain only scope tokens/,
     );
   });
 });

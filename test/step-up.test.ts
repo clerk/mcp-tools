@@ -7,7 +7,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, test, vi } from 'vitest';
 
-import { scopeChallengeFor } from '../server';
+import { requireAdditionalScopes } from '../server';
 
 const ORIGIN = 'https://mcp.example.com';
 const MCP_URL = new URL('/mcp', ORIGIN);
@@ -35,7 +35,7 @@ function startServer() {
     const server = new McpServer({ name: 'customer', version: '0.0.0' });
     server.registerTool(
       'list_projects',
-      { description: 'Lists projects', scopeChallenge: scopeChallengeFor(...TOOL_SCOPES) },
+      { description: 'Lists projects', scopeChallenge: requireAdditionalScopes(...TOOL_SCOPES) },
       async () => {
         toolCalls();
         return { content: [{ type: 'text' as const, text: 'projects' }] };
@@ -102,7 +102,7 @@ async function connect(token: string) {
   return { client, redirects, toolCalls };
 }
 
-describe('a customer tool with scopeChallengeFor on MCP SDK 2.x', () => {
+describe('a customer tool with requireAdditionalScopes on MCP SDK 2.x', () => {
   test('runs the tool when the token has the required scopes', async () => {
     const { client, redirects, toolCalls } = await connect('token_full');
     const result = await client.callTool({ name: 'list_projects', arguments: {} });

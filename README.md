@@ -111,10 +111,10 @@ These adapters handle the MCP protocol details and integrate with your authentic
 
 #### Step-up for your own tools
 
-When a tool needs an OAuth scope that the access token lacks, the MCP server can answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", ...`. MCP clients answer that by asking the user to approve more scopes. MCP SDK 2.1 or later (`@modelcontextprotocol/server`, which Vercel's `mcp-handler` 2.x also uses) sends this challenge before the tool runs, from the `scopeChallenge` option of `registerTool`. `scopeChallengeFor` from `@clerk/mcp-tools/server` (also exported from `@clerk/mcp-tools/next`) builds that option from the scopes the tool needs:
+When a tool needs an OAuth scope that the access token lacks, the MCP server can answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", ...`. MCP clients answer that by asking the user to approve more scopes. MCP SDK 2.1 or later (`@modelcontextprotocol/server`, which Vercel's `mcp-handler` 2.x also uses) sends this challenge before the tool runs, from the `scopeChallenge` option of `registerTool`. `requireAdditionalScopes` from `@clerk/mcp-tools/server` (also exported from `@clerk/mcp-tools/next`) builds that option from the scopes the tool needs:
 
 ```ts
-import { scopeChallengeFor } from '@clerk/mcp-tools/server';
+import { requireAdditionalScopes } from '@clerk/mcp-tools/server';
 
 server.registerTool(
   'list_projects',
@@ -122,7 +122,7 @@ server.registerTool(
     title: 'List projects',
     description: 'Lists the projects of the signed-in user.',
     inputSchema: {},
-    scopeChallenge: scopeChallengeFor('projects:read'),
+    scopeChallenge: requireAdditionalScopes('projects:read'),
   },
   async () => {
     // ...
@@ -135,7 +135,7 @@ server.registerTool(
 - Enable every scope your tools need for the OAuth application. Its scope settings and the user's approval decide what a token can get. `scopes_supported` in your protected resource metadata only guides what clients request: MCP clients request the scopes named in a challenge, and otherwise usually the whole `scopes_supported` list. A `401` usually names no scope, so that list is what a client requests on its first connection. Listing only baseline scopes there encourages clients to request extra scopes through step-up, though a client can still request them up front. Listing a scope there makes clients request it on first connection, which is usually the only way clients without step-up support ask for it.
 - The SDK sends the challenge only over HTTP (`createMcpHandler` or the Streamable HTTP transport) and for requests with auth info. Elsewhere, including stdio, the tool runs without it.
 - MCP SDK 1.x has no `scopeChallenge` option, and TypeScript rejects it there. The `streamableHttpHandler` adapters in `@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono` run SDK 1.x, so a tool behind them must check its scopes itself.
-- `scopeChallengeFor` throws a `Clerk error:` message when it is given no scopes or a scope that is not a valid OAuth scope token.
+- `requireAdditionalScopes` throws a `Clerk error:` message when it is given no scopes or a scope that is not a valid OAuth scope token.
 
 #### Collecting feedback from agents
 
@@ -690,7 +690,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Params:** `authInfo: AuthInfo | undefined`
   - **Returns:** `boolean`
 
-- `scopeChallengeFor`
+- `requireAdditionalScopes`
   - **Description:** Builds the `scopeChallenge` registration option of MCP SDK 2.1 or later for a tool that needs `requiredScopes`. Before the tool runs, the SDK answers a token that lacks some of them with a `403` step-up challenge for the granted scopes followed by the missing ones. A request without auth info is left to the tool. SDK 1.x has no such option. See [Step-up for your own tools](#step-up-for-your-own-tools).
   - **Params:** `...requiredScopes: string[]`, one or more scopes as separate arguments
   - **Returns:** the function to pass as the `scopeChallenge` option, `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`
