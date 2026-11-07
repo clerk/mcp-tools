@@ -21,9 +21,9 @@ export type McpAuthOptions = {
 };
 
 /**
- * Options for the `clerkMcpAuth` middleware.
+ * Options for the `mcpAuthClerk` middleware.
  */
-export type ClerkMcpAuthOptions = McpAuthOptions & {
+export type McpAuthClerkOptions = McpAuthOptions & {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`. Clerk rejects a token
    * whose `aud` claim does not include it, and the challenge's `resource_metadata` is derived from it.
@@ -41,6 +41,20 @@ export function assertMcpAuthOptions(caller: string, options: McpAuthOptions | u
   if (options?.resourceUrl !== undefined && !URL.canParse(options.resourceUrl)) {
     throw new Error(`Clerk error: ${caller} resourceUrl must be an absolute URL`);
   }
+}
+
+/**
+ * Throws a `Clerk error:` message unless `options` has a `resourceUrl`. Code written for the earlier `mcpAuthClerk`,
+ * which was the middleware itself, passes it straight to a route, so the framework calls it with the request where
+ * the options belong. Without this check that call would quietly return a middleware and the request would hang.
+ */
+export function assertMcpAuthClerkOptions(options: McpAuthClerkOptions) {
+  if (typeof options?.resourceUrl !== 'string') {
+    throw new Error(
+      "Clerk error: mcpAuthClerk needs a resourceUrl. Call it as mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }) instead of passing mcpAuthClerk to the route directly",
+    );
+  }
+  assertMcpAuthOptions('mcpAuthClerk', options);
 }
 
 /** The RFC 9728 metadata URL for a resource: the well-known path goes between the host and the resource's path. */

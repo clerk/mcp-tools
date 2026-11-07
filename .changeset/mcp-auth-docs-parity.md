@@ -2,7 +2,7 @@
 '@clerk/mcp-tools': minor
 ---
 
-`@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono` now export `clerkMcpAuth({ resourceUrl, requiredScopes })`, which verifies OAuth access tokens with Clerk and checks that their audience is `resourceUrl`. `mcpAuthClerk` does not check the audience and is deprecated. Use `@clerk/express` 2.1.70 or `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
+**Breaking:** in `@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono`, `mcpAuthClerk` is now a factory that takes `{ resourceUrl, requiredScopes }`. It verifies OAuth access tokens with Clerk and checks that their audience is `resourceUrl`. The old middleware did not check the audience, so a token issued for another resource passed. Replace `app.post('/mcp', mcpAuthClerk, handler)` with `app.post('/mcp', mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }), handler)`, using the exact URL clients use for the endpoint. Use `@clerk/express` 2.1.70 or `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
 `mcpAuth` in both adapters takes new optional `resourceUrl` and `requiredScopes` options. A token without `requiredScopes` gets a `403` with an `insufficient_scope` challenge, and `resourceUrl` sets the challenge's `resource_metadata` instead of deriving it from the request.
 

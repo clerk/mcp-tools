@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../server', async (importOriginal) => {
@@ -12,16 +12,11 @@ vi.mock('../server', async (importOriginal) => {
   };
 });
 
-vi.mock('@clerk/hono', () => ({
-  getAuth: vi.fn(),
-}));
-
 vi.mock('hono/adapter', () => ({
   env: vi.fn(() => process.env),
 }));
 
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { getAuth } from '@clerk/hono';
 import { env } from 'hono/adapter';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -31,7 +26,6 @@ import {
   protectedResourceHandler,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
-  clerkMcpAuth,
   mcpAuth,
   mcpAuthClerk,
   streamableHttpHandler,
@@ -383,7 +377,7 @@ describe('mcpAuth', () => {
   });
 });
 
-describe('clerkMcpAuth', () => {
+describe('mcpAuthClerk', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
   const clerk = { authenticateRequest: vi.fn() };
 
@@ -393,7 +387,7 @@ describe('clerkMcpAuth', () => {
       c.set('clerk' as never, clerk as never);
       await next();
     });
-    app.post('/mcp', clerkMcpAuth({ resourceUrl, requiredScopes: ['profile'] }), (c) =>
+    app.post('/mcp', mcpAuthClerk({ resourceUrl, requiredScopes: ['profile'] }), (c) =>
       c.json(c.get('mcpAuth')),
     );
     return app;
@@ -452,54 +446,28 @@ describe('clerkMcpAuth', () => {
     consoleError.mockRestore();
   });
 
-  test('fails with a Clerk error when clerkMiddleware has not run', async () => {
+  test('fails loudly when passed to a route without being called', async () => {
     const app = new Hono();
-    app.post('/mcp', clerkMcpAuth({ resourceUrl }), (c) => c.json({ ok: true }));
+    let error: unknown;
+    app.onError((err, c) => {
+      error = err;
+      return c.text('error', 500);
+    });
+    app.post('/mcp', mcpAuthClerk as unknown as MiddlewareHandler, (c) => c.json({ ok: true }));
 
     const res = await post(app);
 
     expect(res.status).toBe(500);
-  });
-});
-
-describe('mcpAuthClerk', () => {
-  test('returns 401 when Clerk auth is not authenticated', async () => {
-    vi.mocked(getAuth).mockReturnValue({ isAuthenticated: false } as ReturnType<typeof getAuth>);
-
-    const app = new Hono();
-    app.post('/mcp', mcpAuthClerk, (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer token' },
-    });
-    expect(res.status).toBe(401);
+    expect(String(error)).toContain('Clerk error: mcpAuthClerk needs a resourceUrl');
   });
 
-  test('sets authInfo in context when Clerk auth succeeds', async () => {
-    vi.mocked(getAuth).mockReturnValue({
-      isAuthenticated: true,
-      tokenType: 'oauth_token',
-      clientId: 'client-1',
-      scopes: ['read', 'email'],
-      userId: 'user-1',
-    } as ReturnType<typeof getAuth>);
-
+  test('fails with a Clerk error when clerkMiddleware has not run', async () => {
     const app = new Hono();
-    app.post('/mcp', mcpAuthClerk, (c) => c.json(c.get('mcpAuth')));
+    app.post('/mcp', mcpAuthClerk({ resourceUrl }), (c) => c.json({ ok: true }));
 
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer valid-token' },
-    });
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json).toEqual({
-      token: 'valid-token',
-      scopes: ['read', 'email'],
-      clientId: 'client-1',
-      extra: { userId: 'user-1', verifiedBy: 'clerk' },
-    });
+    const res = await post(app);
+
+    expect(res.status).toBe(500);
   });
 });
 

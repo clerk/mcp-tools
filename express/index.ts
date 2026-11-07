@@ -1,11 +1,12 @@
-import { clerkClient, getAuth } from '@clerk/express';
+import { clerkClient } from '@clerk/express';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type express from 'express';
 import {
-  type ClerkMcpAuthOptions,
+  type McpAuthClerkOptions,
   type McpAuthOptions,
+  assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
   resourceMetadataUrlFor,
@@ -15,7 +16,6 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
-  verifyClerkToken,
 } from '../server';
 
 /**
@@ -89,7 +89,7 @@ export function mcpAuth(
  * ```ts
  * app.post(
  *   "/mcp",
- *   clerkMcpAuth({
+ *   mcpAuthClerk({
  *     resourceUrl: "https://mcp.example.com/mcp",
  *     requiredScopes: ["profile", "email"],
  *   }),
@@ -97,40 +97,13 @@ export function mcpAuth(
  * );
  * ```
  */
-export function clerkMcpAuth(options: ClerkMcpAuthOptions) {
-  assertMcpAuthOptions('clerkMcpAuth', options);
+export function mcpAuthClerk(options: McpAuthClerkOptions) {
+  assertMcpAuthClerkOptions(options);
   return mcpAuth(
     (token) => verifyClerkOAuthToken(clerkClient, token, options.resourceUrl),
     options,
   );
 }
-
-/**
- * Express middleware that enforces authentication for MCP requests and automatically verifies the OAuth access token using Clerk.
- * @deprecated This does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
- * @example
- * ```ts
- * function createServer() {
- *   const server = new McpServer({
- *     name: "test-server",
- *     version: "0.0.1",
- *   });
- *
- *   // define server tools, resources, etc...
- *
- *   return server;
- * }
- *
- * app.post("/mcp", mcpAuthClerk, streamableHttpHandler(createServer));
- * ```
- */
-export const mcpAuthClerk = mcpAuth(async (token, req) => {
-  const authData = getAuth(req, { acceptsToken: 'oauth_token' });
-
-  if (!authData.isAuthenticated) return undefined;
-
-  return verifyClerkToken(authData, token);
-});
 
 /**
  * An express handler that returns OAuth protected resource metadata.

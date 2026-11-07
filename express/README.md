@@ -28,7 +28,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createClerkClient, MachineAuthObject, clerkMiddleware } from '@clerk/express';
 import {
-  clerkMcpAuth,
+  mcpAuthClerk,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
   streamableHttpHandler,
@@ -83,7 +83,7 @@ app.get(
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
 app.post(
   '/mcp',
-  clerkMcpAuth({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
+  mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
   streamableHttpHandler(createServer),
 );
 
@@ -198,7 +198,7 @@ The middleware will:
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 
-### `clerkMcpAuth`
+### `mcpAuthClerk`
 
 Authentication middleware that verifies OAuth access tokens with Clerk, including that their audience is this endpoint.
 
@@ -210,11 +210,11 @@ Authentication middleware that verifies OAuth access tokens with Clerk, includin
 **Example:**
 
 ```ts
-import { clerkMcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 app.post(
   '/mcp',
-  clerkMcpAuth({
+  mcpAuthClerk({
     resourceUrl: 'https://mcp.example.com/mcp',
     requiredScopes: ['profile', 'email'],
   }),
@@ -225,27 +225,6 @@ app.post(
 The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
-
-### `mcpAuthClerk`
-
-**Deprecated:** this middleware does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
-
-Pre-configured authentication middleware for Clerk that automatically handles OAuth token verification.
-
-**Example:**
-
-```ts
-import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
-
-// No additional configuration needed - uses Clerk's built-in token verification
-app.post('/mcp', mcpAuthClerk, streamableHttpHandler(createServer));
-```
-
-This middleware automatically:
-
-- Verifies OAuth access tokens using Clerk
-- Handles authentication state
-- Adds Clerk auth data to `req.auth`
 
 ## Protected Resource Metadata
 
@@ -431,7 +410,7 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 app.post(
   '/mcp',
-  clerkMcpAuth({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
+  mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
   streamableHttpHandler(createServer), // MCP request handling
 );
 ```
