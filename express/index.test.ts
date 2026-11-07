@@ -5,12 +5,11 @@ import type { Server } from 'node:http';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 vi.mock('@clerk/express', () => ({
-  getAuth: vi.fn(),
   clerkClient: { authenticateRequest: vi.fn() },
 }));
 
-import { clerkClient, getAuth } from '@clerk/express';
-import { clerkMcpAuth, mcpAuth, mcpAuthClerk, streamableHttpHandler } from './index';
+import { clerkClient } from '@clerk/express';
+import { mcpAuth, mcpAuthClerk, streamableHttpHandler } from './index';
 
 const mcpHeaders = {
   'Content-Type': 'application/json',
@@ -185,21 +184,6 @@ describe('mcpAuth', () => {
 });
 
 describe('mcpAuthClerk', () => {
-  test('answers a bare Bearer header with a 401 instead of hanging', async () => {
-    const unhandled = vi.fn();
-    process.on('unhandledRejection', unhandled);
-
-    const res = await request(mcpAuthClerk, { authorization: 'Bearer' });
-    await new Promise((resolve) => setImmediate(resolve));
-    process.off('unhandledRejection', unhandled);
-
-    expect(res.status).toBe(401);
-    expect(unhandled).not.toHaveBeenCalled();
-    expect(getAuth).not.toHaveBeenCalled();
-  });
-});
-
-describe('clerkMcpAuth', () => {
   const authenticateRequest = vi.mocked(clerkClient.authenticateRequest);
   const authenticated = (scopes: string[]) =>
     ({
@@ -217,10 +201,54 @@ describe('clerkMcpAuth', () => {
     authenticateRequest.mockReset();
   });
 
+  test('fails loudly instead of hanging when passed to a route without being called', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = express();
+    app.post('/mcp', mcpAuthClerk as unknown as express.RequestHandler, (_req, res) => {
+      res.json({ ok: true });
+    });
+    const server: Server = await new Promise((resolve) => {
+      const s = app.listen(0, () => resolve(s));
+    });
+    const { port } = server.address() as AddressInfo;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(2000),
+      });
+      expect(res.status).toBe(500);
+      expect(await res.text()).toContain('Clerk error: mcpAuthClerk needs a resourceUrl');
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      consoleError.mockRestore();
+    }
+  });
+
+  test('throws a Clerk error without a resourceUrl', () => {
+    expect(() => mcpAuthClerk({} as never)).toThrow(
+      'Clerk error: mcpAuthClerk needs a resourceUrl',
+    );
+  });
+
+  test('answers a bare Bearer header with a 401 instead of hanging', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const res = await request(mcpAuthClerk({ resourceUrl }), { authorization: 'Bearer' });
+    await new Promise((resolve) => setImmediate(resolve));
+    process.off('unhandledRejection', unhandled);
+
+    expect(res.status).toBe(401);
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(authenticateRequest).not.toHaveBeenCalled();
+  });
+
   test('asks Clerk to check the audience and sets req.auth', async () => {
     authenticateRequest.mockResolvedValue(authenticated(['profile']));
 
-    const res = await request(clerkMcpAuth({ resourceUrl, requiredScopes: ['profile'] }), {
+    const res = await request(mcpAuthClerk({ resourceUrl, requiredScopes: ['profile'] }), {
       authorization: 'Bearer token-1',
     });
 
@@ -234,7 +262,7 @@ describe('clerkMcpAuth', () => {
   test('answers a rejected token with the invalid_token challenge', async () => {
     authenticateRequest.mockResolvedValue({ isAuthenticated: false } as never);
 
-    const res = await request(clerkMcpAuth({ resourceUrl }), { authorization: 'Bearer bad' });
+    const res = await request(mcpAuthClerk({ resourceUrl }), { authorization: 'Bearer bad' });
 
     expect(res.status).toBe(401);
     expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
@@ -244,7 +272,7 @@ describe('clerkMcpAuth', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     authenticateRequest.mockRejectedValue(new Error('network down'));
 
-    const res = await request(clerkMcpAuth({ resourceUrl }), { authorization: 'Bearer t' });
+    const res = await request(mcpAuthClerk({ resourceUrl }), { authorization: 'Bearer t' });
 
     expect(res.status).toBe(401);
     expect(consoleError).toHaveBeenCalled();
@@ -254,7 +282,7 @@ describe('clerkMcpAuth', () => {
   test('answers a token without the required scopes with a 403 challenge', async () => {
     authenticateRequest.mockResolvedValue(authenticated(['openid']));
 
-    const res = await request(clerkMcpAuth({ resourceUrl, requiredScopes: ['profile'] }), {
+    const res = await request(mcpAuthClerk({ resourceUrl, requiredScopes: ['profile'] }), {
       authorization: 'Bearer t',
     });
 

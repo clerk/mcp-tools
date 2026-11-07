@@ -24,7 +24,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clerkMiddleware } from '@clerk/hono';
 import { cors } from 'hono/cors';
 import {
-  clerkMcpAuth,
+  mcpAuthClerk,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
   streamableHttpHandler,
@@ -56,7 +56,7 @@ app.get(
 app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
 app.post(
   '/mcp',
-  clerkMcpAuth({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
+  mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
   streamableHttpHandler(createServer),
 );
 
@@ -109,17 +109,11 @@ Middleware that enforces authentication for MCP requests. Extracts the bearer to
 - `options.resourceUrl`: the exact URL clients use for this endpoint. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy.
 - `options.requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by the missing ones, so the new grant keeps the old access.
 
-### `clerkMcpAuth({ resourceUrl, requiredScopes? })`
+### `mcpAuthClerk({ resourceUrl, requiredScopes? })`
 
 Middleware that verifies OAuth access tokens with Clerk, including that their audience is `resourceUrl`, and otherwise behaves like `mcpAuth`. Requires `clerkMiddleware()` to be mounted first.
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
-
-### `mcpAuthClerk`
-
-**Deprecated:** this middleware does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
-
-Pre-configured middleware that verifies tokens using Clerk. Requires `clerkMiddleware()` to be mounted and `CLERK_PUBLISHABLE_KEY` to be set.
 
 ### `protectedResourceHandler({ authServerUrl, properties? })`
 

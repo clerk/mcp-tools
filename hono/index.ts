@@ -1,4 +1,3 @@
-import { getAuth } from '@clerk/hono';
 import type { ClerkHonoVariables } from '@clerk/hono/types';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -6,8 +5,9 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
-  type ClerkMcpAuthOptions,
+  type McpAuthClerkOptions,
   type McpAuthOptions,
+  assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
   resourceMetadataUrlFor,
@@ -17,7 +17,6 @@ import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
-  verifyClerkToken,
 } from '../server';
 
 declare module 'hono' {
@@ -114,25 +113,15 @@ export function mcpAuth(
  * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
  * a 403 challenge.
  */
-export function clerkMcpAuth(options: ClerkMcpAuthOptions): MiddlewareHandler {
-  assertMcpAuthOptions('clerkMcpAuth', options);
+export function mcpAuthClerk(options: McpAuthClerkOptions): MiddlewareHandler {
+  assertMcpAuthClerkOptions(options);
 
   return mcpAuth((token, c) => {
     const client = (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
-    if (!client) throw new Error('Clerk error: clerkMcpAuth needs clerkMiddleware() to run first');
+    if (!client) throw new Error('Clerk error: mcpAuthClerk needs clerkMiddleware() to run first');
     return verifyClerkOAuthToken(client, token, options.resourceUrl);
   }, options);
 }
-
-/**
- * Hono middleware that enforces authentication for MCP requests and verifies the OAuth access token using Clerk.
- * @deprecated This does not check the token's audience, so a token issued for another resource passes. Use `clerkMcpAuth`.
- */
-export const mcpAuthClerk = mcpAuth(async (token, c) => {
-  const authData = getAuth(c, { acceptsToken: 'oauth_token' });
-  if (!authData.isAuthenticated) return undefined;
-  return verifyClerkToken(authData, token);
-});
 
 export function streamableHttpHandler(createServer: () => McpServer) {
   return async (c: Context) => {
