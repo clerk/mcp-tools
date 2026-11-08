@@ -453,6 +453,7 @@ function toolText({ host, origin }: URL): { title: string; description: string }
       `Never type credentials for ${host}.`,
       'Call it with the path you want (for example /settings), then open the returned URL in the browser right away:',
       'it works once and expires in about 1 hour. Do not print or share the URL.',
+      `Use a browser that is not signed in to ${host}, such as a fresh profile or private window: Clerk refuses the link in a browser that already has a session.`,
     ].join(' '),
   };
 }
@@ -525,11 +526,14 @@ export function createBrowserSessionTool(
         },
         config,
       );
-      return toolResult(`Open this single use link in the browser to sign in: ${link.url}`, {
-        url: link.url,
-        agent_task_id: link.agentTaskId,
-        redirect_url: link.redirectUrl,
-      });
+      return toolResult(
+        `Open this single use link in a browser that is not signed in to ${config.destination.host}, such as a fresh profile or private window, to sign in: ${link.url}`,
+        {
+          url: link.url,
+          agent_task_id: link.agentTaskId,
+          redirect_url: link.redirectUrl,
+        },
+      );
     } catch (error) {
       if (error instanceof BrowserSessionError) {
         if (error.code === 'insufficient_scope' && isSdkV2Extra(extra)) warnStepUpUnsupported();
