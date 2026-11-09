@@ -81,7 +81,8 @@ async function request(
     return {
       status: res.status,
       challenge: res.headers.get('WWW-Authenticate'),
-      body: await res.json(),
+      // Express's default error handler answers with HTML.
+      body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text(),
       origin: `http://127.0.0.1:${port}`,
     };
   } finally {
@@ -268,15 +269,41 @@ describe('mcpAuthClerk', () => {
     expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
   });
 
-  test('answers a verification failure with the invalid_token challenge', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  test.each(['unexpected-error', 'secret-key-invalid'])(
+    'answers a %s verification failure with a 500 instead of a challenge',
+    async (reason) => {
+      authenticateRequest.mockResolvedValue({
+        isAuthenticated: false,
+        reason,
+        message: 'Unexpected error',
+      } as never);
+
+      const res = await request(mcpAuthClerk({ resourceUrl }), { authorization: 'Bearer t' });
+
+      expect(res.status).toBe(500);
+      expect(res.challenge).toBeNull();
+    },
+  );
+
+  test('answers a thrown verification error with a 500 instead of a challenge', async () => {
     authenticateRequest.mockRejectedValue(new Error('network down'));
 
     const res = await request(mcpAuthClerk({ resourceUrl }), { authorization: 'Bearer t' });
 
-    expect(res.status).toBe(401);
-    expect(consoleError).toHaveBeenCalled();
-    consoleError.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.challenge).toBeNull();
+  });
+
+  test('verifies with the clerkClient option instead of the default client', async () => {
+    const client = { authenticateRequest: vi.fn().mockResolvedValue(authenticated(['profile'])) };
+
+    const res = await request(mcpAuthClerk({ resourceUrl, clerkClient: client as never }), {
+      authorization: 'Bearer t',
+    });
+
+    expect(res.status).toBe(200);
+    expect(client.authenticateRequest).toHaveBeenCalledOnce();
+    expect(authenticateRequest).not.toHaveBeenCalled();
   });
 
   test('answers a token without the required scopes with a 403 challenge', async () => {

@@ -7,7 +7,7 @@ Next.js utilities for building both MCP servers and clients with authentication 
 Make sure you have the required dependencies installed:
 
 ```bash
-npm install @clerk/mcp-tools mcp-handler next
+npm install @clerk/mcp-tools mcp-handler@1 next
 ```
 
 If you're using Clerk for authentication, also install the Clerk Next.js SDK:
@@ -128,6 +128,8 @@ export { handler as GET };
 ```
 
 This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
+
+The metadata's `resource` comes from the route path without a trailing slash, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`. MCP clients reject metadata whose `resource` differs from the URL they connect to. If your app sets `trailingSlash: true`, or clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceHandlerClerk({ resource: 'https://app.example.com/mcp/' })`.
 
 ### `authServerMetadataHandlerClerk`
 

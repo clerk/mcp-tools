@@ -1,3 +1,4 @@
+import type { ClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -82,7 +83,10 @@ export function mcpAuth(
  * Express middleware that enforces authentication for MCP requests and verifies the OAuth access token with Clerk,
  * including that its audience is this endpoint.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint,
- * and the `requiredScopes` every request needs
+ * the `requiredScopes` every request needs, and the `clerkClient` that
+ * verifies tokens. Pass the client you gave `clerkMiddleware()` when the
+ * secret key does not come from `CLERK_SECRET_KEY`; it defaults to
+ * `clerkClient` from `@clerk/express`.
  * @returns The middleware. A missing or rejected token gets a 401 challenge,
  * and a token without `requiredScopes` gets a 403 challenge.
  * @example
@@ -97,12 +101,14 @@ export function mcpAuth(
  * );
  * ```
  */
-export function mcpAuthClerk(options: McpAuthClerkOptions) {
+export function mcpAuthClerk(
+  options: McpAuthClerkOptions & {
+    clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+  },
+) {
   assertMcpAuthClerkOptions(options);
-  return mcpAuth(
-    (token) => verifyClerkOAuthToken(clerkClient, token, options.resourceUrl),
-    options,
-  );
+  const client = options.clerkClient ?? clerkClient;
+  return mcpAuth((token) => verifyClerkOAuthToken(client, token, options.resourceUrl), options);
 }
 
 /**
