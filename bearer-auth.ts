@@ -1,5 +1,6 @@
 // The bearer-token rules that the Express and Hono adapters share. This module is not a package entry point.
 import type { ClerkClient } from '@clerk/backend';
+import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import { verifyClerkToken } from './server';
@@ -142,24 +143,33 @@ export async function authenticateBearer({
   return { ok: true, authInfo };
 }
 
+// The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret
+// key, as opposed to when it rejected the token.
+const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerificationErrorCode>([
+  'unexpected-error',
+  'secret-key-invalid',
+]);
+
 /**
- * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. A verification failure is logged
- * and treated as a rejected token, so that it reaches the client as a challenge.
+ * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. A token Clerk rejects resolves
+ * to `undefined`, so that it reaches the client as an `invalid_token` challenge. When Clerk could not verify the token
+ * at all, this throws instead and the framework answers with a server error: an `invalid_token` challenge would make
+ * the client discard a valid token and restart authorization.
  */
 export async function verifyClerkOAuthToken(
   client: Pick<ClerkClient, 'authenticateRequest'>,
   token: string,
   audience: string,
 ) {
-  try {
-    const requestState = await client.authenticateRequest(
-      new Request(audience, { headers: { authorization: `Bearer ${token}` } }),
-      { acceptsToken: 'oauth_token', audience },
-    );
-    if (!requestState.isAuthenticated) return undefined;
-    return verifyClerkToken(requestState.toAuth(), token);
-  } catch (error) {
-    console.error('Clerk error: MCP access token verification failed', error);
+  const requestState = await client.authenticateRequest(
+    new Request(audience, { headers: { authorization: `Bearer ${token}` } }),
+    { acceptsToken: 'oauth_token', audience },
+  );
+  if (!requestState.isAuthenticated) {
+    if (verificationUnavailable.has(requestState.reason)) {
+      throw new Error(`Clerk error: MCP access token verification failed: ${requestState.message}`);
+    }
     return undefined;
   }
+  return verifyClerkToken(requestState.toAuth(), token);
 }

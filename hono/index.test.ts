@@ -435,14 +435,32 @@ describe('mcpAuthClerk', () => {
     );
   });
 
-  test('answers a verification failure with the invalid_token challenge', async () => {
+  test.each(['unexpected-error', 'secret-key-invalid'])(
+    'answers a %s verification failure with a 500 instead of a challenge',
+    async (reason) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      clerk.authenticateRequest.mockResolvedValue({
+        isAuthenticated: false,
+        reason,
+        message: 'Unexpected error',
+      });
+
+      const res = await post(clerkApp());
+
+      expect(res.status).toBe(500);
+      expect(res.headers.get('WWW-Authenticate')).toBeNull();
+      consoleError.mockRestore();
+    },
+  );
+
+  test('answers a thrown verification error with a 500 instead of a challenge', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     clerk.authenticateRequest.mockRejectedValue(new Error('network down'));
 
     const res = await post(clerkApp());
 
-    expect(res.status).toBe(401);
-    expect(consoleError).toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(res.headers.get('WWW-Authenticate')).toBeNull();
     consoleError.mockRestore();
   });
 
