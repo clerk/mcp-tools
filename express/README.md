@@ -26,7 +26,7 @@ Here's a complete example using Clerk for authentication:
 import 'dotenv/config';
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createClerkClient, MachineAuthObject, clerkMiddleware } from '@clerk/express';
+import { createClerkClient } from '@clerk/express';
 import {
   mcpAuthClerk,
   protectedResourceHandlerClerk,
@@ -38,7 +38,6 @@ const MCP_RESOURCE_URL = 'https://mcp.example.com/mcp';
 const REQUIRED_SCOPES = ['profile', 'email'];
 
 const app = express();
-app.use(clerkMiddleware());
 app.use(express.json());
 
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY! });
@@ -54,15 +53,15 @@ function createServer() {
     'Gets data about the Clerk user that authorized this request',
     {},
     async (_, { authInfo }) => {
-      const clerkAuthInfo = authInfo as unknown as MachineAuthObject<'oauth_token'>;
+      const userId = authInfo?.extra?.userId as string | undefined;
 
-      if (!clerkAuthInfo?.userId) {
+      if (!userId) {
         return {
           content: [{ type: 'text', text: 'Error: user not authenticated' }],
         };
       }
 
-      const user = await clerk.users.getUser(clerkAuthInfo.userId);
+      const user = await clerk.users.getUser(userId);
       return {
         content: [{ type: 'text', text: JSON.stringify(user) }],
       };
@@ -154,7 +153,7 @@ app.get(
   }),
 );
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
+app.post('/mcp', mcpAuth(verifyToken), streamableHttpHandler(createServer));
 
 app.listen(3000);
 ```
@@ -186,7 +185,7 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-app.post('/mcp', await mcpAuth(verifyToken), streamableHttpHandler(createServer));
+app.post('/mcp', mcpAuth(verifyToken), streamableHttpHandler(createServer));
 ```
 
 The middleware will:
@@ -206,9 +205,9 @@ Authentication middleware that verifies OAuth access tokens with Clerk, includin
 
 - `options.resourceUrl` - The exact URL clients use for this endpoint. Clerk rejects a token whose `aud` claim does not include it. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs
-- `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here.
+- `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify the token at all, for example during an outage or with an invalid secret key, the middleware passes an error to Express, which answers with a `500`, so clients keep their tokens instead of restarting authorization.
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware passes an error to Express, which answers with a `500`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
 **Example:**
 
@@ -332,17 +331,17 @@ server.tool(
   'A tool that needs user authentication',
   { type: 'object', properties: {} },
   async (args, { authInfo }) => {
-    // For Clerk authentication
-    const clerkAuthInfo = authInfo as unknown as MachineAuthObject<'oauth_token'>;
+    // For Clerk authentication, mcpAuthClerk puts the user ID in `extra`
+    const userId = authInfo?.extra?.userId as string | undefined;
 
-    if (!clerkAuthInfo?.userId) {
+    if (!userId) {
       return {
         content: [{ type: 'text', text: 'Authentication required' }],
       };
     }
 
     // Use the user ID to fetch data or perform authenticated operations
-    const user = await clerk.users.getUser(clerkAuthInfo.userId);
+    const user = await clerk.users.getUser(userId);
 
     return {
       content: [{ type: 'text', text: `Hello, ${user.firstName}!` }],

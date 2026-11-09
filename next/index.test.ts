@@ -26,7 +26,7 @@ describe.each([
     () => protectedResourceHandler({ authServerUrl: 'https://as.test' }),
   ],
   ['protectedResourceHandlerClerk', () => protectedResourceHandlerClerk()],
-])('%s', (_name, createHandler) => {
+])('%s', (name, createHandler) => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
   });
@@ -44,6 +44,21 @@ describe.each([
     const res = createHandler()(new Request(`${METADATA_ROOT}${suffix}`));
 
     expect((await res.json()).resource).toBe(resource);
+  });
+
+  test('sets resource from properties instead of the route path', async () => {
+    const properties = {
+      resource: 'https://public.example.com/mcp',
+      scopes_supported: ['profile'],
+    };
+    const handler =
+      name === 'protectedResourceHandler'
+        ? protectedResourceHandler({ authServerUrl: 'https://as.test', properties })
+        : protectedResourceHandlerClerk(properties);
+
+    const metadata = await handler(new Request(`${METADATA_ROOT}/mcp`)).json();
+
+    expect(metadata).toMatchObject(properties);
   });
 });
 

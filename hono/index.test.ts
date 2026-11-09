@@ -283,9 +283,15 @@ describe('mcpAuth', () => {
   });
 
   test('throws at setup for an invalid resourceUrl or scope', () => {
-    expect(() => mcpAuth(async () => undefined, { resourceUrl: '/mcp' })).toThrow(
-      'Clerk error: mcpAuth resourceUrl must be an absolute URL',
-    );
+    for (const resourceUrl of [
+      '/mcp',
+      'mailto:foo@example.com',
+      'https://user:pass@mcp.example.com/mcp',
+    ]) {
+      expect(() => mcpAuth(async () => undefined, { resourceUrl })).toThrow(
+        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
+      );
+    }
     expect(() => mcpAuth(async () => undefined, { requiredScopes: ['a b'] })).toThrow(
       'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
     );
@@ -482,13 +488,44 @@ describe('mcpAuthClerk', () => {
     expect(String(error)).toContain('Clerk error: mcpAuthClerk needs a resourceUrl');
   });
 
-  test('fails with a Clerk error when clerkMiddleware has not run', async () => {
+  test('verifies with the clerkClient option without clerkMiddleware', async () => {
+    const authenticateRequest = vi.fn().mockResolvedValue({
+      isAuthenticated: true,
+      toAuth: () => ({
+        isAuthenticated: true,
+        tokenType: 'oauth_token',
+        clientId: 'client-1',
+        scopes: [],
+        userId: 'user-1',
+      }),
+    });
     const app = new Hono();
+    app.post(
+      '/mcp',
+      mcpAuthClerk({ resourceUrl, clerkClient: { authenticateRequest } as never }),
+      (c) => c.json(c.get('mcpAuth')),
+    );
+
+    const res = await post(app);
+
+    expect(res.status).toBe(200);
+    expect(authenticateRequest).toHaveBeenCalledOnce();
+    expect(clerk.authenticateRequest).not.toHaveBeenCalled();
+  });
+
+  test('fails with a Clerk error when there is no clerkClient and clerkMiddleware has not run', async () => {
+    const app = new Hono();
+    let error: unknown;
+    app.onError((err, c) => {
+      error = err;
+      return c.text('error', 500);
+    });
     app.post('/mcp', mcpAuthClerk({ resourceUrl }), (c) => c.json({ ok: true }));
 
     const res = await post(app);
 
     expect(res.status).toBe(500);
+    expect(String(error)).toContain('Clerk error: mcpAuthClerk needs a clerkClient option');
   });
 });
 

@@ -189,9 +189,15 @@ describe('mcpAuth', () => {
   });
 
   test('throws at setup for an invalid resourceUrl or scope', () => {
-    expect(() => mcpAuth(reject, { resourceUrl: '/mcp' })).toThrow(
-      'Clerk error: mcpAuth resourceUrl must be an absolute URL',
-    );
+    for (const resourceUrl of [
+      '/mcp',
+      'mailto:foo@example.com',
+      'https://user:pass@mcp.example.com/mcp',
+    ]) {
+      expect(() => mcpAuth(reject, { resourceUrl })).toThrow(
+        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
+      );
+    }
     expect(() => mcpAuth(reject, { requiredScopes: ['a b'] })).toThrow(
       'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
     );

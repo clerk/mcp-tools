@@ -86,7 +86,9 @@ export function mcpAuth(
  * the `requiredScopes` every request needs, and the `clerkClient` that
  * verifies tokens. Pass the client you gave `clerkMiddleware()` when the
  * secret key does not come from `CLERK_SECRET_KEY`; it defaults to
- * `clerkClient` from `@clerk/express`.
+ * `clerkClient` from `@clerk/express`. Create the client with both
+ * `secretKey` and `publishableKey`: without a publishable key, every request
+ * fails.
  * @returns The middleware. A missing or rejected token gets a 401 challenge,
  * and a token without `requiredScopes` gets a 403 challenge.
  * @example
@@ -167,7 +169,7 @@ export async function authServerMetadataHandlerClerk(_: express.Request, res: ex
  * ```ts
  * app.get(
  *   "/.well-known/oauth-protected-resource",
- *   protectedResourceHandlerClerk
+ *   protectedResourceHandlerClerk()
  * );
  * ```
  */

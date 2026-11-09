@@ -40,8 +40,9 @@ app.use('*', clerkMiddleware());
 
 function createServer() {
   const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+  // `authInfo.token` is the bearer token, so return only `extra`, which holds the user ID
   server.tool('get_user', 'Gets the current user', {}, async (_, { authInfo }) => ({
-    content: [{ type: 'text', text: JSON.stringify(authInfo) }],
+    content: [{ type: 'text', text: JSON.stringify(authInfo?.extra) }],
   }));
   return server;
 }
@@ -109,11 +110,13 @@ Middleware that enforces authentication for MCP requests. Extracts the bearer to
 - `options.resourceUrl`: the exact URL clients use for this endpoint. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ authServerUrl, properties: { resource: resourceUrl } })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by the missing ones, so the new grant keeps the old access.
 
-### `mcpAuthClerk({ resourceUrl, requiredScopes? })`
+### `mcpAuthClerk({ resourceUrl, requiredScopes?, clerkClient? })`
 
-Middleware that verifies OAuth access tokens with Clerk, including that their audience is `resourceUrl`, and otherwise behaves like `mcpAuth`. Requires `clerkMiddleware()` to be mounted first. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
+Middleware that verifies OAuth access tokens with Clerk, including that their audience is `resourceUrl`, and otherwise behaves like `mcpAuth`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify the token at all, for example during an outage or with an invalid secret key, the middleware throws to Hono's error handler, which answers with a `500`, so clients keep their tokens instead of restarting authorization.
+- `options.clerkClient` (optional): the Clerk client that verifies tokens. Defaults to the client `clerkMiddleware()` sets, so without this option `clerkMiddleware()` must be mounted first. `clerkMiddleware()` also verifies the token, so on the MCP route each token is verified twice. To avoid that, pass a client from `createClerkClient` in `@clerk/backend`, created with both `secretKey` and `publishableKey`, and keep `clerkMiddleware()` off the MCP route.
+
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware throws to Hono's error handler, which answers with a `500`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
