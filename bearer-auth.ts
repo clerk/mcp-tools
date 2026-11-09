@@ -35,7 +35,7 @@ export type McpAuthClerkOptions = McpAuthOptions & {
 };
 
 type BearerResult =
-  | { ok: true; authInfo: AuthInfo }
+  | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
   | { ok: false; status: 401 | 403; challenge: string; error: string };
 
 /** Throws a `Clerk error:` message when the options cannot produce a valid challenge. */
@@ -97,7 +97,8 @@ function parseBearerToken(header: string | undefined): string | undefined {
  * Applies the response rule both adapters share. A missing or malformed header gets a bare challenge, a rejected token
  * adds `error="invalid_token"` (RFC 6750 section 3), and a token without `requiredScopes` gets a 403 with
  * `error="insufficient_scope"` (RFC 6750 section 3.1). The 403 `scope` is the granted scopes followed by the missing
- * ones, as in `requireAdditionalScopes`, so the new grant keeps the old access.
+ * ones, as in `requireAdditionalScopes`, so the new grant keeps the old access. A verified token's auth info gets
+ * `resourceMetadataUrl`, which MCP SDK 2 puts in the `resource_metadata` of its own scope challenges.
  */
 export async function authenticateBearer({
   authorization,
@@ -140,7 +141,8 @@ export async function authenticateBearer({
     };
   }
 
-  return { ok: true, authInfo };
+  // MCP SDK 2 reads `resourceMetadataUrl` from the auth info for the challenges its `scopeChallenge` tools send
+  return { ok: true, authInfo: { ...authInfo, resourceMetadataUrl } };
 }
 
 // The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret

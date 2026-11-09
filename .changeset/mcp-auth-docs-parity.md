@@ -6,7 +6,7 @@
 
 The Express `mcpAuthClerk` takes an optional `clerkClient` and defaults to `clerkClient` from `@clerk/express`. Pass the client you gave `clerkMiddleware()` when the secret key does not come from `CLERK_SECRET_KEY`. In both adapters, when Clerk cannot verify a token at all, for example during an outage or with an invalid secret key, `mcpAuthClerk` throws to the framework's error handler for a `500` instead of answering `invalid_token`, which would make clients discard a valid token and restart authorization.
 
-`mcpAuth` in both adapters takes new optional `resourceUrl` and `requiredScopes` options. A token without `requiredScopes` gets a `403` with an `insufficient_scope` challenge, and `resourceUrl` sets the challenge's `resource_metadata` instead of deriving it from the request.
+`mcpAuth` in both adapters takes new optional `resourceUrl` and `requiredScopes` options. A token without `requiredScopes` gets a `403` with an `insufficient_scope` challenge, and `resourceUrl` sets the challenge's `resource_metadata` instead of deriving it from the request. The auth info both adapters pass on now carries `resourceMetadataUrl`, which MCP SDK 2 needs for the challenges its `scopeChallenge` tools send.
 
 The `WWW-Authenticate` challenge from both adapters now quotes `resource_metadata`, which was invalid unquoted, and a rejected token now gets the challenge with `error="invalid_token"` instead of no header.
 

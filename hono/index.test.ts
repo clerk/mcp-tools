@@ -309,7 +309,10 @@ describe('mcpAuth', () => {
       headers: { Authorization: 'Bearer valid' },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(authInfo);
+    expect(await res.json()).toEqual({
+      ...authInfo,
+      resourceMetadataUrl: 'http://localhost/.well-known/oauth-protected-resource/mcp',
+    });
   });
 
   test('passes token and context to verifyToken', async () => {
