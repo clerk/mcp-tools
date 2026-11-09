@@ -1,3 +1,4 @@
+import type { ClerkClient } from '@clerk/backend';
 import type { ClerkHonoVariables } from '@clerk/hono/types';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -107,18 +108,29 @@ export function mcpAuth(
 
 /**
  * Hono middleware that enforces authentication for MCP requests and verifies the OAuth access token with Clerk,
- * including that its audience is this endpoint. `clerkMiddleware()` must run first.
- * @param options - `resourceUrl`, the exact URL clients use for this endpoint, and the `requiredScopes` every request
- * needs
+ * including that its audience is this endpoint.
+ * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
+ * needs, and the `clerkClient` that verifies tokens. Without `clerkClient`, it uses the client that
+ * `clerkMiddleware()` sets, so `clerkMiddleware()` must run first. Pass a client created with both `secretKey` and
+ * `publishableKey` to keep `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
  * a 403 challenge.
  */
-export function mcpAuthClerk(options: McpAuthClerkOptions): MiddlewareHandler {
+export function mcpAuthClerk(
+  options: McpAuthClerkOptions & {
+    clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+  },
+): MiddlewareHandler {
   assertMcpAuthClerkOptions(options);
 
   return mcpAuth((token, c) => {
-    const client = (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
-    if (!client) throw new Error('Clerk error: mcpAuthClerk needs clerkMiddleware() to run first');
+    const client =
+      options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
+    if (!client) {
+      throw new Error(
+        'Clerk error: mcpAuthClerk needs a clerkClient option or clerkMiddleware() to run first',
+      );
+    }
     return verifyClerkOAuthToken(client, token, options.resourceUrl);
   }, options);
 }

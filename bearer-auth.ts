@@ -41,9 +41,19 @@ type BearerResult =
 /** Throws a `Clerk error:` message when the options cannot produce a valid challenge. */
 export function assertMcpAuthOptions(caller: string, options: McpAuthOptions | undefined) {
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
-  if (options?.resourceUrl !== undefined && !URL.canParse(options.resourceUrl)) {
-    throw new Error(`Clerk error: ${caller} resourceUrl must be an absolute URL`);
+  if (options?.resourceUrl !== undefined && !isResourceUrl(options.resourceUrl)) {
+    throw new Error(
+      `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials`,
+    );
   }
+}
+
+// A URL with another scheme, such as `mailto:`, has no origin for the challenge, and `new Request` throws on a URL with
+// credentials.
+function isResourceUrl(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password;
 }
 
 /**
@@ -146,7 +156,8 @@ export async function authenticateBearer({
 }
 
 // The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret
-// key, as opposed to when it rejected the token.
+// key, as opposed to when it rejected the token. A JWT access token whose JWKS cannot be fetched gets
+// `token-verification-failed` instead, the reason an invalid signature gets, so that case still resolves as rejected.
 const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerificationErrorCode>([
   'unexpected-error',
   'secret-key-invalid',
@@ -154,9 +165,10 @@ const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerific
 
 /**
  * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. A token Clerk rejects resolves
- * to `undefined`, so that it reaches the client as an `invalid_token` challenge. When Clerk could not verify the token
- * at all, this throws instead and the framework answers with a server error: an `invalid_token` challenge would make
- * the client discard a valid token and restart authorization.
+ * to `undefined`, so that it reaches the client as an `invalid_token` challenge. When Clerk could not verify an opaque
+ * token at all, this throws instead and the framework answers with a server error: an `invalid_token` challenge would
+ * make the client discard a valid token and restart authorization. Clerk does not report a JWKS failure on a JWT access
+ * token separately from an invalid signature, so that case still resolves to `undefined`.
  */
 export async function verifyClerkOAuthToken(
   client: Pick<ClerkClient, 'authenticateRequest'>,

@@ -7,7 +7,7 @@ Next.js utilities for building both MCP servers and clients with authentication 
 Make sure you have the required dependencies installed:
 
 ```bash
-npm install @clerk/mcp-tools mcp-handler@1 next
+npm install @clerk/mcp-tools mcp-handler@^2.3.1 @modelcontextprotocol/server next
 ```
 
 If you're using Clerk for authentication, also install the Clerk Next.js SDK:
@@ -30,7 +30,11 @@ Here's the basic structure you'll need:
 // app/.well-known/oauth-protected-resource/mcp/route.ts
 import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk();
+// The same values as the MCP endpoint's `resourceUrl` and `requiredScopes` below
+const handler = protectedResourceHandlerClerk({
+  resource: 'https://mcp.example.com/mcp',
+  scopes_supported: ['profile', 'email'],
+});
 
 export { handler as GET };
 ```
@@ -38,7 +42,7 @@ export { handler as GET };
 #### 2. MCP Endpoint
 
 ```ts
-// app/[transport]/route.ts
+// app/mcp/route.ts
 import { mcpAuthClerk } from '@clerk/mcp-tools/next';
 import { clerkClient } from '@clerk/nextjs/server';
 import { createMcpHandler } from 'mcp-handler';
@@ -47,9 +51,9 @@ const handler = createMcpHandler((server) => {
   server.registerTool(
     'get-clerk-user-data',
     { description: 'Gets data about the Clerk user that authorized this request' },
-    async (_, { authInfo }) => {
+    async (ctx) => {
       // mcpAuthClerk only calls the handler with a verified token
-      const userId = authInfo!.extra!.userId as string;
+      const userId = ctx.http!.authInfo!.extra!.userId as string;
       const userData = await (await clerkClient()).users.getUser(userId);
 
       return {
@@ -67,7 +71,7 @@ const authHandler = mcpAuthClerk({
 export { authHandler as GET, authHandler as POST };
 ```
 
-**Note**: This implementation uses Vercel's `mcp-handler` which is specifically designed for Next.js applications. `mcpAuthClerk` replaces its `withMcpAuth`.
+**Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. `mcpAuthClerk` replaces its `withMcpAuth`.
 
 ### `mcpAuthClerk`
 
@@ -77,9 +81,11 @@ Wraps a Next.js MCP route handler so that every request needs an OAuth access to
 
 - `resourceUrl: string` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`. Set the protected resource metadata route's `resource` to the same URL.
 - `requiredScopes?: string[]` - The scopes every request needs
-- `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient()` from `@clerk/nextjs/server`.
+- `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient()` from `@clerk/nextjs/server`. Create another client with both `secretKey` and `publishableKey`.
 
-A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify the token at all, for example during an outage, the handler throws and Next.js answers with a `500`, so clients keep their valid token.
+A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws and Next.js answers with a `500`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+
+Your Clerk instance must issue the `aud` claim. Require `@clerk/nextjs` 7.9.5 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
 ### `mcpAuth`
 
@@ -107,6 +113,7 @@ Generic Next.js route handler that returns OAuth protected resource metadata for
 **Parameters:**
 
 - `authServerUrl: string` - The URL of your OAuth authorization server
+- `properties?: Record<string, unknown>` - Additional metadata properties. Set `resource` to the `resourceUrl` you pass to `mcpAuth`: the route derives it from the request when it is not set.
 
 **Example:**
 
@@ -138,7 +145,7 @@ export { handler as GET };
 
 This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
 
-The metadata's `resource` comes from the route path without a trailing slash, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`. MCP clients reject metadata whose `resource` differs from the URL they connect to. If your app sets `trailingSlash: true`, or clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceHandlerClerk({ resource: 'https://app.example.com/mcp/' })`.
+The metadata's `resource` comes from the route path without a trailing slash, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`. Some MCP clients reject metadata whose `resource` differs from the URL they connect to. If your app sets `trailingSlash: true`, or clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceHandlerClerk({ resource: 'https://app.example.com/mcp/' })`.
 
 ### `authServerMetadataHandlerClerk`
 

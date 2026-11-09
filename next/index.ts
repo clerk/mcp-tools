@@ -58,16 +58,21 @@ export function completeOAuthHandler({
  * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  * @param authServerUrl - The URL of the OAuth 2.0 Authorization Server.
+ * @param properties - Additional properties to include in the metadata, such as the `resource` that matches the
+ * `resourceUrl` of `mcpAuth`.
  */
 export function protectedResourceHandler({
   authServerUrl,
+  properties,
 }: {
   authServerUrl: string;
+  properties?: Record<string, unknown>;
 }): (req: Request) => Response {
   return (req: Request): Response => {
     const metadata = generateProtectedResourceMetadata({
       authServerUrl: authServerUrl,
       resourceUrl: getResourceUrl(req),
+      properties,
     });
 
     return Response.json(metadata, {
@@ -212,10 +217,11 @@ export function mcpAuth(
  * Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including
  * that its audience is this endpoint.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, and the `clerkClient` that verifies tokens. It defaults to `clerkClient()` from `@clerk/nextjs/server`.
+ * needs, and the `clerkClient` that verifies tokens. It defaults to `clerkClient()` from `@clerk/nextjs/server`. Create
+ * another client with both `secretKey` and `publishableKey`.
  * @returns A function that wraps the route handler. A missing or rejected token gets a 401 challenge, and a token
- * without `requiredScopes` gets a 403 challenge. When Clerk cannot verify the token at all, the handler throws, so
- * Next.js answers with a 500 instead of a challenge that would make the client discard a valid token.
+ * without `requiredScopes` gets a 403 challenge. When Clerk cannot verify an opaque token at all, the handler throws,
+ * so Next.js answers with a 500 instead of a challenge that would make the client discard a valid token.
  * @example
  * ```ts
  * const authHandler = mcpAuthClerk({
