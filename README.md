@@ -130,7 +130,7 @@ server.registerTool(
 );
 ```
 
-- Pass `resourceMetadataUrl` on the `authInfo` you give the SDK (for example `{ ...authInfo, resourceMetadataUrl }`). Without it, the challenge has no `resource_metadata`.
+- Pass `resourceMetadataUrl` on the `authInfo` you give the SDK (for example `{ ...authInfo, resourceMetadataUrl }`). Without it, the challenge has no `resource_metadata`. The `mcpAuth` and `mcpAuthClerk` helpers in the Express, Hono, and Next.js adapters set it for you.
 - The challenge lists the granted scopes followed by the missing ones. Some MCP clients request exactly the challenged scopes, so listing only the missing ones could drop access that other tools need. The SDK's own `requireScopes` helper lists the required scopes only.
 - Enable every scope your tools need for the OAuth application. Its scope settings and the user's approval decide what a token can get. `scopes_supported` in your protected resource metadata only guides what clients request: MCP clients request the scopes named in a challenge, and otherwise usually the whole `scopes_supported` list on first connection. A `401` names scopes only when your server adds them, as `mcp-handler`'s `withMcpAuth` does from its `requiredScopes`. Listing only baseline scopes in `scopes_supported` encourages clients to request extra scopes through step-up, though a client can still request them up front. When the `401` doesn't name scopes, listing a scope there makes most clients request it on first connection, which is usually the only way clients without step-up support ask for it.
 - The SDK sends the challenge only over HTTP (`createMcpHandler` or the Streamable HTTP transport) and for requests with auth info. Elsewhere, including stdio, the tool runs without it.

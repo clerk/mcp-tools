@@ -186,12 +186,11 @@ export function mcpAuth(
   assertMcpAuthOptions('mcpAuth', options);
 
   return (handler) => async (req) => {
-    const resourceMetadataUrl = options?.resourceUrl
-      ? resourceMetadataUrlFor(options.resourceUrl)
-      : getPRMUrl(req);
     const result = await authenticateBearer({
       authorization: req.headers.get('authorization') ?? undefined,
-      resourceMetadataUrl,
+      resourceMetadataUrl: options?.resourceUrl
+        ? resourceMetadataUrlFor(options.resourceUrl)
+        : getPRMUrl(req),
       requiredScopes: options?.requiredScopes,
       verifyToken: (token) => verifyToken(token, req),
     });
@@ -204,10 +203,7 @@ export function mcpAuth(
     }
 
     // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does
-    (req as Request & { auth?: AuthInfo }).auth = {
-      ...result.authInfo,
-      resourceMetadataUrl,
-    } as AuthInfo;
+    (req as Request & { auth?: AuthInfo }).auth = result.authInfo;
     return handler(req);
   };
 }

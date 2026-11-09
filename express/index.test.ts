@@ -171,7 +171,21 @@ describe('mcpAuth', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ auth: authInfo });
+    expect(res.body).toEqual({
+      auth: {
+        ...authInfo,
+        resourceMetadataUrl: `${res.origin}/.well-known/oauth-protected-resource/mcp`,
+      },
+    });
+  });
+
+  test('sets resourceMetadataUrl on req.auth from resourceUrl', async () => {
+    const res = await request(
+      mcpAuth(async () => ({ token: 't', scopes: [], clientId: 'c' }), { resourceUrl }),
+      { authorization: 'Bearer t' },
+    );
+
+    expect(res.body.auth.resourceMetadataUrl).toBe(metadataUrl);
   });
 
   test('throws at setup for an invalid resourceUrl or scope', () => {
