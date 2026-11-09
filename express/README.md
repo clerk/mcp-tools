@@ -168,7 +168,7 @@ Generic authentication middleware that allows you to implement custom token veri
 **Parameters:**
 
 - `verifyToken: (token: string, req: express.Request) => Promise<any | false>` - Function that verifies the token and returns auth data or false
-- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy.
+- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs
 
 **Example:**
@@ -204,7 +204,7 @@ Authentication middleware that verifies OAuth access tokens with Clerk, includin
 
 **Parameters:**
 
-- `options.resourceUrl` - The exact URL clients use for this endpoint. Clerk rejects a token whose `aud` claim does not include it.
+- `options.resourceUrl` - The exact URL clients use for this endpoint. Clerk rejects a token whose `aud` claim does not include it. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs
 
 **Example:**

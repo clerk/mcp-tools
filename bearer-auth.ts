@@ -11,7 +11,8 @@ export type McpAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`. The challenge's
    * `resource_metadata` is derived from it. When omitted, it is derived from the incoming request, which can differ
-   * from the public URL behind a proxy.
+   * from the public URL behind a proxy. Set the protected resource metadata route's `resource` to the same URL, since
+   * that route also derives it from the request.
    */
   resourceUrl?: string | undefined;
   /**
@@ -26,7 +27,8 @@ export type McpAuthOptions = {
 export type McpAuthClerkOptions = McpAuthOptions & {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`. Clerk rejects a token
-   * whose `aud` claim does not include it, and the challenge's `resource_metadata` is derived from it.
+   * whose `aud` claim does not include it, and the challenge's `resource_metadata` is derived from it. Set the
+   * protected resource metadata route's `resource` to the same URL, since that route derives it from the request.
    */
   resourceUrl: string;
 };
