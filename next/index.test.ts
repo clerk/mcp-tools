@@ -1,4 +1,5 @@
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { createMcpHandler } from 'mcp-handler';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const defaultAuthenticateRequest = vi.hoisted(() => vi.fn());
@@ -202,6 +203,42 @@ describe('mcpAuthClerk', () => {
     expect(res.status).toBe(200);
     expect(authenticateRequest).toHaveBeenCalledOnce();
     expect(defaultAuthenticateRequest).not.toHaveBeenCalled();
+  });
+
+  test('passes the verified auth info to tools in an mcp-handler route', async () => {
+    defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
+    const handler = createMcpHandler((server) => {
+      server.registerTool('whoami', { description: 'Returns the caller' }, async (ctx) => ({
+        content: [{ type: 'text', text: JSON.stringify(ctx.http?.authInfo ?? null) }],
+      }));
+    });
+
+    const res = await mcpAuthClerk({ resourceUrl })(handler)(
+      new Request(resourceUrl, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer token-1',
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'MCP-Protocol-Version': '2025-06-18',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'whoami', arguments: {} },
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const message = JSON.parse(body.startsWith('{') ? body : body.match(/^data: (.*)$/m)![1]!);
+    expect(JSON.parse(message.result.content[0].text)).toMatchObject({
+      clientId: 'client-1',
+      extra: { userId: 'user-1', verifiedBy: 'clerk' },
+      resourceMetadataUrl: RESOURCE_METADATA_URL,
+    });
   });
 
   test('answers a token without the required scopes with a 403 challenge', async () => {
