@@ -1,4 +1,15 @@
+import type { ClerkClient } from '@clerk/backend';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { NextRequest } from 'next/server';
+import {
+  type McpAuthClerkOptions,
+  type McpAuthOptions,
+  assertMcpAuthClerkOptions,
+  assertMcpAuthOptions,
+  authenticateBearer,
+  resourceMetadataUrlFor,
+  verifyClerkOAuthToken,
+} from '../bearer-auth';
 import { type McpClientStore, completeAuthWithCode } from '../client';
 import {
   corsHeaders,
@@ -141,6 +152,103 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
       headers: corsHeaders,
     });
   };
+}
+
+/**
+ * A Next.js route handler, such as the one `createMcpHandler` from `mcp-handler` returns.
+ */
+export type McpRouteHandler = (req: Request) => Response | Promise<Response>;
+
+/**
+ * Wraps a Next.js MCP route handler so that every request needs a valid bearer token.
+ * @param verifyToken - Verifies a token and returns the auth data, or `undefined` to reject it
+ * @param options - The public `resourceUrl` of this endpoint and the `requiredScopes` every request needs
+ * @returns A function that wraps the route handler. A missing or rejected token gets a 401 challenge, and a token
+ * without `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler`
+ * reads it, with `resourceMetadataUrl` added for the SDK's scope challenges.
+ * @example
+ * ```ts
+ * const handler = createMcpHandler((server) => {
+ *   // define server tools, resources, etc...
+ * });
+ *
+ * const authHandler = mcpAuth(verifyToken, {
+ *   resourceUrl: "https://mcp.example.com/mcp",
+ * })(handler);
+ *
+ * export { authHandler as GET, authHandler as POST };
+ * ```
+ */
+export function mcpAuth(
+  verifyToken: (token: string, req: Request) => Promise<AuthInfo | undefined>,
+  options?: McpAuthOptions,
+): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
+  assertMcpAuthOptions('mcpAuth', options);
+
+  return (handler) => async (req) => {
+    const resourceMetadataUrl = options?.resourceUrl
+      ? resourceMetadataUrlFor(options.resourceUrl)
+      : getPRMUrl(req);
+    const result = await authenticateBearer({
+      authorization: req.headers.get('authorization') ?? undefined,
+      resourceMetadataUrl,
+      requiredScopes: options?.requiredScopes,
+      verifyToken: (token) => verifyToken(token, req),
+    });
+
+    if (!result.ok) {
+      return Response.json(
+        { error: result.error },
+        { status: result.status, headers: { 'WWW-Authenticate': result.challenge } },
+      );
+    }
+
+    // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does
+    (req as Request & { auth?: AuthInfo }).auth = {
+      ...result.authInfo,
+      resourceMetadataUrl,
+    } as AuthInfo;
+    return handler(req);
+  };
+}
+
+/**
+ * Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including
+ * that its audience is this endpoint.
+ * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
+ * needs, and the `clerkClient` that verifies tokens. It defaults to `clerkClient()` from `@clerk/nextjs/server`.
+ * @returns A function that wraps the route handler. A missing or rejected token gets a 401 challenge, and a token
+ * without `requiredScopes` gets a 403 challenge. When Clerk cannot verify the token at all, the handler throws, so
+ * Next.js answers with a 500 instead of a challenge that would make the client discard a valid token.
+ * @example
+ * ```ts
+ * const authHandler = mcpAuthClerk({
+ *   resourceUrl: "https://mcp.example.com/mcp",
+ *   requiredScopes: ["profile", "email"],
+ * })(handler);
+ *
+ * export { authHandler as GET, authHandler as POST };
+ * ```
+ */
+export function mcpAuthClerk(
+  options: McpAuthClerkOptions & {
+    clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+  },
+): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
+  assertMcpAuthClerkOptions(options);
+
+  return mcpAuth(async (token) => {
+    // Imported lazily so that the rest of this entry point works without `@clerk/nextjs`
+    const client =
+      options.clerkClient ?? (await (await import('@clerk/nextjs/server')).clerkClient());
+    return verifyClerkOAuthToken(client, token, options.resourceUrl);
+  }, options);
+}
+
+// The protected resource metadata URL for the request's own path, used when `resourceUrl` is not set.
+function getPRMUrl(req: Request): string {
+  const { origin, pathname } = new URL(req.url);
+  return `${origin}/.well-known/oauth-protected-resource${pathname}`;
 }
 
 // The resource a protected resource metadata route describes: `/mcp` for `/.well-known/oauth-protected-resource/mcp`,

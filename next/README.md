@@ -38,22 +38,19 @@ export { handler as GET };
 #### 2. MCP Endpoint
 
 ```ts
-// app/mcp/route.ts
-import { verifyClerkToken } from '@clerk/mcp-tools/next';
-import { auth, clerkClient } from '@clerk/nextjs/server';
-import { createMcpHandler, withMcpAuth } from 'mcp-handler';
-
-const clerk = await clerkClient();
+// app/[transport]/route.ts
+import { mcpAuthClerk } from '@clerk/mcp-tools/next';
+import { clerkClient } from '@clerk/nextjs/server';
+import { createMcpHandler } from 'mcp-handler';
 
 const handler = createMcpHandler((server) => {
-  server.tool(
+  server.registerTool(
     'get-clerk-user-data',
-    'Gets data about the Clerk user that authorized this request',
-    {}, // tool parameters here if present
+    { description: 'Gets data about the Clerk user that authorized this request' },
     async (_, { authInfo }) => {
-      // non-null assertion is safe here, authHandler ensures presence
-      const userId = authInfo!.extra!.userId! as string;
-      const userData = await clerk.users.getUser(userId);
+      // mcpAuthClerk only calls the handler with a verified token
+      const userId = authInfo!.extra!.userId as string;
+      const userData = await (await clerkClient()).users.getUser(userId);
 
       return {
         content: [{ type: 'text', text: JSON.stringify(userData) }],
@@ -62,26 +59,38 @@ const handler = createMcpHandler((server) => {
   );
 });
 
-const authHandler = withMcpAuth(
-  handler,
-  async (_, token) => {
-    const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
-    // Note: OAuth tokens are machine tokens. Machine token usage is free
-    // during our public beta period but will be subject to pricing once
-    // generally available. Pricing is expected to be competitive and below
-    // market averages.
-    return verifyClerkToken(clerkAuth, token);
-  },
-  {
-    required: true,
-    resourceMetadataPath: '/.well-known/oauth-protected-resource/mcp',
-  },
-);
+const authHandler = mcpAuthClerk({
+  resourceUrl: 'https://mcp.example.com/mcp',
+  requiredScopes: ['profile', 'email'],
+})(handler);
 
 export { authHandler as GET, authHandler as POST };
 ```
 
-**Note**: This implementation uses Vercel's `mcp-handler` which is specifically designed for Next.js applications and provides seamless integration with Clerk authentication.
+**Note**: This implementation uses Vercel's `mcp-handler` which is specifically designed for Next.js applications. `mcpAuthClerk` replaces its `withMcpAuth`.
+
+### `mcpAuthClerk`
+
+Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including that its `aud` claim includes `resourceUrl`. It matches `mcpAuthClerk` in the Express and Hono adapters.
+
+**Options:**
+
+- `resourceUrl: string` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`. Set the protected resource metadata route's `resource` to the same URL.
+- `requiredScopes?: string[]` - The scopes every request needs
+- `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient()` from `@clerk/nextjs/server`.
+
+A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify the token at all, for example during an outage, the handler throws and Next.js answers with a `500`, so clients keep their valid token.
+
+### `mcpAuth`
+
+The same wrapper for any authorization server: pass a function that verifies the token and returns the auth info, or `undefined` to reject it.
+
+```ts
+const authHandler = mcpAuth(async (token, req) => verifyMyToken(token), {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  requiredScopes: ['read'],
+})(handler);
+```
 
 ### Building an MCP Client
 
