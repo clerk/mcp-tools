@@ -74,7 +74,10 @@ type ClerkEnv = {
 };
 
 // The clients `mcpAuth` built from the environment, by key pair. On Cloudflare Workers the keys are only known per
-// request, on `c.env`, so the client can't be built at setup.
+// request, on `c.env`, so the client can't be built at setup. The cache key is the secret and publishable key
+// together, so the secret is part of it; the map lives in memory only and is never logged or persisted. Two
+// concurrent first requests for one key pair can each build a client, and the later one replaces the earlier in the
+// map; both work, so the duplicate is harmless.
 const envClerkClients = new Map<string, ClerkOAuthClient>();
 
 /**
@@ -84,12 +87,12 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
  */
 function requireClerkKeys(c: Context) {
   const { CLERK_SECRET_KEY: secretKey, CLERK_PUBLISHABLE_KEY: publishableKey } = env<ClerkEnv>(c);
-  const missing = (name: string) =>
+  const missingKeyError = (name: string) =>
     new Error(
       `Clerk error: mcpAuth needs the ${name} environment variable, a clerkClient option, or clerkMiddleware() to run first`,
     );
-  if (!secretKey) throw missing('CLERK_SECRET_KEY');
-  if (!publishableKey) throw missing('CLERK_PUBLISHABLE_KEY');
+  if (!secretKey) throw missingKeyError('CLERK_SECRET_KEY');
+  if (!publishableKey) throw missingKeyError('CLERK_PUBLISHABLE_KEY');
   return { secretKey, publishableKey };
 }
 
