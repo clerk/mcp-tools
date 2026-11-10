@@ -138,7 +138,7 @@ type McpAuthFailureOption = {
    * Called with why a request is about to be answered with a 401 or 403 challenge or a 421, for example for logging.
    * A route wrapper has no request context to record it on, as the Express and Hono adapters do.
    */
-  onAuthFailure?: ((failure: McpAuthFailure, req: Request) => void) | undefined;
+  onAuthFailure?: ((failure: McpAuthFailure, req: Request) => unknown) | undefined;
 };
 
 /**
@@ -179,9 +179,10 @@ export function mcpAuth(
     });
 
     if (!result.ok) {
-      // A logging callback that throws must not turn the challenge into a server error
+      // A logging callback that throws or rejects must not turn the challenge into a server error
       try {
-        options?.onAuthFailure?.(result.failure, req);
+        const returned: unknown = options?.onAuthFailure?.(result.failure, req);
+        if (returned instanceof Promise) returned.catch(() => {});
       } catch {}
       return Response.json(
         { error: result.error },

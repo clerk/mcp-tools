@@ -266,9 +266,10 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
 }
 
 // The URL the request was made to, or `undefined` without a `Host` header that parses. Behind a proxy, `req.protocol`
-// and the host come from `X-Forwarded-*` headers only when the app sets `trust proxy`.
+// and the host come from `X-Forwarded-*` headers only when the app sets `trust proxy`. `req.host` is the one that reads
+// `X-Forwarded-Host` then; `req.get('host')` is always the raw `Host` header.
 function getRequestUrl(req: express.Request): string | undefined {
-  const host = req.get('host');
+  const host = req.host as string | undefined;
   if (!host) return undefined;
   const url = `${req.protocol}://${host}${req.originalUrl}`;
   return URL.canParse(url) ? url : undefined;

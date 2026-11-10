@@ -160,6 +160,27 @@ describe('mcpAuth', () => {
     expect(verifyToken).not.toHaveBeenCalled();
   });
 
+  test.each([[[resourceUrl]], [undefined]])(
+    'reads the origin from X-Forwarded-Host and X-Forwarded-Proto under trust proxy (resourceUrl: %j)',
+    async (listed) => {
+      const app = express();
+      app.set('trust proxy', true);
+      app.post('/mcp', mcpAuth(reject, { resourceUrl: listed }), (_req, res) => {
+        res.json({});
+      });
+
+      const res = await withListening(app, (baseUrl) =>
+        fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { 'X-Forwarded-Host': 'mcp.example.com', 'X-Forwarded-Proto': 'https' },
+        }),
+      );
+
+      expect(res.status).toBe(401);
+      expect(res.headers.get('WWW-Authenticate')).toBe(`Bearer resource_metadata="${metadataUrl}"`);
+    },
+  );
+
   test.each(['Bearer', 'Basic abc', 'Bearer a b'])(
     'answers the malformed header %j with a 401 challenge and does not verify it',
     async (authorization) => {
