@@ -2,42 +2,60 @@ import type { AuthInfo } from '../mcp-types';
 import {
   type ClerkAuthOptions,
   type CustomVerifierAuthOptions,
+  type ProtectedResourceMetadataOptions,
   assertMcpAuthOptions,
+  assertProtectedResourceMetadataOptions,
   assertVerifierOrResourceUrl,
   authenticateBearer,
+  clerkProtectedResourceMetadata,
   clerkTokenVerifier,
-  resourceFromMetadataUrl,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
   metadataCorsHeaders,
   fetchAuthorizationServerMetadata,
-  generateProtectedResourceMetadata,
 } from '../server';
+
+export type { ProtectedResourceMetadataOptions };
 
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
 
 /**
- * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
- * @see https://datatracker.ietf.org/doc/html/rfc9728
+ * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
+ * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withMcpAuth`'s challenge points to.
+ * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
+ * @param options - `resourceUrl`, the same value you give `withMcpAuth`, so the metadata's `resource` is the URL it
+ * checks, and `properties`, additional metadata such as `scopes_supported`, which overrides the generated metadata.
+ * Without `resourceUrl`, the `resource` is the URL the metadata route was requested at, without the well-known path.
+ * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
+ * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is not set.
+ * @example
+ * ```ts
+ * const handler = protectedResourceMetadataHandler({ resourceUrl: "https://mcp.example.com/mcp" });
  *
+ * export { handler as GET };
+ * ```
  */
 export function protectedResourceMetadataHandler(
-  properties?: Record<string, unknown>,
+  options: ProtectedResourceMetadataOptions = {},
 ): (req: Request) => Response {
+  assertProtectedResourceMetadataOptions(options);
+
   return (req: Request): Response => {
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
       throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
     }
 
-    const metadata = generateProtectedResourceMetadata({
-      publishableKey,
-      resourceUrl: resourceFromMetadataUrl(req.url),
-      properties,
-    });
+    const metadata = clerkProtectedResourceMetadata(options, req.url, publishableKey);
+    if (!metadata) {
+      return Response.json(
+        { error: 'misdirected_request' },
+        { status: 421, headers: metadataCorsHeaders },
+      );
+    }
 
     return Response.json(metadata, {
       headers: Object.assign(

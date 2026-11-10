@@ -4,18 +4,18 @@ import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
   type MiddlewareAuthOptions,
+  type ProtectedResourceMetadataOptions,
   assertMiddlewareAuthOptions,
+  assertProtectedResourceMetadataOptions,
   assertTransportClass,
   authenticateBearer,
+  clerkProtectedResourceMetadata,
   clerkTokenVerifier,
   requirePublishableKey,
-  resourceFromMetadataUrl,
 } from '../bearer-auth';
-import {
-  type McpAuthFailure,
-  fetchAuthorizationServerMetadata,
-  generateProtectedResourceMetadata,
-} from '../server';
+import { type McpAuthFailure, fetchAuthorizationServerMetadata } from '../server';
+
+export type { ProtectedResourceMetadataOptions };
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -62,24 +62,28 @@ type ClerkEnv = {
 
 /**
  * A Hono handler that serves RFC 9728 protected resource metadata for a Clerk instance, using the publishable key in
- * the `CLERK_PUBLISHABLE_KEY` environment variable. The `resource` is the URL the metadata route was requested at,
- * without the well-known path, so mount it at the path `mcpAuth`'s challenge points to.
+ * the `CLERK_PUBLISHABLE_KEY` environment variable. Mount it at the path `mcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
- * @param properties - Additional metadata, such as `resource_name`. It overrides the generated metadata.
- * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set.
+ * @param options - `resourceUrl`, the same value you give `mcpAuth`, so the metadata's `resource` is the URL it
+ * checks, and `properties`, additional metadata such as `scopes_supported`, which overrides the generated metadata.
+ * Without `resourceUrl`, the `resource` is the URL the metadata route was requested at, without the well-known path.
+ * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
+ * `CLERK_PUBLISHABLE_KEY` is not set.
  * @example
  * ```ts
- * app.get('/.well-known/oauth-protected-resource/mcp', protectedResourceMetadataHandler());
+ * app.get(
+ *   '/.well-known/oauth-protected-resource/mcp',
+ *   protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp' }),
+ * );
  * ```
  */
-export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
+export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
+  assertProtectedResourceMetadataOptions(options);
+
   return (c: Context) => {
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
-    const metadata = generateProtectedResourceMetadata({
-      publishableKey,
-      resourceUrl: resourceFromMetadataUrl(c.req.url),
-      properties,
-    });
+    const metadata = clerkProtectedResourceMetadata(options, c.req.url, publishableKey);
+    if (!metadata) return c.json({ error: 'misdirected_request' }, 421);
     return c.json(metadata);
   };
 }

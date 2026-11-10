@@ -32,8 +32,8 @@ import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
 
 // The same values as the MCP endpoint's `resourceUrl` and `requiredScopes` below
 const handler = protectedResourceMetadataHandler({
-  resource: 'https://mcp.example.com/mcp',
-  scopes_supported: ['profile', 'email'],
+  resourceUrl: 'https://mcp.example.com/mcp',
+  properties: { scopes_supported: ['profile', 'email'] },
 });
 
 export { handler as GET };
@@ -81,7 +81,7 @@ Wraps a Next.js MCP route handler so that every request needs a valid bearer tok
 
 **Options:**
 
-- `resourceUrl: string | string[]` - Required unless you pass `verifyToken`. The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. With `verifyToken` and without `resourceUrl`, the URL comes from the request. Set the protected resource metadata route's `resource` to the same URL, picked with `matchResourceUrl` from `@clerk/mcp-tools/next` for a list.
+- `resourceUrl: string | string[]` - Required unless you pass `verifyToken`. The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. With `verifyToken` and without `resourceUrl`, the URL comes from the request. Pass the same value to the protected resource metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, so its `resource` is the URL checked here.
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient` - The client that verifies tokens: `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. It is an option rather than an import of this package so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`: Next.js fails the build on any reference to a package that isn't installed. Required without `verifyToken`, and not allowed together with it.
@@ -120,14 +120,19 @@ Next.js route handler that returns OAuth protected resource metadata for Clerk i
 // app/.well-known/oauth-protected-resource/mcp/route.ts
 import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceMetadataHandler({ resource: 'https://mcp.example.com/mcp' });
+const handler = protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp' });
 
 export { handler as GET };
 ```
 
 This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
 
-The metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to. If clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceMetadataHandler({ resource: 'https://app.example.com/mcp' })`.
+**Options:**
+
+- `resourceUrl: string | string[]` (optional) - The same value you pass to `withMcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `withMcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`.
+- `properties: Record<string, unknown>` (optional) - Additional metadata, such as `scopes_supported` or `resource_name`. It overrides the generated metadata.
+
+Without `resourceUrl`, the metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to, so if clients reach the endpoint through another public URL than the app sees, pass that exact URL as `resourceUrl`.
 
 ### `authorizationServerMetadataHandler`
 
@@ -154,7 +159,7 @@ CORS options request handler for OAuth metadata endpoints. Necessary for MCP cli
 // app/.well-known/oauth-protected-resource/mcp/route.ts
 import { protectedResourceMetadataHandler, metadataCorsHandler } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceMetadataHandler({ resource: 'https://mcp.example.com/mcp' });
+const handler = protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp' });
 const corsHandler = metadataCorsHandler();
 
 export { handler as GET, corsHandler as OPTIONS };

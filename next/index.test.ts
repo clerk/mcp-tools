@@ -43,7 +43,7 @@ describe('protectedResourceMetadataHandler', () => {
       resource: 'https://public.example.com/mcp',
       scopes_supported: ['profile'],
     };
-    const metadata = await protectedResourceMetadataHandler(properties)(
+    const metadata = await protectedResourceMetadataHandler({ properties })(
       new Request(`${METADATA_ROOT}/mcp`),
     ).json();
 

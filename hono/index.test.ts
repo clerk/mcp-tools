@@ -80,7 +80,7 @@ describe('protectedResourceMetadataHandler', () => {
     const app = new Hono();
     app.get(
       '/.well-known/oauth-protected-resource',
-      protectedResourceMetadataHandler({ scopes_supported: ['read', 'write'] }),
+      protectedResourceMetadataHandler({ properties: { scopes_supported: ['read', 'write'] } }),
     );
 
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
