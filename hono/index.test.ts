@@ -20,6 +20,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { env } from 'hono/adapter';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { generateClerkProtectedResourceMetadata } from '../server';
 
 import {
@@ -782,9 +783,16 @@ describe('mcpAuthClerk', () => {
 });
 
 describe('streamableHttpHandler', () => {
+  test('throws at setup without the transport class', () => {
+    // @ts-expect-error the transport class is required
+    expect(() => streamableHttpHandler(createMcpServer)).toThrow(
+      "Clerk error: streamableHttpHandler needs the MCP SDK transport class as its second argument. Import WebStandardStreamableHTTPServerTransport from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'",
+    );
+  });
+
   test('handles an MCP initialize request and returns 200', async () => {
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createMcpServer));
+    app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
 
     const res = await app.request('http://localhost/mcp', {
       method: 'POST',
@@ -798,7 +806,7 @@ describe('streamableHttpHandler', () => {
 
   test('handles sequential requests', async () => {
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createMcpServer));
+    app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
 
     const opts = {
       method: 'POST',
@@ -818,7 +826,7 @@ describe('streamableHttpHandler', () => {
   test('does not block a new request on an unconsumed response', async () => {
     const createServer = vi.fn(createMcpServer);
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createServer));
+    app.post('/mcp', streamableHttpHandler(createServer, Transport));
 
     const opts = {
       method: 'POST',
@@ -850,7 +858,7 @@ describe('streamableHttpHandler', () => {
         c.set('mcpAuth', authInfo);
         return next();
       },
-      streamableHttpHandler(createMcpServer),
+      streamableHttpHandler(createMcpServer, Transport),
     );
 
     const res = await app.request('http://localhost/mcp', {
@@ -865,7 +873,7 @@ describe('streamableHttpHandler', () => {
 
   test('returns SDK 406 response when POST Accept header is missing', async () => {
     const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createMcpServer));
+    app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
 
     const res = await app.request('http://localhost/mcp', {
       method: 'POST',

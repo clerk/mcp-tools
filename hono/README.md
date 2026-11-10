@@ -8,6 +8,8 @@ Hono utilities for building MCP servers with authentication support.
 npm install @clerk/mcp-tools hono @modelcontextprotocol/sdk
 ```
 
+`@modelcontextprotocol/sdk` is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need it.
+
 If you're using Clerk for authentication, also install:
 
 ```bash
@@ -21,6 +23,7 @@ npm install @clerk/hono
 ```ts
 import { Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { clerkMiddleware } from '@clerk/hono';
 import { cors } from 'hono/cors';
 import {
@@ -58,7 +61,7 @@ app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerCler
 app.post(
   '/mcp',
   mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
-  streamableHttpHandler(createServer),
+  streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
 );
 
 export default app;
@@ -69,6 +72,7 @@ export default app;
 ```ts
 import { Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/hono';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
@@ -95,7 +99,7 @@ app.post(
       extra: { userId: user.id },
     };
   }),
-  streamableHttpHandler(createServer),
+  streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
 );
 
 export default app;
@@ -144,6 +148,6 @@ Same as `protectedResourceHandler`, but derives `authServerUrl` automatically fr
 
 Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`.
 
-### `streamableHttpHandler(createServer)`
+### `streamableHttpHandler(createServer, Transport)`
 
-Handler that creates an `McpServer` and `WebStandardStreamableHTTPServerTransport` for each request. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
+Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` as `Transport`: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth`/`mcpAuthClerk` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.

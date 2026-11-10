@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
 import { type AddressInfo, connect } from 'node:net';
 import type { Server } from 'node:http';
@@ -593,16 +594,23 @@ describe('mcpAuthClerk', () => {
 
 describe('streamableHttpHandler', () => {
   test('handles an MCP initialize request and returns 200', async () => {
-    await withApp(streamableHttpHandler(createMcpServer), async (baseUrl) => {
+    await withApp(streamableHttpHandler(createMcpServer, Transport), async (baseUrl) => {
       const res = await postInitialize(baseUrl);
       expect(res.status).toBe(200);
       await res.text();
     });
   });
 
+  test('throws at setup without the transport class', () => {
+    // @ts-expect-error the transport class is required
+    expect(() => streamableHttpHandler(createMcpServer)).toThrow(
+      "Clerk error: streamableHttpHandler needs the MCP SDK transport class as its second argument. Import StreamableHTTPServerTransport from '@modelcontextprotocol/sdk/server/streamableHttp.js'",
+    );
+  });
+
   test('handles sequential requests', async () => {
     const createServer = vi.fn(createMcpServer);
-    await withApp(streamableHttpHandler(createServer), async (baseUrl) => {
+    await withApp(streamableHttpHandler(createServer, Transport), async (baseUrl) => {
       const res1 = await postInitialize(baseUrl);
       await res1.text();
       const res2 = await postInitialize(baseUrl);
@@ -615,7 +623,7 @@ describe('streamableHttpHandler', () => {
   });
 
   test('handles concurrent requests', async () => {
-    await withApp(streamableHttpHandler(createMcpServer), async (baseUrl) => {
+    await withApp(streamableHttpHandler(createMcpServer, Transport), async (baseUrl) => {
       const [res1, res2] = await Promise.all([postInitialize(baseUrl), postInitialize(baseUrl)]);
       expect(res1.status).toBe(200);
       expect(res2.status).toBe(200);
@@ -625,7 +633,7 @@ describe('streamableHttpHandler', () => {
   });
 
   test('handles sequential requests with a shared server instance', async () => {
-    await withApp(streamableHttpHandler(createMcpServer()), async (baseUrl) => {
+    await withApp(streamableHttpHandler(createMcpServer(), Transport), async (baseUrl) => {
       const res1 = await postInitialize(baseUrl);
       await res1.text();
       // let the transport's close-on-response-end release the shared server

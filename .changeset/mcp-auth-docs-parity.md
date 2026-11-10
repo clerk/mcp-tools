@@ -18,8 +18,6 @@ In every adapter, `resourceUrl` for `mcpAuth` and `mcpAuthClerk` can also be a l
 
 `@clerk/backend` 3.19.0 or later is a new optional peer dependency, used for the type of the `clerkClient` option. Install it when you pass that option; a client from an earlier version does not reliably check the audience.
 
-The Hono `streamableHttpHandler` now imports the MCP SDK transport when it handles a request, so an app that uses only the Hono auth middleware no longer bundles or loads the SDK's message schemas and zod.
-
 The `WWW-Authenticate` challenge from both adapters now quotes `resource_metadata`, which was invalid unquoted, and a rejected token now gets the challenge with `error="invalid_token"` instead of no header.
 
 In the Express adapter, `mcpAuth` is now synchronous, so it works with or without `await`. A malformed `Authorization` header now gets a `401` challenge: before, a bare `Bearer` header returned a `500`, or hung the request with an unhandled rejection under `mcpAuthClerk`, and any other scheme was treated as a bearer token. `resource_metadata` no longer includes the request's query string.

@@ -1,8 +1,6 @@
 import type { ClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
-import type { AuthInfo } from '../mcp-types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
   type McpAuthClerkOptions,
@@ -13,6 +11,7 @@ import {
   McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
+  assertTransportClass,
   audienceFor,
   authenticateBearer,
   verifyClerkOAuthToken,
@@ -38,8 +37,30 @@ export {
   type McpAuthFailure,
   type McpAuthOptions,
   type McpResourceUrl,
+  type McpServerLike,
   McpTokenVerificationError,
+  type StreamableHttpTransportClass,
 };
+
+/**
+ * The part of a Node.js streamable HTTP server transport, such as `StreamableHTTPServerTransport` from
+ * `@modelcontextprotocol/sdk/server/streamableHttp.js`, that `streamableHttpHandler` uses.
+ */
+export interface NodeStreamableHttpTransport {
+  /**
+   * Handles one MCP request and writes the response.
+   * @param req - The incoming request, carrying the auth info `mcpAuth` set in `req.auth`
+   * @param res - The response to write to
+   * @param parsedBody - The request body, already parsed
+   * @returns A promise that resolves once the request is handled
+   */
+  handleRequest(req: express.Request, res: express.Response, parsedBody: unknown): Promise<void>;
+  /**
+   * Closes the transport.
+   * @returns A promise that resolves once the transport is closed
+   */
+  close(): Promise<void>;
+}
 
 /**
  * Express middleware that enforces authentication for MCP requests.
@@ -67,7 +88,11 @@ export {
  *   return authData;
  * }
  *
- * app.post("/mcp", mcpAuth(verifyToken), streamableHttpHandler(createServer));
+ * app.post(
+ *   "/mcp",
+ *   mcpAuth(verifyToken),
+ *   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+ * );
  * ```
  */
 export function mcpAuth(
@@ -129,7 +154,7 @@ export function mcpAuth(
  *     resourceUrl: "https://mcp.example.com/mcp",
  *     requiredScopes: ["profile", "email"],
  *   }),
- *   streamableHttpHandler(createServer),
+ *   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
  * );
  * ```
  */
@@ -247,8 +272,17 @@ function getRequestUrl(req: express.Request) {
  * plain server object is also accepted for backwards compatibility, but a
  * shared server can only handle one request at a time, so passing a factory
  * is strongly recommended.
+ * @param Transport - The SDK's Node.js transport class,
+ * `StreamableHTTPServerTransport` from
+ * `@modelcontextprotocol/sdk/server/streamableHttp.js`. It is taken as an
+ * argument so that this package never imports the SDK, which only apps serving
+ * MCP with this handler need to install.
+ * @returns The handler
  * @example
  * ```ts
+ * import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+ * import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+ *
  * function createServer() {
  *   const server = new McpServer({
  *     name: "test-server",
@@ -260,15 +294,23 @@ function getRequestUrl(req: express.Request) {
  *   return server;
  * }
  *
- * app.post("/mcp", streamableHttpHandler(createServer));
+ * app.post("/mcp", streamableHttpHandler(createServer, StreamableHTTPServerTransport));
  * ```
+ * @typeParam Transport - The transport the class creates, inferred from the
+ * class alone
+ * @typeParam Server - The server `createServer` returns. It is a separate type
+ * parameter so that `Transport` is not inferred from the SDK's general
+ * `Transport` interface, which `McpServer.connect` takes.
  */
-export function streamableHttpHandler(createServer: McpServer | (() => McpServer)) {
+export function streamableHttpHandler<
+  Transport extends NodeStreamableHttpTransport,
+  Server extends McpServerLike<Transport>,
+>(createServer: Server | (() => Server), Transport: StreamableHttpTransportClass<Transport>) {
+  assertTransportClass(Transport, 'StreamableHTTPServerTransport', 'streamableHttp.js');
+
   return async (req: express.Request, res: express.Response) => {
     const server = typeof createServer === 'function' ? createServer() : createServer;
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+    const transport = new Transport({ sessionIdGenerator: undefined });
 
     // close() rejects if a consumer onclose hook throws; an unhandled rejection would kill the process
     const closeTransport = () => transport.close().catch(() => undefined);

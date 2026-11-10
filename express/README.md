@@ -10,6 +10,8 @@ Make sure you have the required dependencies installed:
 npm install @clerk/mcp-tools express @modelcontextprotocol/sdk
 ```
 
+`@modelcontextprotocol/sdk` is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `toNodeHandler` from `@modelcontextprotocol/node`, does not need it.
+
 If you're using Clerk for authentication, also install the Clerk express SDK:
 
 ```bash
@@ -26,6 +28,7 @@ Here's a complete example using Clerk for authentication:
 import 'dotenv/config';
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createClerkClient } from '@clerk/express';
 import {
   mcpAuthClerk,
@@ -83,7 +86,7 @@ app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerCler
 app.post(
   '/mcp',
   mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
-  streamableHttpHandler(createServer),
+  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 
 app.listen(3000);
@@ -98,6 +101,7 @@ import 'dotenv/config';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 const app = express();
@@ -153,7 +157,11 @@ app.get(
   }),
 );
 
-app.post('/mcp', mcpAuth(verifyToken), streamableHttpHandler(createServer));
+app.post(
+  '/mcp',
+  mcpAuth(verifyToken),
+  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+);
 
 app.listen(3000);
 ```
@@ -174,6 +182,7 @@ Generic authentication middleware that allows you to implement custom token veri
 **Example:**
 
 ```ts
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 async function verifyToken(token: string, req: express.Request) {
@@ -186,7 +195,11 @@ async function verifyToken(token: string, req: express.Request) {
   }
 }
 
-app.post('/mcp', mcpAuth(verifyToken), streamableHttpHandler(createServer));
+app.post(
+  '/mcp',
+  mcpAuth(verifyToken),
+  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+);
 ```
 
 The middleware will:
@@ -225,6 +238,7 @@ A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque a
 **Example:**
 
 ```ts
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 app.post(
@@ -233,7 +247,7 @@ app.post(
     resourceUrl: 'https://mcp.example.com/mcp',
     requiredScopes: ['profile', 'email'],
   }),
-  streamableHttpHandler(createServer),
+  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 ```
 
@@ -310,11 +324,13 @@ Express handler that processes MCP requests using the streamable HTTP transport 
 **Parameters:**
 
 - `createServer: () => McpServer` - A factory that returns a new MCP server instance. Passing a plain `McpServer` instance is also supported for backwards compatibility, but a shared server can only handle one request at a time, so a factory is strongly recommended.
+- `Transport` - `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js`. This package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class.
 
 **Example:**
 
 ```ts
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 function createServer() {
@@ -331,7 +347,7 @@ function createServer() {
   return server;
 }
 
-app.post('/mcp', streamableHttpHandler(createServer));
+app.post('/mcp', streamableHttpHandler(createServer, StreamableHTTPServerTransport));
 ```
 
 ## Accessing Authentication Data in Tools
@@ -426,6 +442,6 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 app.post(
   '/mcp',
   mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
-  streamableHttpHandler(createServer), // MCP request handling
+  streamableHttpHandler(createServer, StreamableHTTPServerTransport), // MCP request handling
 );
 ```
