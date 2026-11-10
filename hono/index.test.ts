@@ -68,7 +68,7 @@ describe('protectedResourceHandler', () => {
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.resource).toBe('http://myapp.com/');
+    expect(json.resource).toBe('http://myapp.com');
     expect(json.authorization_servers).toEqual(['https://auth.example.com']);
   });
 
@@ -118,7 +118,7 @@ describe('protectedResourceHandlerClerk', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.authorization_servers).toEqual(['https://clerk.example.com']);
-    expect(json.resource).toBe('http://myapp.com/');
+    expect(json.resource).toBe('http://myapp.com');
   });
 
   test('works in edge runtimes without Node.js Buffer', () => {

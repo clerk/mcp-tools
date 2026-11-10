@@ -389,6 +389,33 @@ describe('mcpAuth', () => {
       expect(verifyToken).not.toHaveBeenCalled();
     },
   );
+
+  test('answers an HTTP/1.0 request without a Host header with a 400 instead of using http://undefined', async () => {
+    const verifyToken = vi.fn();
+    const app = express();
+    app.post('/mcp', mcpAuth(verifyToken), (_req, res) => {
+      res.json({});
+    });
+
+    const response = await withListening(app, (baseUrl) => {
+      const { port } = new URL(baseUrl);
+      return new Promise<string>((resolve, reject) => {
+        const socket = connect(Number(port), '127.0.0.1', () => {
+          socket.write(
+            'POST /mcp HTTP/1.0\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\n\r\n',
+          );
+        });
+        let response = '';
+        socket.on('data', (chunk) => (response += chunk.toString()));
+        socket.on('end', () => resolve(response));
+        socket.on('error', reject);
+      });
+    });
+
+    expect(response).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
+    expect(response).not.toContain('undefined');
+    expect(verifyToken).not.toHaveBeenCalled();
+  });
 });
 
 async function withListening<T>(app: express.Express, fn: (baseUrl: string) => Promise<T>) {

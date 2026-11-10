@@ -74,7 +74,6 @@ function createServer() {
   return server;
 }
 
-app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceHandlerClerk({
@@ -151,7 +150,7 @@ function createServer() {
 
 // Protected resource metadata for your custom auth system
 app.get(
-  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-protected-resource/mcp',
   protectedResourceHandler({
     authServerUrl: 'https://your-auth-server.com',
   }),
@@ -272,7 +271,7 @@ Generic express handler that returns OAuth protected resource metadata for any O
 import { protectedResourceHandler } from '@clerk/mcp-tools/express';
 
 app.get(
-  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-protected-resource/mcp',
   protectedResourceHandler({
     authServerUrl: 'https://auth.example.com',
     properties: {
@@ -293,7 +292,7 @@ Express handler that returns OAuth protected resource metadata for Clerk integra
 import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/express';
 
 app.get(
-  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-protected-resource/mcp',
   protectedResourceHandlerClerk({ scopes_supported: ['email'] }),
 );
 ```

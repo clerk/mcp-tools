@@ -1,9 +1,23 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
-import type { ClerkClient } from '@clerk/backend';
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
-import { matchResourceUrl, verifyClerkToken } from './server';
+import { type ClerkOAuthAuthObject, matchResourceUrl, verifyClerkToken } from './server';
+
+/**
+ * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuthClerk` uses to verify OAuth access
+ * tokens. Declared here so that this package's types do not need `@clerk/backend`. Create the client with both
+ * `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
+ */
+export type ClerkOAuthClient = {
+  authenticateRequest(
+    request: Request,
+    options: { acceptsToken: 'oauth_token'; audience: string | string[] },
+  ): Promise<
+    | { isAuthenticated: true; toAuth(): ClerkOAuthAuthObject }
+    | { isAuthenticated: false; reason: string; message: string }
+  >;
+};
 
 /**
  * Why `mcpAuth` answered a request with a 401 or 403 challenge, or with a 421 for a request to an origin that no
@@ -83,7 +97,8 @@ export type McpAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
-   * origin gets a 421. The challenge's `resource_metadata` is derived from it. When omitted, it is derived from the
+   * origin gets a 421. The request's origin is the one the app sees, so behind a proxy that terminates TLS or rewrites
+   * `Host`, list those URLs or, in Express, set `trust proxy`. The challenge's `resource_metadata` is derived from it. When omitted, it is derived from the
    * incoming request, which can differ from the public URL behind a proxy. Set the protected resource metadata route's
    * `resource` to the same URL, as `matchResourceUrl` picks it, since that route also derives it from the request.
    */
@@ -215,6 +230,17 @@ export function resourceMetadataUrlFor(resourceUrl: string): string {
   return `${origin}/.well-known/oauth-protected-resource${pathname === '/' ? '' : pathname}${search}`;
 }
 
+/**
+ * The resource a protected resource metadata URL describes, the inverse of `resourceMetadataUrlFor`: the well-known
+ * path is removed and the rest of the path and the query are kept as they are, so
+ * `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/` and the root describes the bare origin. RFC
+ * 9728 section 3.3 has clients discard metadata whose `resource` is not identical to the URL they derived it from.
+ */
+export function resourceFromMetadataUrl(metadataUrl: string): string {
+  const { origin, pathname, search } = new URL(metadataUrl);
+  return `${origin}${pathname.replace('/.well-known/oauth-protected-resource', '')}${search}`;
+}
+
 // An RFC 9110 `auth-param` value here is a `quoted-string`: a URL's `:` and `/` are not allowed in a bare token.
 function quoted(value: string): string {
   return `"${value.replace(/[\\"]/g, '\\$&')}"`;
@@ -326,6 +352,16 @@ export async function authenticateBearer({
     rejection = error;
   }
 
+  // An expired token gets `invalid_token` (RFC 6750 section 3.1). Clerk rejects an expired token itself, but a
+  // `verifyToken` passed to `mcpAuth` can return the auth info of a token it decoded or cached
+  if (authInfo?.expiresAt !== undefined && authInfo.expiresAt <= Date.now() / 1000) {
+    rejection = new McpTokenVerificationError(
+      'token-expired',
+      `The token expired at ${new Date(authInfo.expiresAt * 1000).toISOString()}`,
+    );
+    authInfo = undefined;
+  }
+
   if (!authInfo) {
     return {
       ok: false,
@@ -372,7 +408,7 @@ const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerific
  * token separately from an invalid signature, so that case is still a rejection.
  */
 export async function verifyClerkOAuthToken(
-  client: Pick<ClerkClient, 'authenticateRequest'>,
+  client: ClerkOAuthClient,
   token: string,
   audience: string,
 ) {

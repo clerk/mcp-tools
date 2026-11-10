@@ -2,10 +2,9 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createMcpHandler } from 'mcp-handler';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const defaultAuthenticateRequest = vi.hoisted(() => vi.fn());
-vi.mock('@clerk/nextjs/server', () => ({
-  clerkClient: async () => ({ authenticateRequest: defaultAuthenticateRequest }),
-}));
+const defaultAuthenticateRequest = vi.fn();
+// The shape of `clerkClient` from `@clerk/nextjs/server`: an async function that returns the client
+const clerkClient = async () => ({ authenticateRequest: defaultAuthenticateRequest });
 
 import {
   McpAuthError,
@@ -40,9 +39,8 @@ describe.each([
 
   test.each([
     ['/mcp', 'https://mcp.example.com/mcp'],
-    ['/mcp/', 'https://mcp.example.com/mcp'],
+    ['/mcp/', 'https://mcp.example.com/mcp/'],
     ['', 'https://mcp.example.com'],
-    ['/', 'https://mcp.example.com'],
   ])('describes the resource for the metadata route suffix %j', async (suffix, resource) => {
     const res = createHandler()(new Request(`${METADATA_ROOT}${suffix}`));
 
@@ -217,9 +215,9 @@ describe('mcpAuthClerk', () => {
   test('asks Clerk to check the audience and sets req.auth', async () => {
     defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
 
-    const res = await mcpAuthClerk({ resourceUrl, requiredScopes: ['profile'] })(echoAuth)(
-      request('Bearer token-1'),
-    );
+    const res = await mcpAuthClerk({ clerkClient, resourceUrl, requiredScopes: ['profile'] })(
+      echoAuth,
+    )(request('Bearer token-1'));
 
     expect(res.status).toBe(200);
     const [verified, options] = defaultAuthenticateRequest.mock.calls[0]!;
@@ -241,6 +239,7 @@ describe('mcpAuthClerk', () => {
     const failures: McpAuthFailure[] = [];
 
     const res = await mcpAuthClerk({
+      clerkClient,
       resourceUrl,
       onAuthFailure: (failure) => failures.push(failure),
     })(echoAuth)(request('Bearer token-1'));
@@ -273,6 +272,18 @@ describe('mcpAuthClerk', () => {
     ]);
   });
 
+  test('still sends the challenge when onAuthFailure throws', async () => {
+    const res = await mcpAuth(async () => undefined, {
+      resourceUrl,
+      onAuthFailure: () => {
+        throw new Error('logger is down');
+      },
+    })(echoAuth)(request());
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+  });
+
   test('throws when Clerk could not verify the token, instead of answering with a challenge', async () => {
     defaultAuthenticateRequest.mockResolvedValue({
       isAuthenticated: false,
@@ -280,9 +291,9 @@ describe('mcpAuthClerk', () => {
       message: 'Clerk is unavailable',
     });
 
-    const error = await mcpAuthClerk({ resourceUrl })(echoAuth)(request('Bearer token-1')).catch(
-      (thrown: unknown) => thrown,
-    );
+    const error = await mcpAuthClerk({ clerkClient, resourceUrl })(echoAuth)(
+      request('Bearer token-1'),
+    ).catch((thrown: unknown) => thrown);
 
     expect(error).toBeInstanceOf(McpAuthError);
     const { cause } = error as McpAuthError;
@@ -290,7 +301,7 @@ describe('mcpAuthClerk', () => {
     expect(cause).toMatchObject({ code: 'unexpected-error', message: 'Clerk is unavailable' });
   });
 
-  test('verifies with the clerkClient option instead of the default client', async () => {
+  test('verifies with a Clerk client object as well as the clerkClient function', async () => {
     const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
 
     const res = await mcpAuthClerk({ resourceUrl, clerkClient: { authenticateRequest } as never })(
@@ -302,6 +313,12 @@ describe('mcpAuthClerk', () => {
     expect(defaultAuthenticateRequest).not.toHaveBeenCalled();
   });
 
+  test('throws at setup without a clerkClient, naming the import', () => {
+    expect(() => mcpAuthClerk({ resourceUrl } as never)).toThrow(
+      "Import clerkClient from '@clerk/nextjs/server'",
+    );
+  });
+
   test('passes the verified auth info to tools in an mcp-handler route', async () => {
     defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
     const handler = createMcpHandler((server) => {
@@ -310,7 +327,7 @@ describe('mcpAuthClerk', () => {
       }));
     });
 
-    const res = await mcpAuthClerk({ resourceUrl })(handler)(
+    const res = await mcpAuthClerk({ clerkClient, resourceUrl })(handler)(
       new Request(resourceUrl, {
         method: 'POST',
         headers: {
@@ -341,9 +358,11 @@ describe('mcpAuthClerk', () => {
   test('answers a token without the required scopes with a 403 challenge', async () => {
     defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
 
-    const res = await mcpAuthClerk({ resourceUrl, requiredScopes: ['profile', 'email'] })(echoAuth)(
-      request('Bearer token-1'),
-    );
+    const res = await mcpAuthClerk({
+      clerkClient,
+      resourceUrl,
+      requiredScopes: ['profile', 'email'],
+    })(echoAuth)(request('Bearer token-1'));
 
     expect(res.status).toBe(403);
     expect(res.headers.get('WWW-Authenticate')).toBe(
