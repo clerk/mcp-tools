@@ -56,6 +56,22 @@ export type ClerkAuthOptions = VerifierAuthOptions & {
 };
 
 /**
+ * The branch of every adapter's options union that verifies tokens with the caller's function, for the framework's
+ * request type `Req`. `resourceUrl` is optional, and `clerkClient` is not allowed.
+ */
+export type CustomVerifierAuthOptions<Req> = VerifierAuthOptions & {
+  /**
+   * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
+   * `McpTokenVerificationError` to reject it with a reason.
+   * @param token - The bearer token from the request
+   * @param request - The framework's request or context
+   * @returns The token's auth info, or `undefined` to reject it
+   */
+  verifyToken: (token: string, request: Req) => Promise<AuthInfo | undefined>;
+  clerkClient?: never;
+};
+
+/**
  * The options of the Express and Hono `mcpAuth` middleware, for the framework's request type `Req`. Without
  * `verifyToken`, Clerk verifies each token, and `resourceUrl` is required as its audience. With `verifyToken`, that
  * function verifies each token instead, `resourceUrl` is optional, and `clerkClient` is not allowed.
@@ -70,17 +86,7 @@ export type MiddlewareAuthOptions<Req> =
       clerkClient?: ClerkOAuthClient | undefined;
       verifyToken?: never;
     })
-  | (VerifierAuthOptions & {
-      /**
-       * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
-       * `McpTokenVerificationError` to reject it with a reason.
-       * @param token - The bearer token from the request
-       * @param request - The framework's request or context
-       * @returns The token's auth info, or `undefined` to reject it
-       */
-      verifyToken: (token: string, request: Req) => Promise<AuthInfo | undefined>;
-      clerkClient?: never;
-    });
+  | CustomVerifierAuthOptions<Req>;
 
 type BearerResult =
   | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }

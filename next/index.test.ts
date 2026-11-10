@@ -10,7 +10,6 @@ import {
   McpAuthError,
   type McpAuthFailure,
   McpTokenVerificationError,
-  mcpAuth,
   protectedResourceMetadataHandler,
   withMcpAuth,
 } from './index';
@@ -69,10 +68,10 @@ const authInfo = (scopes: string[]): AuthInfo => ({
   scopes,
 });
 
-describe('mcpAuth', () => {
+describe('withMcpAuth with verifyToken', () => {
   test('sends a quoted challenge when the Authorization header is missing', async () => {
     const verifyToken = vi.fn();
-    const res = await mcpAuth(verifyToken)(echoAuth)(request());
+    const res = await withMcpAuth(echoAuth, { verifyToken })(request());
 
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
@@ -80,9 +79,10 @@ describe('mcpAuth', () => {
   });
 
   test('derives resource_metadata from resourceUrl instead of the request', async () => {
-    const res = await mcpAuth(vi.fn(), { resourceUrl: 'https://public.example.com/mcp' })(echoAuth)(
-      request(undefined, 'http://localhost:3000/mcp'),
-    );
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken: vi.fn(),
+      resourceUrl: 'https://public.example.com/mcp',
+    })(request(undefined, 'http://localhost:3000/mcp'));
 
     expect(res.headers.get('WWW-Authenticate')).toBe(
       'Bearer resource_metadata="https://public.example.com/.well-known/oauth-protected-resource/mcp"',
@@ -90,9 +90,10 @@ describe('mcpAuth', () => {
   });
 
   test('derives resource_metadata from the listed resourceUrl with the request origin', async () => {
-    const res = await mcpAuth(vi.fn(), {
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken: vi.fn(),
       resourceUrl: ['https://mcp.example.com/mcp', 'https://other.example.com/mcp'],
-    })(echoAuth)(request(undefined, 'https://other.example.com/mcp'));
+    })(request(undefined, 'https://other.example.com/mcp'));
 
     expect(res.headers.get('WWW-Authenticate')).toBe(
       'Bearer resource_metadata="https://other.example.com/.well-known/oauth-protected-resource/mcp"',
@@ -101,9 +102,10 @@ describe('mcpAuth', () => {
 
   test('answers a request to an unlisted origin with a 421 and does not verify it', async () => {
     const verifyToken = vi.fn();
-    const res = await mcpAuth(verifyToken, {
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken,
       resourceUrl: ['https://mcp.example.com/mcp', 'https://other.example.com/mcp'],
-    })(echoAuth)(request('Bearer token-1', 'https://evil.example.com/mcp'));
+    })(request('Bearer token-1', 'https://evil.example.com/mcp'));
 
     expect(res.status).toBe(421);
     expect(res.headers.get('WWW-Authenticate')).toBeNull();
@@ -112,16 +114,19 @@ describe('mcpAuth', () => {
   });
 
   test('adds invalid_token to the challenge when the token is rejected', async () => {
-    const res = await mcpAuth(async () => undefined)(echoAuth)(request('Bearer token-1'));
+    const res = await withMcpAuth(echoAuth, { verifyToken: async () => undefined })(
+      request('Bearer token-1'),
+    );
 
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, error="invalid_token"`);
   });
 
   test('returns 403 with the granted and missing scopes when requiredScopes are missing', async () => {
-    const res = await mcpAuth(async () => authInfo(['profile']), {
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken: async () => authInfo(['profile']),
       requiredScopes: ['profile', 'email'],
-    })(echoAuth)(request('Bearer token-1'));
+    })(request('Bearer token-1'));
 
     expect(res.status).toBe(403);
     expect(res.headers.get('WWW-Authenticate')).toBe(
@@ -129,19 +134,24 @@ describe('mcpAuth', () => {
     );
   });
 
-  test('passes the token and request to verifyToken', async () => {
+  test.each([
+    ['without a resourceUrl', {}],
+    ['with a resourceUrl', { resourceUrl }],
+  ])('passes the token and request to verifyToken %s', async (_name, options) => {
     const verifyToken = vi.fn(async () => authInfo([]));
     const req = request('bearer token-1');
 
-    await mcpAuth(verifyToken)(echoAuth)(req);
+    const res = await withMcpAuth(echoAuth, { ...options, verifyToken })(req);
 
+    expect(res.status).toBe(200);
     expect(verifyToken).toHaveBeenCalledWith('token-1', req);
   });
 
   test('sets req.auth with resourceMetadataUrl and calls the handler', async () => {
-    const res = await mcpAuth(async () => authInfo(['profile']), {
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken: async () => authInfo(['profile']),
       requiredScopes: ['profile'],
-    })(echoAuth)(request('Bearer token-1'));
+    })(request('Bearer token-1'));
 
     expect(res.status).toBe(200);
     expect((await res.json()).auth).toEqual({
@@ -151,17 +161,31 @@ describe('mcpAuth', () => {
   });
 
   test('throws at setup for an invalid resourceUrl or scope', () => {
-    expect(() => mcpAuth(vi.fn(), { resourceUrl: 'not a url' })).toThrow('Clerk error:');
-    expect(() => mcpAuth(vi.fn(), { resourceUrl: [] })).toThrow('Clerk error:');
-    expect(() => mcpAuth(vi.fn(), { requiredScopes: ['two words'] })).toThrow('Clerk error:');
-    expect(() => mcpAuth(vi.fn(), { challengeScopes: ['two words'] })).toThrow('Clerk error:');
+    const verifyToken = vi.fn();
+    expect(() => withMcpAuth(echoAuth, { verifyToken, resourceUrl: 'not a url' })).toThrow(
+      'Clerk error:',
+    );
+    expect(() => withMcpAuth(echoAuth, { verifyToken, resourceUrl: [] })).toThrow('Clerk error:');
+    expect(() => withMcpAuth(echoAuth, { verifyToken, requiredScopes: ['two words'] })).toThrow(
+      'Clerk error:',
+    );
+    expect(() => withMcpAuth(echoAuth, { verifyToken, challengeScopes: ['two words'] })).toThrow(
+      'Clerk error:',
+    );
+  });
+
+  test('throws at setup without a route handler', () => {
+    expect(() => withMcpAuth(undefined as never, { verifyToken: vi.fn() })).toThrow(
+      'takes the route handler first',
+    );
   });
 
   test('lists requiredScopes then challengeScopes in the 401 challenge', async () => {
-    const res = await mcpAuth(vi.fn(), {
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken: vi.fn(),
       requiredScopes: ['profile'],
       challengeScopes: ['email'],
-    })(echoAuth)(request());
+    })(request());
 
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, scope="profile email"`);
@@ -170,16 +194,70 @@ describe('mcpAuth', () => {
   test('throws an McpAuthError with the verifier error as its cause', async () => {
     const cause = new Error('network down');
 
-    const error = await mcpAuth(() => Promise.reject(cause))(echoAuth)(
+    const error = await withMcpAuth(echoAuth, { verifyToken: () => Promise.reject(cause) })(
       request('Bearer token-1'),
     ).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(McpAuthError);
     expect(error).toMatchObject({ reason: 'verification_failed', cause });
   });
+
+  test('passes each failure and its request to onAuthFailure, and nothing for a verified token', async () => {
+    const calls: [McpAuthFailure, Request][] = [];
+    const wrapped = withMcpAuth(echoAuth, {
+      verifyToken: async (token) => (token === 'good' ? authInfo([]) : undefined),
+      resourceUrl: [resourceUrl],
+      onAuthFailure: (failure, req) => calls.push([failure, req]),
+    });
+    const missing = request();
+    const misdirected = new Request('https://other.example.com/mcp', { method: 'POST' });
+
+    await wrapped(missing);
+    await wrapped(misdirected);
+    await wrapped(request('Bearer good'));
+
+    expect(calls).toEqual([
+      [{ reason: 'missing_token' }, missing],
+      [{ reason: 'misdirected_request' }, misdirected],
+    ]);
+  });
+
+  test('still sends the challenge when onAuthFailure throws', async () => {
+    const res = await withMcpAuth(echoAuth, {
+      verifyToken: async () => undefined,
+      resourceUrl,
+      onAuthFailure: () => {
+        throw new Error('logger is down');
+      },
+    })(request());
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+  });
+
+  test('still sends the challenge, without an unhandled rejection, when onAuthFailure rejects', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const res = await withMcpAuth(echoAuth, {
+        verifyToken: async () => undefined,
+        resourceUrl,
+        onAuthFailure: async () => {
+          throw new Error('logger is down');
+        },
+      })(request());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(res.status).toBe(401);
+      expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
 });
 
-describe('withMcpAuth', () => {
+describe('withMcpAuth with Clerk', () => {
   const authenticated = (scopes: string[]) => ({
     isAuthenticated: true,
     toAuth: () => ({
@@ -195,16 +273,18 @@ describe('withMcpAuth', () => {
     defaultAuthenticateRequest.mockReset();
   });
 
-  test('throws a Clerk error without a resourceUrl', () => {
-    expect(() => withMcpAuth(echoAuth, {} as never)).toThrow(
+  test('throws a Clerk error without a resourceUrl, naming the verifyToken alternative', () => {
+    const noResourceUrl = () => withMcpAuth(echoAuth, {} as never);
+    expect(noResourceUrl).toThrow(
       'Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a resourceUrl',
     );
+    expect(noResourceUrl).toThrow('withMcpAuth(handler, { verifyToken })');
   });
 
   test("throws a Clerk error for mcp-handler's call form, with a verifier function", () => {
-    expect(() => withMcpAuth(echoAuth, (async () => undefined) as never)).toThrow(
-      'withMcpAuth(handler, { resourceUrl, clerkClient })',
-    );
+    const callForm = () => withMcpAuth(echoAuth, (async () => undefined) as never);
+    expect(callForm).toThrow('withMcpAuth(handler, { resourceUrl, clerkClient })');
+    expect(callForm).toThrow('withMcpAuth(handler, { verifyToken })');
   });
 
   test('throws a Clerk error without a route handler', () => {
@@ -281,11 +361,13 @@ describe('withMcpAuth', () => {
   });
 
   test('passes each failure and its request to onAuthFailure, and nothing for a verified token', async () => {
+    defaultAuthenticateRequest.mockResolvedValue(authenticated([]));
     const calls: [McpAuthFailure, Request][] = [];
-    const wrapped = mcpAuth(async (token) => (token === 'good' ? authInfo([]) : undefined), {
+    const wrapped = withMcpAuth(echoAuth, {
+      clerkClient,
       resourceUrl: [resourceUrl],
       onAuthFailure: (failure, req) => calls.push([failure, req]),
-    })(echoAuth);
+    });
     const missing = request();
     const misdirected = new Request('https://other.example.com/mcp', { method: 'POST' });
 
@@ -300,12 +382,13 @@ describe('withMcpAuth', () => {
   });
 
   test('still sends the challenge when onAuthFailure throws', async () => {
-    const res = await mcpAuth(async () => undefined, {
+    const res = await withMcpAuth(echoAuth, {
+      clerkClient,
       resourceUrl,
       onAuthFailure: () => {
         throw new Error('logger is down');
       },
-    })(echoAuth)(request());
+    })(request());
 
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
@@ -315,12 +398,13 @@ describe('withMcpAuth', () => {
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
     try {
-      const res = await mcpAuth(async () => undefined, {
+      const res = await withMcpAuth(echoAuth, {
+        clerkClient,
         resourceUrl,
         onAuthFailure: async () => {
           throw new Error('logger is down');
         },
-      })(echoAuth)(request());
+      })(request());
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(res.status).toBe(401);

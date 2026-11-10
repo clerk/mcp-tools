@@ -282,7 +282,9 @@ const mcpRoutes: [string, Send][] = [
   [
     'next',
     async (path, init) => {
-      const handler = nextAdapter.mcpAuth(verifyExpired)(() => Response.json({ ok: true }));
+      const handler = nextAdapter.withMcpAuth(() => Response.json({ ok: true }), {
+        verifyToken: verifyExpired,
+      });
       return answer(
         await handler(
           new Request(`${origin}${path}`, {
@@ -296,7 +298,18 @@ const mcpRoutes: [string, Send][] = [
   ],
 ];
 
-describe.each(mcpRoutes)('%s mcpAuth', (_name, send) => {
+// Each adapter has one auth entry point that takes either verifier: `mcpAuth` in Express and Hono, and `withMcpAuth`
+// in Next.js, where a route handler is wrapped instead of preceded by middleware
+test('each adapter has a single auth entry point', () => {
+  const entryPoints = (adapter: object) =>
+    ['mcpAuth', 'mcpAuthClerk', 'withMcpAuth'].filter((name) => name in adapter);
+
+  expect(entryPoints(expressAdapter)).toEqual(['mcpAuth']);
+  expect(entryPoints(honoAdapter)).toEqual(['mcpAuth']);
+  expect(entryPoints(nextAdapter)).toEqual(['withMcpAuth']);
+});
+
+describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) => {
   test('answers a token whose expiresAt has passed with invalid_token (RFC 6750 section 3.1)', async () => {
     const res = await send('/mcp', { method: 'POST', authorization: 'Bearer t' });
 
@@ -307,7 +320,7 @@ describe.each(mcpRoutes)('%s mcpAuth', (_name, send) => {
   });
 });
 
-// Clerk verification, through `mcpAuth` without `verifyToken` in Express and Hono and through `withMcpAuth` in Next.js
+// Clerk verification, through the same entry points without `verifyToken`
 const rejectingClerk = {
   authenticateRequest: vi.fn(async () => ({
     isAuthenticated: false,
