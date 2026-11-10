@@ -3,10 +3,10 @@ import {
   type ClerkAuthOptions,
   type CustomVerifierAuthOptions,
   assertMcpAuthOptions,
-  audienceFor,
+  assertVerifierOrResourceUrl,
   authenticateBearer,
+  clerkTokenVerifier,
   resourceFromMetadataUrl,
-  verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
@@ -172,15 +172,10 @@ export function withMcpAuth(
     );
   }
   // `mcp-handler`'s `withMcpAuth` takes a verifier function here, so code moved from it fails at startup
-  if (
-    options?.verifyToken === undefined &&
-    typeof options?.resourceUrl !== 'string' &&
-    !Array.isArray(options?.resourceUrl)
-  ) {
-    throw new Error(
-      `Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withMcpAuthCallForm}`,
-    );
-  }
+  assertVerifierOrResourceUrl(
+    options,
+    `Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withMcpAuthCallForm}`,
+  );
   assertMcpAuthOptions('withMcpAuth', options);
 
   const verifyToken = options.verifyToken ?? clerkVerifier(options);
@@ -217,17 +212,16 @@ export function withMcpAuth(
 }
 
 // The verifier for the Clerk branch of the options, which checks the `clerkClient` option at startup
-function clerkVerifier({
-  clerkClient,
-  resourceUrl,
-}: Extract<McpAuthOptions, { clerkClient: unknown }>) {
+function clerkVerifier(options: Extract<McpAuthOptions, { clerkClient: unknown }>) {
+  const { clerkClient } = options;
   if (typeof clerkClient !== 'function' && typeof clerkClient?.authenticateRequest !== 'function') {
     throw new Error(
       `Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a clerkClient option. Import clerkClient from '@clerk/nextjs/server' and call ${withMcpAuthCallForm}`,
     );
   }
-  return async (token: string, req: Request) => {
-    const client = typeof clerkClient === 'function' ? await clerkClient() : clerkClient;
-    return verifyClerkOAuthToken(client, token, audienceFor(resourceUrl, req.url));
-  };
+  return clerkTokenVerifier(
+    options,
+    () => (typeof clerkClient === 'function' ? clerkClient() : clerkClient),
+    (req: Request) => req.url,
+  );
 }

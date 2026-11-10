@@ -6,10 +6,10 @@ import {
   assertMiddlewareAuthOptions,
   assertServerFactory,
   assertTransportClass,
-  audienceFor,
   authenticateBearer,
+  clerkTokenVerifier,
+  requirePublishableKey,
   resourceFromMetadataUrl,
-  verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
   type McpAuthFailure,
@@ -100,14 +100,12 @@ export function mcpAuth(options: McpAuthOptions) {
   assertMiddlewareAuthOptions(options);
   const verifyToken =
     options.verifyToken ??
-    ((token: string, req: express.Request) =>
-      verifyClerkOAuthToken(
-        options.clerkClient ?? clerkClient,
-        token,
-        // The middleware answers a request without a usable URL before it calls this, and `resourceUrl` is set
-        // whenever `verifyToken` is not
-        audienceFor(options.resourceUrl!, getRequestUrl(req)!),
-      ));
+    clerkTokenVerifier(
+      options,
+      () => options.clerkClient ?? clerkClient,
+      // The middleware answers a request without a usable URL before it verifies a token
+      (req: express.Request) => getRequestUrl(req)!,
+    );
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
@@ -157,10 +155,7 @@ export function mcpAuth(options: McpAuthOptions) {
  */
 export function authorizationServerMetadataHandler() {
   return async (_: express.Request, res: express.Response) => {
-    const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
-    }
+    const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 
     const metadata = await fetchAuthorizationServerMetadata({
       publishableKey,
@@ -183,10 +178,7 @@ export function authorizationServerMetadataHandler() {
  */
 export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
   return (req: express.Request, res: express.Response) => {
-    const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
-    }
+    const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 
     const requestUrl = getRequestUrl(req);
     if (!requestUrl) {

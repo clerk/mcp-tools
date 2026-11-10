@@ -6,10 +6,10 @@ import {
   type MiddlewareAuthOptions,
   assertMiddlewareAuthOptions,
   assertTransportClass,
-  audienceFor,
   authenticateBearer,
+  clerkTokenVerifier,
+  requirePublishableKey,
   resourceFromMetadataUrl,
-  verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
   type McpAuthFailure,
@@ -74,10 +74,7 @@ type ClerkEnv = {
  */
 export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
   return (c: Context) => {
-    const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
-    }
+    const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
     const metadata = generateProtectedResourceMetadata({
       publishableKey,
       resourceUrl: resourceFromMetadataUrl(c.req.url),
@@ -99,10 +96,7 @@ export function protectedResourceMetadataHandler(properties?: Record<string, unk
  */
 export function authorizationServerMetadataHandler() {
   return async (c: Context) => {
-    const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
-    }
+    const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
     const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
     return c.json(metadata);
   };
@@ -142,17 +136,20 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   assertMiddlewareAuthOptions(options);
   const verifyToken =
     options.verifyToken ??
-    ((token: string, c: Context) => {
-      const client =
-        options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
-      if (!client) {
-        throw new Error(
-          'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
-        );
-      }
-      // `resourceUrl` is set whenever `verifyToken` is not
-      return verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl!, c.req.url));
-    });
+    clerkTokenVerifier(
+      options,
+      (c: Context) => {
+        const client =
+          options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
+        if (!client) {
+          throw new Error(
+            'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
+          );
+        }
+        return client;
+      },
+      (c) => c.req.url,
+    );
 
   return async (c: Context, next: Next) => {
     const result = await authenticateBearer({
