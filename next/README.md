@@ -57,24 +57,18 @@ export { handler as GET };
 ```ts
 // app/mcp/route.ts
 import { withMcpAuth } from '@clerk/mcp-tools/next';
-import { clerkClient } from '@clerk/nextjs/server';
 import { createMcpHandler } from 'mcp-handler';
 import { mcpAuthOptions } from '@/lib/mcp';
 
 const handler = createMcpHandler((server) => {
+  // `authInfo.token` is the bearer token, so return only the user ID that `withMcpAuth` puts in `extra`
   server.registerTool(
-    'get-clerk-user-data',
-    { description: 'Gets data about the Clerk user that authorized this request' },
-    async (ctx) => {
+    'whoami',
+    { description: 'Returns the ID of the Clerk user that authorized this request' },
+    async (ctx) => ({
       // withMcpAuth only calls the handler with a verified token
-      const userId = ctx.http!.authInfo!.extra!.userId as string;
-      const clerk = await clerkClient();
-      const userData = await clerk.users.getUser(userId);
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(userData) }],
-      };
-    },
+      content: [{ type: 'text', text: String(ctx.http!.authInfo!.extra!.userId) }],
+    }),
   );
 });
 

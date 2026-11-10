@@ -47,10 +47,15 @@ app.use('*', cors({ origin: '*', exposeHeaders: ['WWW-Authenticate'] }));
 
 function createServer() {
   const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-  // `authInfo.token` is the bearer token, so return only `extra`, which holds the user ID
-  server.tool('get_user', 'Gets the current user', {}, async (_, { authInfo }) => ({
-    content: [{ type: 'text', text: JSON.stringify(authInfo?.extra) }],
-  }));
+  // `authInfo.token` is the bearer token, so return only the user ID that `mcpAuth` puts in `extra`
+  server.tool(
+    'whoami',
+    'Returns the ID of the Clerk user that authorized this request',
+    {},
+    async (_, { authInfo }) => ({
+      content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
+    }),
+  );
   return server;
 }
 
@@ -148,7 +153,7 @@ Your Clerk instance must issue the `aud` claim. Require `@clerk/backend` 3.19.0 
 
 ### `protectedResourceMetadataHandler(options?)`
 
-Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` in your own route. It takes the options you pass to `mcpAuth`, all optional, plus `properties`, so one object can be passed to both. It ignores `clerkClient` and `verifyToken`.
+Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` in your own route. It takes the options you pass to `mcpAuth`, all optional, plus `properties`, so one object can be passed to both. The handler ignores `clerkClient` and `verifyToken`.
 
 - `resourceUrl` (optional): the same value you pass to `mcpAuth`, one URL or a list with one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
 - `requiredScopes` and `challengeScopes` (optional): the same values you pass to `mcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.

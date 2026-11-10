@@ -115,27 +115,14 @@ function createServer() {
     version: '1.0.0',
   });
 
+  // `authInfo` is what `verifyToken` returned, so the user ID is the token's `sub`
   server.tool(
-    'get_user_data',
-    'Gets data about the authenticated user',
+    'whoami',
+    'Returns the ID of the user that authorized this request',
     {},
-    async (_, { authInfo }) => {
-      const { userId } = authInfo as any;
-
-      if (!userId) {
-        return {
-          content: [{ type: 'text', text: 'Error: user not authenticated' }],
-        };
-      }
-
-      // Pseudo-code: Replace with your actual user data fetching logic
-      // This could be a database query, API call, etc. depending on your auth provider
-      const user = await fetchUserFromDatabase(userId);
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(user) }],
-      };
-    },
+    async (_, { authInfo }) => ({
+      content: [{ type: 'text', text: String((authInfo as any)?.userId) }],
+    }),
   );
 
   return server;
@@ -326,26 +313,13 @@ When using the authentication middleware, the auth data is automatically passed 
 
 ```ts
 server.tool(
-  'authenticated_tool',
-  'A tool that needs user authentication',
-  { type: 'object', properties: {} },
-  async (args, { authInfo }) => {
+  'whoami',
+  'Returns the ID of the Clerk user that authorized this request',
+  {},
+  async (_, { authInfo }) => ({
     // Under Clerk verification, mcpAuth puts the user ID in `extra`
-    const userId = authInfo?.extra?.userId as string | undefined;
-
-    if (!userId) {
-      return {
-        content: [{ type: 'text', text: 'Authentication required' }],
-      };
-    }
-
-    // Use the user ID to fetch data or perform authenticated operations
-    const user = await clerk.users.getUser(userId);
-
-    return {
-      content: [{ type: 'text', text: `Hello, ${user.firstName}!` }],
-    };
-  },
+    content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
+  }),
 );
 ```
 
@@ -358,17 +332,13 @@ async function verifyToken(token: string, req: express.Request) {
 }
 
 server.tool(
-  'custom_auth_tool',
-  'Tool using custom auth',
-  { type: 'object', properties: {} },
-  async (args, { authInfo }) => {
+  'whoami',
+  'Returns the ID of the user that authorized this request',
+  {},
+  async (_, { authInfo }) => ({
     // authInfo contains whatever your verifyToken function returned
-    const { userId, email, scopes } = authInfo as any;
-
-    return {
-      content: [{ type: 'text', text: `User: ${email}, ID: ${userId}` }],
-    };
-  },
+    content: [{ type: 'text', text: String((authInfo as any)?.userId) }],
+  }),
 );
 ```
 
