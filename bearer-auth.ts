@@ -98,7 +98,13 @@ type BearerResult =
       error: string;
     };
 
-/** Throws a `Clerk error:` message when the options cannot produce a valid challenge. */
+/**
+ * Throws a `Clerk error:` message when the options cannot produce a valid challenge: a `requiredScopes` or
+ * `challengeScopes` entry that is not an RFC 6749 section 3.3 scope-token, or a `resourceUrl` that is not one absolute http or https
+ * URL per origin, without credentials or a fragment.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param options - The entry point's options
+ */
 export function assertMcpAuthOptions(caller: string, options: VerifierAuthOptions | undefined) {
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
@@ -286,7 +292,9 @@ export async function authenticateBearer({
   verifyToken,
 }: {
   authorization: string | undefined;
-  /** The URL the request was made to, used to pick a listed `resourceUrl`, or to derive one when it is not set. */
+  /**
+   * The URL the request was made to, used to pick a listed `resourceUrl`, or to derive one when it is not set.
+   */
   requestUrl: string;
   resourceUrl: McpResourceUrl | undefined;
   requiredScopes: readonly string[] | undefined;
