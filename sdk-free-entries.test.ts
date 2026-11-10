@@ -10,8 +10,7 @@ import { describe, expect, test } from 'vitest';
 // declarations pointing at a package the app may not have. These entry points must not reach the SDK at all.
 const SERVER_ENTRIES = [
   'server.ts',
-  'feedback.ts',
-  'create-browser-session.ts',
+  'tools.ts',
   'next/index.ts',
   'express/index.ts',
   'hono/index.ts',

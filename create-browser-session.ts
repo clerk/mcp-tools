@@ -222,8 +222,8 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
 }
 
 /**
- * Throws a `Clerk error:` message when the options cannot work. `createBrowserSessionTool` and `createBrowserSession` call it
- * too; call it at startup to fail fast on a bad configuration.
+ * Throws a `Clerk error:` message when the options cannot work. `createBrowserSessionTool` and `createBrowserSession` run
+ * the same check, so a tool built at module scope fails fast on a bad configuration.
  */
 export function validateBrowserSessionOptions(options: CreateBrowserSessionOptions): void {
   resolveBrowserSessionConfig(options);

@@ -3,7 +3,7 @@ import type { RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './feedback';
+import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './tools';
 import { connectTool, sentBody } from './test/mcp-harness';
 
 const input = {

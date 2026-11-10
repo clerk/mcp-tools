@@ -2,16 +2,19 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+// Internals the public entry no longer exposes
+import {
+  browserSessionErrorMessage,
+  browserSessionToolText,
+  validateBrowserSessionOptions,
+} from './create-browser-session';
 import {
   createBrowserSession,
   BrowserSessionError,
-  browserSessionErrorMessage,
   createBrowserSessionTool,
   browserSessionInstructions,
-  browserSessionToolText,
-  validateBrowserSessionOptions,
   type CreateBrowserSessionOptions,
-} from './create-browser-session';
+} from './tools';
 import { connectTool, sentBody, textOf } from './test/mcp-harness';
 
 const authInfo: AuthInfo = {
@@ -684,7 +687,7 @@ describe('createBrowserSessionTool', () => {
     // The warning is module-level, so each test loads the module fresh to start unwarned.
     async function freshTool(patch: Partial<CreateBrowserSessionOptions> = {}) {
       vi.resetModules();
-      const module = await import('./create-browser-session');
+      const module = await import('./tools');
       return module.createBrowserSessionTool(options(okFetch(), patch));
     }
 
@@ -705,7 +708,7 @@ describe('createBrowserSessionTool', () => {
       const consoleWarn = warned();
       const first = await freshTool({ requiredScopes: ['email'] });
       await first[2]({}, v2Extra(missing));
-      const { createBrowserSessionTool: create } = await import('./create-browser-session');
+      const { createBrowserSessionTool: create } = await import('./tools');
       const second = create(options(okFetch(), { requiredScopes: ['email'] }));
       await second[2]({}, v2Extra(missing));
       expect(consoleWarn).toHaveBeenCalledTimes(1);
