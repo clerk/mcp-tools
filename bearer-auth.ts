@@ -117,16 +117,11 @@ export type ProtectedResourceMetadataOptions<
   properties?: Record<string, unknown> | undefined;
 };
 
-// The keys of any adapter's `McpAuthOptions` the metadata handler accepts, so one object can be passed to both.
-const protectedResourceMetadataOptionKeys = new Set([
-  'resourceUrl',
-  'requiredScopes',
-  'challengeScopes',
-  'properties',
-  'clerkClient',
-  'verifyToken',
-  'onAuthFailure',
-]);
+// The keys of the `McpAuthOptions` every adapter shares, and `properties`, which the metadata handler accepts so one
+// object can be passed to both. An adapter whose options declare more passes those keys to the check itself.
+const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set<
+  keyof ProtectedResourceMetadataOptions<MiddlewareAuthOptions<unknown>>
+>(['resourceUrl', 'requiredScopes', 'challengeScopes', 'properties', 'clerkClient', 'verifyToken']);
 
 type BearerResult =
   | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
@@ -177,20 +172,27 @@ function assertResourceUrls(caller: string, resourceUrl: unknown) {
 }
 
 /**
- * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only the keys of `mcpAuth`'s
- * options and `properties`, then checks `resourceUrl` and the scopes as `mcpAuth` does, and that an explicit
- * `properties.scopes_supported` lists every required and challenge scope. The handler took the additional metadata
- * itself before it took options, so code written for that form, such as
+ * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only the keys of the adapter's
+ * `mcpAuth` options and `properties`, then checks `resourceUrl` and the scopes as `mcpAuth` does, and that an explicit
+ * `properties.scopes_supported` is an array of strings listing every required and challenge scope. The handler took
+ * the additional metadata itself before it took options, so code written for that form, such as
  * `protectedResourceMetadataHandler({ scopes_supported })`, fails at startup with a message naming the new form
  * instead of serving metadata without it.
+ * @param options - The handler's options
+ * @param adapterOptionKeys - The keys only this adapter's `McpAuthOptions` declare, such as Next.js's `onAuthFailure`
  */
-export function assertProtectedResourceMetadataOptions(options: unknown) {
+export function assertProtectedResourceMetadataOptions(
+  options: unknown,
+  adapterOptionKeys: ReadonlySet<string> = new Set(),
+) {
   if (options === undefined) return;
   const isOptions =
     typeof options === 'object' &&
     options !== null &&
     !Array.isArray(options) &&
-    Object.keys(options).every((key) => protectedResourceMetadataOptionKeys.has(key));
+    Object.keys(options).every(
+      (key) => protectedResourceMetadataOptionKeys.has(key) || adapterOptionKeys.has(key),
+    );
   if (!isOptions) {
     throw new Error(
       "Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties. Pass the options you give mcpAuth or withMcpAuth, and any other metadata in properties, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp', properties: { resource_name: 'Example' } })",
@@ -201,9 +203,12 @@ export function assertProtectedResourceMetadataOptions(options: unknown) {
 
   const listed = properties?.scopes_supported;
   if (listed === undefined) return;
-  const missing = scopesSupported(authOptions).filter(
-    (scope) => !Array.isArray(listed) || !listed.includes(scope),
-  );
+  if (!Array.isArray(listed) || !listed.every((scope) => typeof scope === 'string')) {
+    throw new Error(
+      'Clerk error: protectedResourceMetadataHandler properties.scopes_supported must be an array of strings, or left out to list requiredScopes and challengeScopes automatically',
+    );
+  }
+  const missing = requestedScopes(authOptions).filter((scope) => !listed.includes(scope));
   if (missing.length > 0) {
     throw new Error(
       `Clerk error: protectedResourceMetadataHandler properties.scopes_supported leaves out ${missing.join(', ')}, which requiredScopes or challengeScopes lists. Add them to scopes_supported, or leave scopes_supported out to list requiredScopes and challengeScopes automatically`,
@@ -211,8 +216,9 @@ export function assertProtectedResourceMetadataOptions(options: unknown) {
   }
 }
 
-// `requiredScopes` then `challengeScopes`, each once: the scopes a token for this resource is requested with.
-function scopesSupported({ requiredScopes = [], challengeScopes = [] }: BaseAuthOptions): string[] {
+// `requiredScopes` then `challengeScopes`, each once: the scopes a token for this resource is requested with. The 401
+// challenge's `scope` and the metadata's `scopes_supported` both come from here, so the two can't drift apart.
+function requestedScopes({ requiredScopes = [], challengeScopes = [] }: BaseAuthOptions): string[] {
   return [...new Set([...requiredScopes, ...challengeScopes])];
 }
 
@@ -238,11 +244,13 @@ export function clerkProtectedResourceMetadata(
       ? resourceFromMetadataUrl(metadataUrl)
       : matchResourceUrl(resourceUrl, metadataUrl);
   if (resource === undefined) return undefined;
-  const scopes = scopesSupported({ requiredScopes, challengeScopes });
+  // A `scopes_supported` key set to `undefined` is treated as left out, so it does not erase the derived list
+  const derived = requestedScopes({ requiredScopes, challengeScopes });
+  const scopes = properties?.scopes_supported ?? (derived.length > 0 ? derived : undefined);
   return generateProtectedResourceMetadata({
     publishableKey,
     resourceUrl: resource,
-    properties: scopes.length > 0 ? { scopes_supported: scopes, ...properties } : properties,
+    properties: scopes === undefined ? properties : { ...properties, scopes_supported: scopes },
   });
 }
 
@@ -490,7 +498,10 @@ export async function authenticateBearer({
     resourceMetadataUrl = resourceMetadataUrlFor(matched);
   }
 
-  const unauthorizedScopes = [...new Set([...requiredScopes, ...extraChallengeScopes])];
+  const unauthorizedScopes = requestedScopes({
+    requiredScopes,
+    challengeScopes: extraChallengeScopes,
+  });
 
   const parsed = parseAuthorization(authorization);
   if ('reason' in parsed) {

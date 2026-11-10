@@ -27,6 +27,11 @@ import {
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
 
+// The keys of `withMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
+const withMcpAuthOnlyOptionKeys: ReadonlySet<string> = new Set<keyof McpAuthFailureOption>([
+  'onAuthFailure',
+]);
+
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
 
@@ -51,7 +56,7 @@ export * from '../server';
 export function protectedResourceMetadataHandler(
   options: ProtectedResourceMetadataOptions = {},
 ): (req: Request) => Response {
-  assertProtectedResourceMetadataOptions(options);
+  assertProtectedResourceMetadataOptions(options, withMcpAuthOnlyOptionKeys);
 
   return (req: Request): Response => {
     const publishableKey = requirePublishableKey(
