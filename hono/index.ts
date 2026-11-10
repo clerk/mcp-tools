@@ -15,7 +15,11 @@ import {
   clerkTokenVerifier,
   requirePublishableKey,
 } from '../bearer-auth';
-import { type McpAuthFailure, fetchAuthorizationServerMetadata } from '../server';
+import {
+  type ClerkOAuthClient,
+  type McpAuthFailure,
+  fetchAuthorizationServerMetadata,
+} from '../server';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -32,7 +36,8 @@ export * from '../server';
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
- * its audience, and `clerkClient` defaults to the client that `clerkMiddleware()` sets. With `verifyToken`, that
+ * its audience, and `clerkClient` defaults to the client that `clerkMiddleware()` sets, or else to one built from
+ * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the app's environment. With `verifyToken`, that
  * function verifies each token with the Hono context, `resourceUrl` is optional, and `clerkClient` is not allowed.
  */
 export type McpAuthOptions = MiddlewareAuthOptions<Context>;
@@ -65,7 +70,54 @@ interface WebStandardStreamableHttpTransport {
 
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
+  CLERK_SECRET_KEY?: string;
 };
+
+// The clients `mcpAuth` built from the environment, by key pair. On Cloudflare Workers the keys are only known per
+// request, on `c.env`, so the client can't be built at setup.
+const envClerkClients = new Map<string, ClerkOAuthClient>();
+
+/**
+ * The keys a Clerk client is built from, read from the app's environment through `env(c)`.
+ * @param c - The Hono context of the request
+ * @returns The secret and publishable keys. It throws a `Clerk error:` naming the first one not set.
+ */
+function requireClerkKeys(c: Context) {
+  const { CLERK_SECRET_KEY: secretKey, CLERK_PUBLISHABLE_KEY: publishableKey } = env<ClerkEnv>(c);
+  const missing = (name: string) =>
+    new Error(
+      `Clerk error: mcpAuth needs the ${name} environment variable, a clerkClient option, or clerkMiddleware() to run first`,
+    );
+  if (!secretKey) throw missing('CLERK_SECRET_KEY');
+  if (!publishableKey) throw missing('CLERK_PUBLISHABLE_KEY');
+  return { secretKey, publishableKey };
+}
+
+/**
+ * The Clerk client built from the environment's keys, loading `@clerk/backend` the first time. The package is an
+ * optional peer that only this path needs, so it is loaded with `import()` inside `try`: a bundler such as esbuild
+ * fails the build on a bare `import()` of a missing package, but not on one inside `try`.
+ * @param keys - The secret and publishable keys
+ * @returns The client, the same one for the same keys
+ */
+async function envClerkClient(keys: { secretKey: string; publishableKey: string }) {
+  const cacheKey = `${keys.secretKey}\n${keys.publishableKey}`;
+  const cached = envClerkClients.get(cacheKey);
+  if (cached) return cached;
+
+  let backend: typeof import('@clerk/backend');
+  try {
+    backend = await import('@clerk/backend');
+  } catch (error) {
+    throw new Error('Clerk error: install @clerk/backend, or pass clerkClient to mcpAuth', {
+      cause: error,
+    });
+  }
+
+  const client = backend.createClerkClient(keys);
+  envClerkClients.set(cacheKey, client);
+  return client;
+}
 
 /**
  * A Hono handler that serves RFC 9728 protected resource metadata for a Clerk instance, using the publishable key in
@@ -123,14 +175,16 @@ export function authorizationServerMetadataHandler() {
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
  * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
- * `verifyToken` function. Without `clerkClient`, it uses the client that `clerkMiddleware()` sets, so
- * `clerkMiddleware()` must run first. Pass a client created with both `secretKey` and `publishableKey` to keep
- * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from
- * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called
+ * `verifyToken` function. Without `clerkClient`, it uses the client that `clerkMiddleware()` sets, if it ran, and
+ * otherwise builds one with `createClerkClient` from `@clerk/backend`, from `CLERK_SECRET_KEY` and
+ * `CLERK_PUBLISHABLE_KEY` read through `env(c)`, kept for each key pair. Keep `clerkMiddleware()` off the MCP route,
+ * which otherwise verifies each token a second time. A client from `@clerk/backend` must be version 3.19.0 or later,
+ * the first with a reliable audience check. `verifyToken` is called
  * with the token and the Hono context, and returns the auth data, or `undefined` to reject it.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
  * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded in the
- * `mcpAuthFailure` context variable.
+ * `mcpAuthFailure` context variable. Without a Clerk client, it throws a `Clerk error:` naming a missing key, or
+ * asking to install `@clerk/backend` when it can't be loaded.
  * @example
  * ```ts
  * app.post(
@@ -150,23 +204,17 @@ export function authorizationServerMetadataHandler() {
  */
 export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   assertMiddlewareAuthOptions(options);
-  const clerkClientFor = (c: Context) => {
-    const client =
-      options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
-    if (!client) {
-      throw new Error(
-        'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
-      );
-    }
-    return client;
-  };
+  const clerkClientFor = async (c: Context): Promise<ClerkOAuthClient> =>
+    options.clerkClient ??
+    (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk') ??
+    envClerkClient(requireClerkKeys(c));
   const verifyToken =
     options.verifyToken ?? clerkTokenVerifier(options, clerkClientFor, (c: Context) => c.req.url);
 
   return async (c: Context, next: Next) => {
     // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
     // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
-    if (!options.verifyToken) clerkClientFor(c);
+    if (!options.verifyToken) await clerkClientFor(c);
 
     const result = await authenticateBearer({
       authorization: c.req.header('authorization'),

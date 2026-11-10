@@ -16,6 +16,9 @@ vi.mock('hono/adapter', () => ({
   env: vi.fn(() => process.env),
 }));
 
+vi.mock('@clerk/backend', () => ({ createClerkClient: vi.fn() }));
+
+import { createClerkClient } from '@clerk/backend';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { env } from 'hono/adapter';
 
@@ -553,6 +556,10 @@ describe('mcpAuth with Clerk', () => {
     clerk.authenticateRequest.mockReset();
   });
 
+  afterEach(() => {
+    vi.mocked(env).mockImplementation(() => process.env);
+  });
+
   test('asks Clerk to check the audience and passes the auth info on', async () => {
     clerk.authenticateRequest.mockResolvedValue({
       isAuthenticated: true,
@@ -758,8 +765,9 @@ describe('mcpAuth with Clerk', () => {
     ['with a token', { authorization: 'Bearer token' }],
     ['without a token', undefined],
   ])(
-    'throws the Clerk error itself %s when there is no clerkClient and clerkMiddleware has not run',
+    'throws the Clerk error itself %s when there is no clerkClient, clerkMiddleware has not run, and no keys are set',
     async (_case, headers) => {
+      vi.mocked(env).mockReturnValue({});
       const app = new Hono();
       let error: unknown;
       app.onError((err, c) => {
@@ -773,7 +781,7 @@ describe('mcpAuth with Clerk', () => {
       expect(res.status).toBe(500);
       expect(error).not.toBeInstanceOf(McpAuthError);
       expect((error as Error).message).toBe(
-        'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
+        'Clerk error: mcpAuth needs the CLERK_SECRET_KEY environment variable, a clerkClient option, or clerkMiddleware() to run first',
       );
     },
   );
@@ -788,6 +796,165 @@ describe('mcpAuth with Clerk', () => {
     });
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe('mcpAuth with a Clerk client built from the environment', () => {
+  const resourceUrl = 'https://mcp.example.com/mcp';
+  const authenticated = {
+    isAuthenticated: true,
+    toAuth: () => ({
+      isAuthenticated: true,
+      tokenType: 'oauth_token',
+      clientId: 'client-1',
+      scopes: [],
+      userId: 'user-1',
+    }),
+  };
+
+  // Each test uses its own key pair, since the client built for a pair is kept for the life of the module
+  const keys = (n: number) => ({
+    CLERK_SECRET_KEY: `sk_test_${n}`,
+    CLERK_PUBLISHABLE_KEY: `${FAKE_PK}${n}`,
+  });
+
+  function envClient() {
+    const client = { authenticateRequest: vi.fn().mockResolvedValue(authenticated) };
+    vi.mocked(createClerkClient).mockReturnValue(client as never);
+    return client;
+  }
+
+  function envApp(options: Parameters<typeof mcpAuth>[0] = { resourceUrl }) {
+    const app = new Hono();
+    app.post('/mcp', mcpAuth(options), (c) => c.json(c.get('mcpAuth')));
+    return app;
+  }
+
+  const post = (app: Hono) =>
+    app.request(resourceUrl, { method: 'POST', headers: { Authorization: 'Bearer token-1' } });
+
+  beforeEach(() => {
+    vi.mocked(createClerkClient).mockReset();
+  });
+
+  afterEach(() => {
+    vi.mocked(env).mockImplementation(() => process.env);
+  });
+
+  test('verifies with a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY, once per request', async () => {
+    vi.mocked(env).mockReturnValue(keys(1));
+    const client = envClient();
+
+    const res = await post(envApp());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ clientId: 'client-1', token: 'token-1' });
+    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
+      secretKey: 'sk_test_1',
+      publishableKey: `${FAKE_PK}1`,
+    });
+    expect(client.authenticateRequest).toHaveBeenCalledOnce();
+    expect(client.authenticateRequest.mock.calls[0]![1]).toEqual({
+      acceptsToken: 'oauth_token',
+      audience: resourceUrl,
+    });
+  });
+
+  test('reuses the client across requests with the same keys and builds another for other keys', async () => {
+    const client = envClient();
+    const app = envApp();
+
+    vi.mocked(env).mockReturnValue(keys(3));
+    await post(app);
+    await post(app);
+    vi.mocked(env).mockReturnValue(keys(4));
+    await post(app);
+
+    expect(vi.mocked(createClerkClient).mock.calls).toEqual([
+      [{ secretKey: 'sk_test_3', publishableKey: `${FAKE_PK}3` }],
+      [{ secretKey: 'sk_test_4', publishableKey: `${FAKE_PK}4` }],
+    ]);
+    expect(client.authenticateRequest).toHaveBeenCalledTimes(3);
+  });
+
+  test('prefers the clerkClient option, then the clerkMiddleware() client, then the environment', async () => {
+    vi.mocked(env).mockReturnValue(keys(5));
+    const fromEnv = envClient();
+    const fromOption = { authenticateRequest: vi.fn().mockResolvedValue(authenticated) };
+    const fromMiddleware = { authenticateRequest: vi.fn().mockResolvedValue(authenticated) };
+    const withMiddleware = (options: Parameters<typeof mcpAuth>[0]) => {
+      const app = new Hono();
+      app.use(async (c, next) => {
+        c.set('clerk' as never, fromMiddleware as never);
+        await next();
+      });
+      app.post('/mcp', mcpAuth(options), (c) => c.json({ ok: true }));
+      return app;
+    };
+
+    await post(withMiddleware({ resourceUrl, clerkClient: fromOption as never }));
+    expect(fromOption.authenticateRequest).toHaveBeenCalledOnce();
+    expect(fromMiddleware.authenticateRequest).not.toHaveBeenCalled();
+
+    await post(withMiddleware({ resourceUrl }));
+    expect(fromMiddleware.authenticateRequest).toHaveBeenCalledOnce();
+
+    expect(fromEnv.authenticateRequest).not.toHaveBeenCalled();
+    expect(createClerkClient).not.toHaveBeenCalled();
+  });
+
+  test('throws a Clerk error asking to install @clerk/backend, with the load error as the cause, when it cannot be loaded', async () => {
+    const loadError = new Error('Cannot find package @clerk/backend');
+    vi.resetModules();
+    vi.doMock('@clerk/backend', () => {
+      throw loadError;
+    });
+    Object.assign(process.env, keys(6));
+    try {
+      const { mcpAuth: freshMcpAuth } = await import('./index');
+      let error: unknown;
+      const app = new Hono();
+      app.onError((err, c) => {
+        error = err;
+        return c.text('error', 500);
+      });
+      app.post('/mcp', freshMcpAuth({ resourceUrl }), (c) => c.json({ ok: true }));
+
+      const res = await post(app);
+
+      expect(res.status).toBe(500);
+      expect((error as Error).message).toBe(
+        'Clerk error: install @clerk/backend, or pass clerkClient to mcpAuth',
+      );
+      // Vitest wraps an error thrown by a mock factory in its own, with the original as that error's cause
+      const { cause } = error as Error;
+      expect(cause).toBeInstanceOf(Error);
+      expect((cause as Error).cause).toBe(loadError);
+    } finally {
+      delete process.env.CLERK_SECRET_KEY;
+      delete process.env.CLERK_PUBLISHABLE_KEY;
+      // Back to the mock the other tests use, which later imports of `@clerk/backend` load again
+      vi.doMock('@clerk/backend', () => ({ createClerkClient }));
+      vi.resetModules();
+    }
+  });
+
+  test('throws a Clerk error naming CLERK_PUBLISHABLE_KEY when only it is missing', async () => {
+    vi.mocked(env).mockReturnValue({ CLERK_SECRET_KEY: 'sk_test_2' });
+    let error: unknown;
+    const app = envApp();
+    app.onError((err, c) => {
+      error = err;
+      return c.text('error', 500);
+    });
+
+    const res = await post(app);
+
+    expect(res.status).toBe(500);
+    expect((error as Error).message).toBe(
+      'Clerk error: mcpAuth needs the CLERK_PUBLISHABLE_KEY environment variable, a clerkClient option, or clerkMiddleware() to run first',
+    );
+    expect(createClerkClient).not.toHaveBeenCalled();
   });
 });
 
