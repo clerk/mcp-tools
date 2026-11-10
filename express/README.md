@@ -166,7 +166,7 @@ Generic authentication middleware that allows you to implement custom token veri
 
 **Parameters:**
 
-- `verifyToken: (token: string, req: express.Request) => Promise<any | false>` - Function that verifies the token and returns auth data or false
+- `verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>` - Function that verifies the token and returns the auth data, or `undefined` to reject it
 - `options.resourceUrl` (optional) - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. The request's origin comes from `req.protocol` and the `Host` header, so behind a proxy set `trust proxy`. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ authServerUrl, properties: { resource: resourceUrl } })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `options.challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
@@ -198,7 +198,7 @@ The middleware will:
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 
-A request answered with a challenge gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. Under `mcpAuthClerk`, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
+A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. Under `mcpAuthClerk`, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
 ```ts
 import { McpAuthError } from '@clerk/mcp-tools/express';
@@ -215,10 +215,10 @@ Authentication middleware that verifies OAuth access tokens with Clerk, includin
 
 **Parameters:**
 
-- `options.resourceUrl` - The exact URL clients use for this endpoint. Clerk rejects a token whose `aud` claim does not include it. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
+- `options.resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, as for `mcpAuth`. Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/server`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs
 - `options.challengeScopes` (optional) - As for `mcpAuth`
-- `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`.
+- `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
 
 A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware passes an error to Express, which answers with a `500`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 

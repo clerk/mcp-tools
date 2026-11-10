@@ -583,7 +583,8 @@ describe('mcpAuthClerk', () => {
     const app = new Hono();
     app.use(async (c, next) => {
       await next();
-      if (c.get('mcpAuthFailure')) c.header('X-Failure', c.get('mcpAuthFailure').reason);
+      const failure = c.get('mcpAuthFailure');
+      if (failure) c.header('X-Failure', failure.reason);
     });
     app.post(
       '/mcp',

@@ -8,6 +8,7 @@ import {
   type McpAuthClerkOptions,
   type McpAuthFailure,
   type McpAuthOptions,
+  type McpResourceUrl,
   McpAuthError,
   McpTokenVerificationError,
   assertMcpAuthClerkOptions,
@@ -26,11 +27,18 @@ declare module 'hono' {
   interface ContextVariableMap {
     mcpAuth: AuthInfo;
     /** Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did. */
-    mcpAuthFailure: McpAuthFailure;
+    mcpAuthFailure: McpAuthFailure | undefined;
   }
 }
 
-export { McpAuthError, type McpAuthFailure, McpTokenVerificationError };
+export {
+  McpAuthError,
+  type McpAuthClerkOptions,
+  type McpAuthFailure,
+  type McpAuthOptions,
+  type McpResourceUrl,
+  McpTokenVerificationError,
+};
 
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
@@ -122,7 +130,8 @@ export function mcpAuth(
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
  * needs, and the `clerkClient` that verifies tokens. Without `clerkClient`, it uses the client that
  * `clerkMiddleware()` sets, so `clerkMiddleware()` must run first. Pass a client created with both `secretKey` and
- * `publishableKey` to keep `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time.
+ * `publishableKey` to keep `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A
+ * client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
  * a 403 challenge.
  */

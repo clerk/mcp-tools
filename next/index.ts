@@ -2,7 +2,9 @@ import type { ClerkClient } from '@clerk/backend';
 import type { AuthInfo } from '../mcp-types';
 import {
   type McpAuthClerkOptions,
+  type McpAuthFailure,
   type McpAuthOptions,
+  type McpResourceUrl,
   McpAuthError,
   McpTokenVerificationError,
   assertMcpAuthClerkOptions,
@@ -130,10 +132,19 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
  */
 export type McpRouteHandler = (req: Request) => Response | Promise<Response>;
 
+type McpAuthFailureOption = {
+  /**
+   * Called with why a request is about to be answered with a 401 or 403 challenge or a 421, for example for logging.
+   * A route wrapper has no request context to record it on, as the Express and Hono adapters do.
+   */
+  onAuthFailure?: ((failure: McpAuthFailure, req: Request) => void) | undefined;
+};
+
 /**
  * Wraps a Next.js MCP route handler so that every request needs a valid bearer token.
  * @param verifyToken - Verifies a token and returns the auth data, or `undefined` to reject it
- * @param options - The public `resourceUrl` of this endpoint and the `requiredScopes` every request needs
+ * @param options - The public `resourceUrl` of this endpoint, the `requiredScopes` every request needs, and
+ * `onAuthFailure`, which is called with the reason for each request answered with a challenge or a 421
  * @returns A function that wraps the route handler. A missing or rejected token gets a 401 challenge, and a token
  * without `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler`
  * reads it, with `resourceMetadataUrl` added for the SDK's scope challenges.
@@ -152,7 +163,7 @@ export type McpRouteHandler = (req: Request) => Response | Promise<Response>;
  */
 export function mcpAuth(
   verifyToken: (token: string, req: Request) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions,
+  options?: McpAuthOptions & McpAuthFailureOption,
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
   assertMcpAuthOptions('mcpAuth', options);
 
@@ -167,6 +178,7 @@ export function mcpAuth(
     });
 
     if (!result.ok) {
+      options?.onAuthFailure?.(result.failure, req);
       return Response.json(
         { error: result.error },
         {
@@ -186,8 +198,9 @@ export function mcpAuth(
  * Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including
  * that its audience is this endpoint.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, and the `clerkClient` that verifies tokens. It defaults to `clerkClient()` from `@clerk/nextjs/server`. Create
- * another client with both `secretKey` and `publishableKey`.
+ * needs, the `clerkClient` that verifies tokens, and `onAuthFailure`, as for `mcpAuth`. The client defaults to
+ * `clerkClient()` from `@clerk/nextjs/server`. Create another client with both `secretKey` and `publishableKey`, from
+ * `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
  * @returns A function that wraps the route handler. A missing or rejected token gets a 401 challenge, and a token
  * without `requiredScopes` gets a 403 challenge. When Clerk cannot verify an opaque token at all, the handler throws,
  * so Next.js answers with a 500 instead of a challenge that would make the client discard a valid token.
@@ -202,9 +215,10 @@ export function mcpAuth(
  * ```
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions & {
-    clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
-  },
+  options: McpAuthClerkOptions &
+    McpAuthFailureOption & {
+      clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+    },
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
   assertMcpAuthClerkOptions(options);
 
@@ -225,4 +239,13 @@ function getResourceUrl(req: Request): string {
 }
 
 // re-export the verifyClerkToken function for convenience
-export { McpAuthError, McpTokenVerificationError, requireAdditionalScopes, verifyClerkToken };
+export {
+  McpAuthError,
+  type McpAuthClerkOptions,
+  type McpAuthFailure,
+  type McpAuthOptions,
+  type McpResourceUrl,
+  McpTokenVerificationError,
+  requireAdditionalScopes,
+  verifyClerkToken,
+};
