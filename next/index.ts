@@ -1,12 +1,7 @@
 import type { AuthInfo } from '../mcp-types';
 import {
-  type ClerkOAuthClient,
   type McpAuthClerkOptions,
-  type McpAuthFailure,
   type McpAuthOptions,
-  type McpResourceUrl,
-  McpAuthError,
-  McpTokenVerificationError,
   assertMcpAuthOptions,
   audienceFor,
   authenticateBearer,
@@ -14,19 +9,22 @@ import {
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
+  type ClerkOAuthClient,
+  type McpAuthFailure,
   metadataCorsHeaders,
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
-  requireAdditionalScopes,
-  toClerkAuthInfo,
 } from '../server';
+
+// Everything in the core subpath, so a Next.js app imports from this subpath alone
+export * from '../server';
 
 /**
  * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  *
  */
-export function protectedResourceHandler(
+export function protectedResourceMetadataHandler(
   properties?: Record<string, unknown>,
 ): (req: Request) => Response {
   return (req: Request): Response => {
@@ -57,7 +55,7 @@ export function protectedResourceHandler(
  * OAuth 2.0 Authorization Server Metadata endpoint based on RFC 8414
  * @see https://datatracker.ietf.org/doc/html/rfc8414
  */
-export function authServerMetadataHandler(): () => Promise<Response> {
+export function authorizationServerMetadataHandler(): () => Promise<Response> {
   return async (): Promise<Response> => {
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
@@ -84,7 +82,7 @@ export function authServerMetadataHandler(): () => Promise<Response> {
  * CORS options request handler for OAuth metadata endpoints. Necessary for MCP
  * clients that operate in web browsers.
  */
-export function metadataCorsOptionsRequestHandler(): () => Response {
+export function metadataCorsHandler(): () => Response {
   return (): Response => {
     return new Response(null, {
       status: 200,
@@ -96,7 +94,7 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
 /**
  * A Next.js route handler, such as the one `createMcpHandler` from `mcp-handler` returns.
  */
-export type McpRouteHandler = (req: Request) => Response | Promise<Response>;
+type McpRouteHandler = (req: Request) => Response | Promise<Response>;
 
 type McpAuthFailureOption = {
   /**
@@ -232,15 +230,4 @@ export function withMcpAuth(
   }, options)(handler);
 }
 
-// re-export toClerkAuthInfo for convenience
-export {
-  type ClerkOAuthClient,
-  McpAuthError,
-  type McpAuthClerkOptions,
-  type McpAuthFailure,
-  type McpAuthOptions,
-  type McpResourceUrl,
-  McpTokenVerificationError,
-  requireAdditionalScopes,
-  toClerkAuthInfo,
-};
+export type { McpAuthClerkOptions, McpAuthOptions };

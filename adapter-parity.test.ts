@@ -16,7 +16,7 @@ import * as nextAdapter from './next';
 const WELL_KNOWN = '/.well-known/oauth-protected-resource';
 const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 
-type Answer = { status: number; challenge: string | null; body: unknown };
+type Answer = { status: number; challenge: string | null; headers: Headers; body: unknown };
 
 /** Sends one request to `path` on a fresh app, and the origin the app saw. */
 type Send = (
@@ -39,6 +39,7 @@ async function sendExpress(app: express.Express, path: string, init: Parameters<
       origin,
       status: res.status,
       challenge: res.headers.get('WWW-Authenticate'),
+      headers: res.headers,
       body: await res.json(),
     };
   } finally {
@@ -52,6 +53,7 @@ async function answer(res: Response, origin: string) {
     origin,
     status: res.status,
     challenge: res.headers.get('WWW-Authenticate'),
+    headers: res.headers,
     body: await res.json(),
   };
 }
@@ -63,7 +65,7 @@ const metadataRoutes: [string, Send][] = [
     'express',
     (path) => {
       const app = express();
-      app.use(WELL_KNOWN, expressAdapter.protectedResourceHandler());
+      app.use(WELL_KNOWN, expressAdapter.protectedResourceMetadataHandler());
       return sendExpress(app, path);
     },
   ],
@@ -71,18 +73,21 @@ const metadataRoutes: [string, Send][] = [
     'hono',
     async (path) => {
       const app = new Hono();
-      app.get('*', honoAdapter.protectedResourceHandler());
+      app.get('*', honoAdapter.protectedResourceMetadataHandler());
       return answer(await app.request(`${origin}${path}`), origin);
     },
   ],
   [
     'next',
     async (path) =>
-      answer(nextAdapter.protectedResourceHandler()(new Request(`${origin}${path}`)), origin),
+      answer(
+        nextAdapter.protectedResourceMetadataHandler()(new Request(`${origin}${path}`)),
+        origin,
+      ),
   ],
 ];
 
-describe.each(metadataRoutes)('%s protectedResourceHandler', (_name, send) => {
+describe.each(metadataRoutes)('%s protectedResourceMetadataHandler', (_name, send) => {
   beforeEach(() => {
     process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
@@ -108,6 +113,134 @@ describe.each(metadataRoutes)('%s protectedResourceHandler', (_name, send) => {
     const resource = (res.body as { resource: string }).resource;
     expect(resource).toBe(`${res.origin}${resourcePath}`);
     expect(resourceMetadataUrlFor(resource)).toBe(`${res.origin}${WELL_KNOWN}${suffix}`);
+  });
+});
+
+const AUTH_SERVER_PATH = '/.well-known/oauth-authorization-server';
+const clerkMetadata = { issuer: 'https://clerk.example.com' };
+
+// Each adapter's metadata handlers answer with the headers they always have: Next.js adds caching and CORS, since a
+// route file has no middleware, and Express and Hono leave CORS to the framework's own middleware.
+const metadataHeaderCases: [string, string, Send, Record<string, string | null>][] = [
+  [
+    'express',
+    'protectedResourceMetadataHandler',
+    (path) => {
+      const app = express();
+      app.use(WELL_KNOWN, expressAdapter.protectedResourceMetadataHandler());
+      return sendExpress(app, path);
+    },
+    { 'access-control-allow-origin': null, 'cache-control': null },
+  ],
+  [
+    'express',
+    'authorizationServerMetadataHandler',
+    (path) => {
+      const app = express();
+      app.get(AUTH_SERVER_PATH, expressAdapter.authorizationServerMetadataHandler());
+      return sendExpress(app, path);
+    },
+    { 'access-control-allow-origin': null, 'cache-control': null },
+  ],
+  [
+    'hono',
+    'protectedResourceMetadataHandler',
+    async (path) => {
+      const app = new Hono();
+      app.get('*', honoAdapter.protectedResourceMetadataHandler());
+      return answer(await app.request(`${origin}${path}`), origin);
+    },
+    { 'access-control-allow-origin': null, 'cache-control': null },
+  ],
+  [
+    'hono',
+    'authorizationServerMetadataHandler',
+    async (path) => {
+      const app = new Hono();
+      app.get('*', honoAdapter.authorizationServerMetadataHandler());
+      return answer(await app.request(`${origin}${path}`), origin);
+    },
+    { 'access-control-allow-origin': null, 'cache-control': null },
+  ],
+  [
+    'next',
+    'protectedResourceMetadataHandler',
+    async (path) =>
+      answer(
+        nextAdapter.protectedResourceMetadataHandler()(new Request(`${origin}${path}`)),
+        origin,
+      ),
+    {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': '*',
+      'access-control-max-age': '86400',
+      'cache-control': 'max-age=3600',
+      'content-type': 'application/json',
+    },
+  ],
+  [
+    'next',
+    'authorizationServerMetadataHandler',
+    async () => answer(await nextAdapter.authorizationServerMetadataHandler()(), origin),
+    {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': '*',
+      'access-control-max-age': '86400',
+      'cache-control': 'max-age=3600',
+      'content-type': 'application/json',
+    },
+  ],
+];
+
+describe('metadata handler headers', () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    // Answer Clerk's metadata fetch, and let the Express requests through to the local server
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) =>
+      String(input).startsWith('https://clerk.example.com/')
+        ? Promise.resolve(Response.json(clerkMetadata))
+        : realFetch(input, init),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.CLERK_PUBLISHABLE_KEY;
+    delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+  });
+
+  test.each(metadataHeaderCases)('%s %s', async (_adapter, handler, send, expected) => {
+    const path =
+      handler === 'protectedResourceMetadataHandler' ? `${WELL_KNOWN}/mcp` : AUTH_SERVER_PATH;
+    const res = await send(path);
+
+    expect(res.status).toBe(200);
+    for (const [name, value] of Object.entries(expected)) {
+      expect(res.headers.get(name), name).toBe(value);
+    }
+    if (handler === 'authorizationServerMetadataHandler') expect(res.body).toEqual(clerkMetadata);
+  });
+
+  test('next metadataCorsHandler answers a preflight with the CORS headers', () => {
+    const res = nextAdapter.metadataCorsHandler()();
+
+    expect(res.status).toBe(200);
+    expect(Object.fromEntries(res.headers)).toEqual({
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': '*',
+      'access-control-max-age': '86400',
+    });
+  });
+
+  test('express and hono have no metadataCorsHandler', () => {
+    expect('metadataCorsHandler' in expressAdapter).toBe(false);
+    expect('metadataCorsHandler' in honoAdapter).toBe(false);
   });
 });
 

@@ -2,13 +2,8 @@ import { clerkClient } from '@clerk/express';
 import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
-  type ClerkOAuthClient,
   type McpAuthClerkOptions,
-  type McpAuthFailure,
   type McpAuthOptions,
-  type McpResourceUrl,
-  McpAuthError,
-  McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   assertServerFactory,
@@ -18,7 +13,12 @@ import {
   resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
-import { fetchAuthorizationServerMetadata, generateProtectedResourceMetadata } from '../server';
+import {
+  type ClerkOAuthClient,
+  type McpAuthFailure,
+  fetchAuthorizationServerMetadata,
+  generateProtectedResourceMetadata,
+} from '../server';
 
 declare global {
   namespace Express {
@@ -29,23 +29,16 @@ declare global {
   }
 }
 
-export {
-  type ClerkOAuthClient,
-  McpAuthError,
-  type McpAuthClerkOptions,
-  type McpAuthFailure,
-  type McpAuthOptions,
-  type McpResourceUrl,
-  type McpServerLike,
-  McpTokenVerificationError,
-  type StreamableHttpTransportClass,
-};
+// Everything in the core subpath, so an Express app imports from this subpath alone
+export * from '../server';
+
+export type { McpAuthClerkOptions, McpAuthOptions };
 
 /**
  * The part of a Node.js streamable HTTP server transport, such as `StreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/streamableHttp.js`, that `streamableHttpHandler` uses.
  */
-export interface NodeStreamableHttpTransport {
+interface NodeStreamableHttpTransport {
   /**
    * Handles one MCP request and writes the response.
    * @param req - The incoming request, carrying the auth info `mcpAuth` set in `req.auth`
@@ -173,7 +166,7 @@ export function mcpAuthClerk(
   );
 }
 
-export function authServerMetadataHandler() {
+export function authorizationServerMetadataHandler() {
   return async (_: express.Request, res: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
@@ -195,11 +188,11 @@ export function authServerMetadataHandler() {
  * ```ts
  * app.get(
  *   "/.well-known/oauth-protected-resource/mcp",
- *   protectedResourceHandler()
+ *   protectedResourceMetadataHandler()
  * );
  * ```
  */
-export function protectedResourceHandler(properties?: Record<string, unknown>) {
+export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
   return (req: express.Request, res: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {

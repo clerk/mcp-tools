@@ -10,9 +10,8 @@ import {
   McpAuthError,
   type McpAuthFailure,
   McpTokenVerificationError,
-  type McpRouteHandler,
   mcpAuth,
-  protectedResourceHandler,
+  protectedResourceMetadataHandler,
   withMcpAuth,
 } from './index';
 
@@ -21,7 +20,7 @@ const resourceUrl = 'https://mcp.example.com/mcp';
 const RESOURCE_METADATA_URL = `${METADATA_ROOT}/mcp`;
 const BARE_CHALLENGE = `Bearer resource_metadata="${RESOURCE_METADATA_URL}"`;
 
-describe('protectedResourceHandler', () => {
+describe('protectedResourceMetadataHandler', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
   });
@@ -35,7 +34,7 @@ describe('protectedResourceHandler', () => {
     ['/mcp/', 'https://mcp.example.com/mcp/'],
     ['', 'https://mcp.example.com'],
   ])('describes the resource for the metadata route suffix %j', async (suffix, resource) => {
-    const res = protectedResourceHandler()(new Request(`${METADATA_ROOT}${suffix}`));
+    const res = protectedResourceMetadataHandler()(new Request(`${METADATA_ROOT}${suffix}`));
 
     expect((await res.json()).resource).toBe(resource);
   });
@@ -45,7 +44,7 @@ describe('protectedResourceHandler', () => {
       resource: 'https://public.example.com/mcp',
       scopes_supported: ['profile'],
     };
-    const metadata = await protectedResourceHandler(properties)(
+    const metadata = await protectedResourceMetadataHandler(properties)(
       new Request(`${METADATA_ROOT}/mcp`),
     ).json();
 
@@ -54,7 +53,7 @@ describe('protectedResourceHandler', () => {
 });
 
 // A route handler that echoes the auth info `mcp-handler` would read from `req.auth`.
-const echoAuth: McpRouteHandler = (req) =>
+const echoAuth = (req: Request): Response =>
   Response.json({ auth: (req as Request & { auth?: AuthInfo }).auth ?? null });
 
 function request(authorization?: string, url = resourceUrl) {

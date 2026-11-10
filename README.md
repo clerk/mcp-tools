@@ -40,7 +40,7 @@ For detailed implementation guides and examples specific to your framework, see:
 
 ### Guide: building a server
 
-If you are building a server that you'd like to introduce MCP support for, you will want to use the `@clerk/mcp-tools/server` import path.
+If you are building a server that you'd like to introduce MCP support for, you will want to use the `@clerk/mcp-tools/server` import path. With Express, Hono, or Next.js, import from that framework's subpath instead (`@clerk/mcp-tools/express`, `@clerk/mcp-tools/hono`, or `@clerk/mcp-tools/next`): each one exports everything in `@clerk/mcp-tools/server` too.
 
 #### Protected resource metadata
 
@@ -111,7 +111,7 @@ These adapters handle the MCP protocol details and integrate with your authentic
 
 #### Step-up for your own tools
 
-When a tool needs an OAuth scope that the access token lacks, the MCP server can answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", ...`. MCP clients answer that by asking the user to approve more scopes. MCP SDK 2.1 or later (`@modelcontextprotocol/server`, which Vercel's `mcp-handler` 2.x also uses) sends this challenge before the tool runs, from the `scopeChallenge` option of `registerTool`. `requireAdditionalScopes` from `@clerk/mcp-tools/server` (also exported from `@clerk/mcp-tools/next`) builds that option from the scopes the tool needs:
+When a tool needs an OAuth scope that the access token lacks, the MCP server can answer `403` with `WWW-Authenticate: Bearer error="insufficient_scope", ...`. MCP clients answer that by asking the user to approve more scopes. MCP SDK 2.1 or later (`@modelcontextprotocol/server`, which Vercel's `mcp-handler` 2.x also uses) sends this challenge before the tool runs, from the `scopeChallenge` option of `registerTool`. `requireAdditionalScopes` from `@clerk/mcp-tools/server` (also exported from every adapter subpath) builds that option from the scopes the tool needs:
 
 ```ts
 import { requireAdditionalScopes } from '@clerk/mcp-tools/server';
@@ -177,14 +177,14 @@ First, serve the protected resource metadata at the path form of the MCP endpoin
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { metadataCorsOptionsRequestHandler, protectedResourceHandler } from '@clerk/mcp-tools/next';
+import { metadataCorsHandler, protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
 
 // List every scope the server's tools need, here the `requiredScopes` of the tool below.
-const handler = protectedResourceHandler({
+const handler = protectedResourceMetadataHandler({
   resource: 'https://app.example.com/mcp',
   scopes_supported: ['browser_session'],
 });
-const corsHandler = metadataCorsOptionsRequestHandler();
+const corsHandler = metadataCorsHandler();
 
 export { handler as GET, corsHandler as OPTIONS };
 ```

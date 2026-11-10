@@ -4,7 +4,8 @@ import { createSign, generateKeyPairSync } from 'node:crypto';
 import { createClerkClient } from '@clerk/backend';
 import { describe, expect, test } from 'vitest';
 
-import { McpTokenVerificationError, verifyClerkOAuthToken } from './bearer-auth';
+import { verifyClerkOAuthToken } from './bearer-auth';
+import { McpTokenVerificationError } from './server';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });

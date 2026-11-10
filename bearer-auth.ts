@@ -2,93 +2,15 @@
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
-import { type ClerkOAuthAuthObject, matchResourceUrl, toClerkAuthInfo } from './server';
-
-/**
- * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuthClerk` uses to verify OAuth access
- * tokens. Declared here so that this package's types do not need `@clerk/backend`. Create the client with both
- * `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
- */
-export type ClerkOAuthClient = {
-  authenticateRequest(
-    request: Request,
-    options: { acceptsToken: 'oauth_token'; audience: string | string[] },
-  ): Promise<
-    | { isAuthenticated: true; toAuth(): ClerkOAuthAuthObject }
-    | { isAuthenticated: false; reason: string; message: string }
-  >;
-};
-
-/**
- * Why `mcpAuth` answered a request with a 401 or 403 challenge, or with a 421 for a request to an origin that no
- * listed `resourceUrl` has. The Express and Hono adapters record it on the request context, as
- * `res.locals.mcpAuthFailure` and `c.get('mcpAuthFailure')`, and the Next.js adapter passes it to `onAuthFailure`, for
- * example for logging.
- */
-export type McpAuthFailure = {
-  reason:
-    | 'missing_token'
-    | 'malformed_token'
-    | 'invalid_token'
-    | 'insufficient_scope'
-    | 'misdirected_request';
-  /**
-   * What the verifier reported for the token behind an `invalid_token`, when it reported anything. `mcpAuthClerk`
-   * sets it for a token Clerk rejected.
-   */
-  cause?: McpTokenVerificationError | undefined;
-};
-
-/**
- * What a verifier reported for a token it did not accept. `mcpAuthClerk` creates one from the `reason` and `message`
- * of Clerk's request state. It is the `cause` of an `invalid_token` failure when Clerk rejected the token, and the
- * `cause` of the `McpAuthError` when Clerk answered but could not verify the token. A verifier passed to `mcpAuth`
- * can throw one to reject a token with a code of its own. It is never sent to the client.
- */
-export class McpTokenVerificationError extends Error {
-  /**
-   * A machine-readable code for the failure. From `mcpAuthClerk` it is the `reason` of Clerk's request state, such as
-   * `token-invalid` or `token-verification-failed`. Clerk gives every failed check on a JWT access token
-   * `token-verification-failed`, so the `message` is what says which check failed.
-   */
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = 'McpTokenVerificationError';
-    this.code = code;
-  }
-}
-
-/**
- * Thrown by `mcpAuth` and `mcpAuthClerk` when the token could not be verified at all, such as when the verifier
- * throws or Clerk is unreachable, so the request reaches the framework's error handler instead of a challenge that
- * would make the client discard a valid token. The verifier's error is the `cause`: an `McpTokenVerificationError`
- * when Clerk answered but could not verify the token.
- */
-export class McpAuthError extends Error {
-  readonly reason = 'verification_failed';
-  /**
-   * The `cause`'s `status` when it is a 5xx, so Express's default error handler still answers with it. Any other
-   * status would become the answer to the client's own request, such as a 401 without the challenge a 401 must carry
-   * (RFC 9110 section 15.5.2).
-   */
-  readonly status: number | undefined;
-
-  constructor(cause: unknown) {
-    super('Clerk error: MCP access token verification failed', { cause });
-    this.name = 'McpAuthError';
-    const status = (cause as { status?: unknown } | null)?.status;
-    this.status = typeof status === 'number' && status >= 500 && status <= 599 ? status : undefined;
-  }
-}
-
-/**
- * The exact URL clients use for an MCP endpoint, or a list of them, one for each origin, for a server that answers on
- * several hostnames. With a list, a request uses the URL with its own origin, and a request to any other origin gets a
- * 421 Misdirected Request (RFC 9110 section 15.5.20).
- */
-export type McpResourceUrl = string | readonly string[];
+import {
+  type ClerkOAuthClient,
+  type McpAuthFailure,
+  type McpResourceUrl,
+  McpAuthError,
+  McpTokenVerificationError,
+  matchResourceUrl,
+  toClerkAuthInfo,
+} from './server';
 
 /**
  * Options for the `mcpAuth` middleware.
