@@ -5,6 +5,7 @@ import {
   McpTokenVerificationError,
   assertMcpAuthOptions,
   authenticateBearer,
+  resourceFromMetadataUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from './bearer-auth';
@@ -58,6 +59,17 @@ describe('resourceMetadataUrlFor', () => {
     ],
   ])('puts the well-known path between the host and the path and query of %s', (url, expected) => {
     expect(resourceMetadataUrlFor(url)).toBe(expected);
+  });
+});
+
+describe('resourceFromMetadataUrl', () => {
+  test.each([
+    'https://mcp.example.com/mcp',
+    'https://mcp.example.com/mcp/',
+    'https://mcp.example.com',
+    'https://mcp.example.com/mcp?tenant=a',
+  ])('inverts resourceMetadataUrlFor for %s', (resource) => {
+    expect(resourceFromMetadataUrl(resourceMetadataUrlFor(resource))).toBe(resource);
   });
 });
 
@@ -135,6 +147,26 @@ describe('authenticateBearer', () => {
     expect(wrapped).toBeInstanceOf(McpAuthError);
     expect(wrapped).toMatchObject({ cause });
     expect(passedThrough).toBe(thrown);
+  });
+
+  test('rejects a token whose expiresAt has passed, and accepts one that has not', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    const expired = await authenticate({
+      verifyToken: async () => ({ ...authInfo, expiresAt: now - 1 }),
+    });
+    const current = await authenticate({
+      verifyToken: async () => ({ ...authInfo, expiresAt: now + 60 }),
+    });
+
+    expect(expired).toMatchObject({
+      ok: false,
+      status: 401,
+      challenge:
+        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+      failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
+    });
+    expect(current).toMatchObject({ ok: true });
   });
 });
 

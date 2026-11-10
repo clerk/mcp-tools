@@ -1,6 +1,6 @@
-import type { ClerkClient } from '@clerk/backend';
 import type { AuthInfo } from '../mcp-types';
 import {
+  type ClerkOAuthClient,
   type McpAuthClerkOptions,
   type McpAuthFailure,
   type McpAuthOptions,
@@ -11,6 +11,7 @@ import {
   assertMcpAuthOptions,
   audienceFor,
   authenticateBearer,
+  resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
@@ -39,7 +40,7 @@ export function protectedResourceHandler({
   return (req: Request): Response => {
     const metadata = generateProtectedResourceMetadata({
       authServerUrl: authServerUrl,
-      resourceUrl: getResourceUrl(req),
+      resourceUrl: resourceFromMetadataUrl(req.url),
       properties,
     });
 
@@ -71,7 +72,7 @@ export function protectedResourceHandlerClerk(
 
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey,
-      resourceUrl: getResourceUrl(req),
+      resourceUrl: resourceFromMetadataUrl(req.url),
       properties,
     });
 
@@ -178,7 +179,10 @@ export function mcpAuth(
     });
 
     if (!result.ok) {
-      options?.onAuthFailure?.(result.failure, req);
+      // A logging callback that throws must not turn the challenge into a server error
+      try {
+        options?.onAuthFailure?.(result.failure, req);
+      } catch {}
       return Response.json(
         { error: result.error },
         {
@@ -198,17 +202,21 @@ export function mcpAuth(
  * Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including
  * that its audience is this endpoint.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `clerkClient` that verifies tokens, and `onAuthFailure`, as for `mcpAuth`. The client defaults to
- * `clerkClient()` from `@clerk/nextjs/server`. Create another client with both `secretKey` and `publishableKey`, from
- * `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
+ * needs, the `clerkClient` that verifies tokens, and `onAuthFailure`, as for `mcpAuth`. Pass `clerkClient` from
+ * `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0
+ * or later, the first with a reliable audience check. It is an option, not an import of this package, so that the
+ * rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`.
  * @returns A function that wraps the route handler. A missing or rejected token gets a 401 challenge, and a token
  * without `requiredScopes` gets a 403 challenge. When Clerk cannot verify an opaque token at all, the handler throws,
  * so Next.js answers with a 500 instead of a challenge that would make the client discard a valid token.
  * @example
  * ```ts
+ * import { clerkClient } from "@clerk/nextjs/server";
+ *
  * const authHandler = mcpAuthClerk({
  *   resourceUrl: "https://mcp.example.com/mcp",
  *   requiredScopes: ["profile", "email"],
+ *   clerkClient,
  * })(handler);
  *
  * export { authHandler as GET, authHandler as POST };
@@ -217,29 +225,27 @@ export function mcpAuth(
 export function mcpAuthClerk(
   options: McpAuthClerkOptions &
     McpAuthFailureOption & {
-      clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+      /** `clerkClient` from `@clerk/nextjs/server`, or a Clerk client. */
+      clerkClient: ClerkOAuthClient | (() => Promise<ClerkOAuthClient>);
     },
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
   assertMcpAuthClerkOptions(options);
+  const { clerkClient } = options;
+  if (typeof clerkClient !== 'function' && typeof clerkClient?.authenticateRequest !== 'function') {
+    throw new Error(
+      "Clerk error: mcpAuthClerk from @clerk/mcp-tools/next needs a clerkClient option. Import clerkClient from '@clerk/nextjs/server' and call mcpAuthClerk({ resourceUrl, clerkClient })",
+    );
+  }
 
   return mcpAuth(async (token, req) => {
-    // Imported lazily so that the rest of this entry point works without `@clerk/nextjs`
-    const client =
-      options.clerkClient ?? (await (await import('@clerk/nextjs/server')).clerkClient());
+    const client = typeof clerkClient === 'function' ? await clerkClient() : clerkClient;
     return verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, req.url));
   }, options);
 }
 
-// The resource a protected resource metadata route describes: `/mcp` for `/.well-known/oauth-protected-resource/mcp`,
-// and the bare origin for the root route.
-function getResourceUrl(req: Request): string {
-  const { origin, pathname } = new URL(req.url);
-  const resourcePath = pathname.replace('/.well-known/oauth-protected-resource', '');
-  return `${origin}${resourcePath.replace(/\/$/, '')}`;
-}
-
 // re-export the verifyClerkToken function for convenience
 export {
+  type ClerkOAuthClient,
   McpAuthError,
   type McpAuthClerkOptions,
   type McpAuthFailure,

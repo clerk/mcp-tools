@@ -1,9 +1,11 @@
 import { createClerkClient } from '@clerk/backend';
+import { auth, clerkClient as nextClerkClient } from '@clerk/nextjs/server';
 import { describe, test } from 'vitest';
 
 import { mcpAuthClerk as expressMcpAuthClerk } from './express';
 import { mcpAuthClerk as honoMcpAuthClerk } from './hono';
 import { mcpAuthClerk as nextMcpAuthClerk } from './next';
+import { verifyClerkToken } from './server';
 
 describe('the clerkClient option', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
@@ -13,6 +15,19 @@ describe('the clerkClient option', () => {
     expressMcpAuthClerk({ resourceUrl, clerkClient });
     honoMcpAuthClerk({ resourceUrl, clerkClient });
     nextMcpAuthClerk({ resourceUrl, clerkClient });
+  });
+
+  test('accepts clerkClient from @clerk/nextjs/server in the Next.js adapter', () => {
+    nextMcpAuthClerk({ resourceUrl, clerkClient: nextClerkClient });
+  });
+
+  test('is required in the Next.js adapter', () => {
+    // @ts-expect-error no clerkClient
+    nextMcpAuthClerk({ resourceUrl });
+  });
+
+  test("verifyClerkToken accepts Clerk's own OAuth auth object", async () => {
+    verifyClerkToken(await auth({ acceptsToken: 'oauth_token' }), 'token');
   });
 
   test('rejects a value without authenticateRequest', () => {

@@ -68,6 +68,14 @@ describe('server entry points', () => {
     expect(sdkImports).toEqual([]);
   });
 
+  // `@clerk/nextjs` is an optional peer too, and webpack fails the build of an app without it on any reference to it,
+  // so `mcpAuthClerk` takes `clerkClient` from the app instead of importing it
+  test('next/index.ts does not import @clerk/nextjs', () => {
+    expect(
+      [...reachableSpecifiers('next/index.ts').keys()].filter((s) => s.startsWith('@clerk/nextjs')),
+    ).toEqual([]);
+  });
+
   test('the import scan finds the SDK where it is used', () => {
     expect([...reachableSpecifiers('client.ts').keys()]).toContain(
       '@modelcontextprotocol/sdk/client/index.js',

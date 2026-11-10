@@ -1,9 +1,9 @@
-import type { ClerkClient } from '@clerk/backend';
 import type { ClerkHonoVariables } from '@clerk/hono/types';
 import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
+  type ClerkOAuthClient,
   type McpAuthClerkOptions,
   type McpAuthFailure,
   type McpAuthOptions,
@@ -15,6 +15,7 @@ import {
   assertTransportClass,
   audienceFor,
   authenticateBearer,
+  resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
@@ -32,6 +33,7 @@ declare module 'hono' {
 }
 
 export {
+  type ClerkOAuthClient,
   McpAuthError,
   type McpAuthClerkOptions,
   type McpAuthFailure,
@@ -75,7 +77,7 @@ export function protectedResourceHandler({
   return (c: Context) => {
     const metadata = generateProtectedResourceMetadata({
       authServerUrl,
-      resourceUrl: getResourceUrl(c),
+      resourceUrl: resourceFromMetadataUrl(c.req.url),
       properties,
     });
     return c.json(metadata);
@@ -90,7 +92,7 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
     }
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey,
-      resourceUrl: getResourceUrl(c),
+      resourceUrl: resourceFromMetadataUrl(c.req.url),
       properties,
     });
     return c.json(metadata);
@@ -158,7 +160,7 @@ export function mcpAuth(
  */
 export function mcpAuthClerk(
   options: McpAuthClerkOptions & {
-    clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+    clerkClient?: ClerkOAuthClient | undefined;
   },
 ): MiddlewareHandler {
   assertMcpAuthClerkOptions(options);
@@ -235,10 +237,4 @@ export function streamableHttpHandler<
       throw error;
     }
   };
-}
-
-function getResourceUrl(c: Context): string {
-  const url = new URL(c.req.url);
-  url.pathname = url.pathname.replace(/\.well-known\/oauth-protected-resource\/?/, '');
-  return url.toString();
 }

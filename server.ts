@@ -1,5 +1,18 @@
-import type { MachineAuthObject } from '@clerk/backend';
 import type { AuthInfo } from './mcp-types';
+
+/**
+ * The fields `verifyClerkToken` reads from Clerk's auth object for an OAuth access token, the result of
+ * `auth({ acceptsToken: 'oauth_token' })` or of a request state's `toAuth()`. Declared here so that this package's
+ * types do not need `@clerk/backend`, which an app using `@clerk/express`, `@clerk/hono`, or `@clerk/nextjs` may not
+ * list itself.
+ */
+export type ClerkOAuthAuthObject = {
+  isAuthenticated: boolean;
+  tokenType: string | null;
+  userId?: string | null | undefined;
+  clientId?: string | null | undefined;
+  scopes?: string[] | null | undefined;
+};
 
 /**
  * Generates protected resource metadata for the given auth server url and
@@ -103,7 +116,7 @@ export async function fetchClerkAuthorizationServerMetadata({
  * @returns A `ClerkAuthInfo`, which is an `AuthInfo` (the MCP SDK auth info type), or `undefined`
  */
 export function verifyClerkToken(
-  auth: MachineAuthObject<'oauth_token'>,
+  auth: ClerkOAuthAuthObject,
   token: string | undefined,
 ): ClerkAuthInfo | undefined {
   if (!token) return undefined;

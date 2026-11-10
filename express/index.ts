@@ -1,8 +1,8 @@
-import type { ClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
 import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
+  type ClerkOAuthClient,
   type McpAuthClerkOptions,
   type McpAuthFailure,
   type McpAuthOptions,
@@ -14,6 +14,7 @@ import {
   assertTransportClass,
   audienceFor,
   authenticateBearer,
+  resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
@@ -32,6 +33,7 @@ declare global {
 }
 
 export {
+  type ClerkOAuthClient,
   McpAuthError,
   type McpAuthClerkOptions,
   type McpAuthFailure,
@@ -102,9 +104,10 @@ export function mcpAuth(
   assertMcpAuthOptions('mcpAuth', options);
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // A `Host` header that does not parse would otherwise throw below and reach the app as a server error
+    // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
+    // error, or derive a challenge for `http://undefined`
     const requestUrl = getRequestUrl(req);
-    if (!URL.canParse(requestUrl)) {
+    if (!requestUrl) {
       res.status(400).json({ error: 'invalid_request' });
       return;
     }
@@ -160,14 +163,15 @@ export function mcpAuth(
  */
 export function mcpAuthClerk(
   options: McpAuthClerkOptions & {
-    clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
+    clerkClient?: ClerkOAuthClient | undefined;
   },
 ) {
   assertMcpAuthClerkOptions(options);
   const client = options.clerkClient ?? clerkClient;
   return mcpAuth(
     (token, req) =>
-      verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, getRequestUrl(req))),
+      // `mcpAuth` answers a request without a usable URL before it calls this
+      verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, getRequestUrl(req)!)),
     options,
   );
 }
@@ -180,7 +184,7 @@ export function mcpAuthClerk(
  * @example
  * ```ts
  * app.get(
- *   "/.well-known/oauth-protected-resource",
+ *   "/.well-known/oauth-protected-resource/mcp",
  *   protectedResourceHandler({
  *     authServerUrl: "https://auth.example.com",
  *     properties: {
@@ -198,9 +202,15 @@ export function protectedResourceHandler({
   properties?: Record<string, unknown>;
 }) {
   return async (req: express.Request, res: express.Response) => {
+    const requestUrl = getRequestUrl(req);
+    if (!requestUrl) {
+      res.status(400).json({ error: 'invalid_request' });
+      return;
+    }
+
     const metadata = generateProtectedResourceMetadata({
       authServerUrl,
-      resourceUrl: getResourceUrl(req),
+      resourceUrl: resourceFromMetadataUrl(requestUrl),
       properties,
     });
 
@@ -227,7 +237,7 @@ export async function authServerMetadataHandlerClerk(_: express.Request, res: ex
  * @example
  * ```ts
  * app.get(
- *   "/.well-known/oauth-protected-resource",
+ *   "/.well-known/oauth-protected-resource/mcp",
  *   protectedResourceHandlerClerk()
  * );
  * ```
@@ -239,9 +249,15 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
       throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
     }
 
+    const requestUrl = getRequestUrl(req);
+    if (!requestUrl) {
+      res.status(400).json({ error: 'invalid_request' });
+      return;
+    }
+
     const metadata = generateClerkProtectedResourceMetadata({
       publishableKey,
-      resourceUrl: getResourceUrl(req),
+      resourceUrl: resourceFromMetadataUrl(requestUrl),
       properties,
     });
 
@@ -249,18 +265,13 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
   };
 }
 
-// Given a protected resource metadata url generate the url of the original
-// resource
-function getResourceUrl(req: express.Request) {
-  const url = new URL(`${req.protocol}://${req.get('host')}${req.originalUrl}`);
-  url.pathname = url.pathname.replace(/\.well-known\/oauth-protected-resource\/?/, '');
-  return url.toString();
-}
-
-// The URL the request was made to. Behind a proxy, `req.protocol` and the host come from `X-Forwarded-*` headers only
-// when the app sets `trust proxy`.
-function getRequestUrl(req: express.Request) {
-  return `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+// The URL the request was made to, or `undefined` without a `Host` header that parses. Behind a proxy, `req.protocol`
+// and the host come from `X-Forwarded-*` headers only when the app sets `trust proxy`.
+function getRequestUrl(req: express.Request): string | undefined {
+  const host = req.get('host');
+  if (!host) return undefined;
+  const url = `${req.protocol}://${host}${req.originalUrl}`;
+  return URL.canParse(url) ? url : undefined;
 }
 
 /**
