@@ -29,21 +29,22 @@ import 'dotenv/config';
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createClerkClient } from '@clerk/express';
 import {
+  type McpAuthOptions,
   mcpAuth,
   protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/express';
 
-const MCP_RESOURCE_URL = 'https://mcp.example.com/mcp';
-const REQUIRED_SCOPES = ['profile', 'email'];
+// One object for both calls, so the metadata lists the scopes `mcpAuth` requires as `scopes_supported`
+const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  requiredScopes: ['profile', 'email'],
+} satisfies McpAuthOptions;
 
 const app = express();
 app.use(express.json());
-
-const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY! });
 
 function createServer() {
   const server = new McpServer({
@@ -51,24 +52,14 @@ function createServer() {
     version: '1.0.0',
   });
 
+  // `authInfo.token` is the bearer token, so return only the user ID that `mcpAuth` puts in `extra`
   server.tool(
-    'get_clerk_user_data',
-    'Gets data about the Clerk user that authorized this request',
+    'whoami',
+    'Returns the ID of the Clerk user that authorized this request',
     {},
-    async (_, { authInfo }) => {
-      const userId = authInfo?.extra?.userId as string | undefined;
-
-      if (!userId) {
-        return {
-          content: [{ type: 'text', text: 'Error: user not authenticated' }],
-        };
-      }
-
-      const user = await clerk.users.getUser(userId);
-      return {
-        content: [{ type: 'text', text: JSON.stringify(user) }],
-      };
-    },
+    async (_, { authInfo }) => ({
+      content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
+    }),
   );
 
   return server;
@@ -76,15 +67,12 @@ function createServer() {
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceMetadataHandler({
-    resourceUrl: MCP_RESOURCE_URL,
-    properties: { scopes_supported: REQUIRED_SCOPES },
-  }),
+  protectedResourceMetadataHandler(mcpAuthOptions),
 );
 app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 app.post(
   '/mcp',
-  mcpAuth({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
+  mcpAuth(mcpAuthOptions),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 
@@ -259,10 +247,11 @@ Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 
 
 Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express` in your own route.
 
-**Options:**
+**Options:** the options you pass to `mcpAuth`, all optional, plus `properties`, so one object can be passed to both. The handler ignores `clerkClient` and `verifyToken`.
 
 - `resourceUrl` (optional) - The same value you pass to `mcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
-- `properties` (optional) - Additional metadata, such as `scopes_supported` or `resource_name`. It overrides the generated metadata.
+- `requiredScopes` and `challengeScopes` (optional) - The same values you pass to `mcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
+- `properties` (optional) - Additional metadata, such as `resource_name`. It overrides the generated metadata. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
 
 **Example:**
 
@@ -273,7 +262,8 @@ app.get(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceMetadataHandler({
     resourceUrl: 'https://mcp.example.com/mcp',
-    properties: { scopes_supported: ['email'] },
+    requiredScopes: ['email'],
+    properties: { resource_name: 'Example MCP server' },
   }),
 );
 ```

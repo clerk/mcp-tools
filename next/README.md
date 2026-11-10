@@ -24,28 +24,42 @@ For a complete working example of an MCP server built with Next.js and Clerk aut
 
 Here's the basic structure you'll need:
 
-#### 1. Protected Resource Metadata
+#### 1. Shared Options
+
+The MCP endpoint and its metadata live in separate route files, so export their options from one module and import it in both. The metadata then lists the scopes `withMcpAuth` requires as `scopes_supported`, and its `resource` is the URL `withMcpAuth` checks.
+
+```ts
+// lib/mcp.ts
+import type { McpAuthOptions } from '@clerk/mcp-tools/next';
+import { clerkClient } from '@clerk/nextjs/server';
+
+export const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  clerkClient,
+  requiredScopes: ['profile', 'email'],
+} satisfies McpAuthOptions;
+```
+
+#### 2. Protected Resource Metadata
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
 import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
+import { mcpAuthOptions } from '@/lib/mcp';
 
-// The same values as the MCP endpoint's `resourceUrl` and `requiredScopes` below
-const handler = protectedResourceMetadataHandler({
-  resourceUrl: 'https://mcp.example.com/mcp',
-  properties: { scopes_supported: ['profile', 'email'] },
-});
+const handler = protectedResourceMetadataHandler(mcpAuthOptions);
 
 export { handler as GET };
 ```
 
-#### 2. MCP Endpoint
+#### 3. MCP Endpoint
 
 ```ts
 // app/mcp/route.ts
 import { withMcpAuth } from '@clerk/mcp-tools/next';
 import { clerkClient } from '@clerk/nextjs/server';
 import { createMcpHandler } from 'mcp-handler';
+import { mcpAuthOptions } from '@/lib/mcp';
 
 const handler = createMcpHandler((server) => {
   server.registerTool(
@@ -64,11 +78,7 @@ const handler = createMcpHandler((server) => {
   );
 });
 
-const authHandler = withMcpAuth(handler, {
-  resourceUrl: 'https://mcp.example.com/mcp',
-  clerkClient,
-  requiredScopes: ['profile', 'email'],
-});
+const authHandler = withMcpAuth(handler, mcpAuthOptions);
 
 export { authHandler as GET, authHandler as POST };
 ```
@@ -127,10 +137,11 @@ export { handler as GET };
 
 This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
 
-**Options:**
+**Options:** the options you pass to `withMcpAuth`, all optional, plus `properties`, so one object, exported from a shared module such as `lib/mcp.ts`, can be passed to both. The handler ignores `clerkClient`, `verifyToken`, and `onAuthFailure`.
 
 - `resourceUrl: string | string[]` (optional) - The same value you pass to `withMcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `withMcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`.
-- `properties: Record<string, unknown>` (optional) - Additional metadata, such as `scopes_supported` or `resource_name`. It overrides the generated metadata.
+- `requiredScopes?: string[]` and `challengeScopes?: string[]` - The same values you pass to `withMcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
+- `properties: Record<string, unknown>` (optional) - Additional metadata, such as `resource_name`. It overrides the generated metadata. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
 
 Without `resourceUrl`, the metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to, so if clients reach the endpoint through another public URL than the app sees, pass that exact URL as `resourceUrl`.
 
