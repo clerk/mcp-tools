@@ -73,33 +73,33 @@ const authHandler = withMcpAuth(handler, {
 export { authHandler as GET, authHandler as POST };
 ```
 
-**Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. Import `withMcpAuth` from `@clerk/mcp-tools/next` instead of `mcp-handler`: it takes options instead of a verifier function and verifies tokens with Clerk.
+**Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. Import `withMcpAuth` from `@clerk/mcp-tools/next` instead of `mcp-handler`: it takes the route handler and an options object instead of a verifier function, and verifies tokens with Clerk unless you pass `verifyToken`.
 
-### `withMcpAuth`
+### `withMcpAuth(handler, options)`
 
-Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including that its `aud` claim includes `resourceUrl`. It takes the same options as `mcpAuth` without `verifyToken` in the Express and Hono adapters, except that `clerkClient` is required.
+Wraps a Next.js MCP route handler so that every request needs a valid bearer token. By default Clerk verifies the OAuth access token, including that its `aud` claim includes `resourceUrl`. Pass `verifyToken` to verify tokens with your own function instead. It takes the same options as `mcpAuth` in the Express and Hono adapters, except that `clerkClient` is required without `verifyToken`.
 
 **Options:**
 
-- `resourceUrl: string | string[]` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. Set the protected resource metadata route's `resource` to the same URL, picked with `matchResourceUrl` from `@clerk/mcp-tools/next` for a list.
+- `resourceUrl: string | string[]` - Required unless you pass `verifyToken`. The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. With `verifyToken` and without `resourceUrl`, the URL comes from the request. Set the protected resource metadata route's `resource` to the same URL, picked with `matchResourceUrl` from `@clerk/mcp-tools/next` for a list.
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
-- `clerkClient` - The client that verifies tokens: `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. It is an option rather than an import of this package so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`: Next.js fails the build on any reference to a package that isn't installed.
-- `onAuthFailure?: (failure, req) => void | Promise<void>` - Called with why a request is about to be answered with a `401` or `403` challenge or a `421`, for example for logging. `failure.reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`. For a token Clerk rejected, `failure.cause` is an `McpTokenVerificationError`, whose `code` is Clerk's reason and whose `message` says which check failed. The Express and Hono adapters record the same value on the request context instead.
+- `clerkClient` - The client that verifies tokens: `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. It is an option rather than an import of this package so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`: Next.js fails the build on any reference to a package that isn't installed. Required without `verifyToken`, and not allowed together with it.
+- `verifyToken?: (token: string, req: Request) => Promise<AuthInfo | undefined>` - A function that verifies the token in place of Clerk and returns the auth info, or `undefined` to reject it. Throw an `McpTokenVerificationError` to reject it with a reason.
+- `onAuthFailure?: (failure, req) => void | Promise<void>` - Called with why a request is about to be answered with a `401` or `403` challenge or a `421`, for example for logging. `failure.reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`. For a token Clerk or `verifyToken` rejected with a reason, `failure.cause` is an `McpTokenVerificationError`, whose `code` is Clerk's reason and whose `message` says which check failed. The Express and Hono adapters record the same value on the request context instead.
 
 A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws an `McpAuthError`, exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`. Next.js answers with a `500`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/nextjs` 7.9.5 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
-### `mcpAuth`
-
-The same wrapper for any authorization server: pass a function that verifies the token and returns the auth info, or `undefined` to reject it.
+For any other authorization server, pass `verifyToken` instead of `clerkClient`:
 
 ```ts
-const authHandler = mcpAuth(async (token, req) => verifyMyToken(token), {
+const authHandler = withMcpAuth(handler, {
+  verifyToken: async (token, req) => verifyMyToken(token),
   resourceUrl: 'https://mcp.example.com/mcp',
   requiredScopes: ['read'],
-})(handler);
+});
 ```
 
 ### Building an MCP Client
@@ -244,7 +244,7 @@ The protected resource handlers will automatically use these values.
 
 ### With Custom Authentication
 
-For custom authentication systems, verify tokens with `mcpAuth` and serve the metadata from your own route with `generateProtectedResourceMetadata`. Pass it the same `resourceUrl` you pass to `mcpAuth`:
+For custom authentication systems, verify tokens with `withMcpAuth` and a `verifyToken` option, and serve the metadata from your own route with `generateProtectedResourceMetadata`. Pass it the same `resourceUrl` you pass to `withMcpAuth`:
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
