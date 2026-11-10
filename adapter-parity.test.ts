@@ -224,6 +224,22 @@ describe.each(metadataRoutesWithOptions)(
       ]);
     });
 
+    // A key set to `undefined`, as `{ scopes_supported: config.scopes }` gives without one, is not a list to use
+    test('lists requiredScopes then challengeScopes when properties sets scopes_supported to undefined', async () => {
+      const res = await send(() => ({
+        resourceUrl: 'https://public.example.com/mcp',
+        requiredScopes: ['profile'],
+        challengeScopes: ['email'],
+        properties: { scopes_supported: undefined, resource_name: 'MCP' },
+      }));
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        scopes_supported: ['profile', 'email'],
+        resource_name: 'MCP',
+      });
+    });
+
     test('leaves scopes_supported out without scopes', async () => {
       const res = await send(() => ({ resourceUrl: 'https://public.example.com/mcp' }));
 
@@ -372,10 +388,54 @@ describe.each([
     );
   });
 
+  test.each([
+    ['a string', 'email', {}],
+    ['a string beside requiredScopes', 'email', { requiredScopes: ['email'] }],
+    ['a list with an entry that is not a string', ['email', 1], {}],
+    [
+      'a list with an entry that is not a string beside requiredScopes',
+      [1],
+      { requiredScopes: ['email'] },
+    ],
+    ['null', null, {}],
+  ])('throws at setup when scopes_supported is %s', (_case, scopes_supported, scopes) => {
+    expect(() =>
+      protectedResourceMetadataHandler({
+        resourceUrl: origin,
+        ...scopes,
+        properties: { scopes_supported },
+      }),
+    ).toThrow(
+      'Clerk error: protectedResourceMetadataHandler properties.scopes_supported must be an array of strings',
+    );
+  });
+
   test('throws at setup for a requiredScopes entry that is not a scope token', () => {
     expect(() => protectedResourceMetadataHandler({ requiredScopes: ['two words'] })).toThrow(
       'Clerk error: protectedResourceMetadataHandler requiredScopes must contain only scope tokens',
     );
+  });
+});
+
+// The handler takes the keys of its own adapter's `mcpAuth` options, and `onAuthFailure` is Next.js's alone
+describe('protectedResourceMetadataHandler onAuthFailure', () => {
+  test.each([
+    ['express', expressAdapter.protectedResourceMetadataHandler],
+    ['hono', honoAdapter.protectedResourceMetadataHandler],
+  ])('%s throws at setup, as its mcpAuth takes no onAuthFailure', (_name, handler) => {
+    // @ts-expect-error the adapter's mcpAuth options have no `onAuthFailure`
+    expect(() => handler({ resourceUrl: origin, onAuthFailure: () => {} })).toThrow(
+      'Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties',
+    );
+  });
+
+  test('next accepts it, as withMcpAuth does', () => {
+    expect(() =>
+      nextAdapter.protectedResourceMetadataHandler({
+        resourceUrl: origin,
+        onAuthFailure: () => {},
+      }),
+    ).not.toThrow();
   });
 });
 
