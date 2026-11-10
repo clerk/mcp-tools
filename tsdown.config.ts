@@ -28,6 +28,8 @@ export default defineConfig({
       'express',
       'hono',
       '@clerk/hono',
+      // Types only. Inlined, its classes' protected members make the app's own ClerkClient fail the clerkClient option
+      /^@clerk\/backend(\/|$)/,
     ],
   },
 });

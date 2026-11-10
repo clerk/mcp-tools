@@ -122,6 +122,7 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@clerk/backend": "^3.19.0",
     "@clerk/express": "^2.1.70",
     "@clerk/hono": "^0.1.80",
     "@clerk/nextjs": "^7.9.5",
@@ -134,6 +135,9 @@
     "zod": "^3.25 || ^4.0"
   },
   "peerDependenciesMeta": {
+    "@clerk/backend": {
+      "optional": true
+    },
     "@clerk/express": {
       "optional": true
     },
