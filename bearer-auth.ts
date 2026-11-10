@@ -1,7 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { ClerkClient } from '@clerk/backend';
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from './mcp-types';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import { matchResourceUrl, verifyClerkToken } from './server';
 

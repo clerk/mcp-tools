@@ -1,6 +1,5 @@
 // Internal helpers for the tools this package builds. Not part of the package exports.
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { AuthInfo, ToolAnnotations } from './mcp-types';
 import type { z } from 'zod/v4';
 
 export const OPEN_WORLD_WRITE_ANNOTATIONS: ToolAnnotations = {

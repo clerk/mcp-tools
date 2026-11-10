@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { JsonSerializable } from '../client.js';
+import type { JsonSerializable } from '../client-store.js';
 
 export interface FsStoreConfig {
   /**

@@ -3,24 +3,13 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { JsonSerializable, McpClientStore } from './client-store';
+
+export type { JsonSerializable, McpClientStore } from './client-store';
 
 const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';
 const SESSION_PREFIX = 'session_';
-
-export type JsonSerializable =
-  | null
-  | undefined
-  | boolean
-  | number
-  | string
-  | JsonSerializable[]
-  | { [key: string]: JsonSerializable };
-
-export interface McpClientStore {
-  write: (key: string, value: JsonSerializable) => Promise<void>;
-  read: (key: string) => Promise<JsonSerializable>;
-}
 
 /**
  * This function is used to complete the OAuth flow. It is used in the OAuth

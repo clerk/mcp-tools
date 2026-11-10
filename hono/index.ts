@@ -1,6 +1,6 @@
 import type { ClerkClient } from '@clerk/backend';
 import type { ClerkHonoVariables } from '@clerk/hono/types';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from '../mcp-types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';

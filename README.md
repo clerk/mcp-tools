@@ -274,7 +274,11 @@ export { handler as GET, handler as POST, handler as DELETE };
 
 The first step to building MCP compatibility into your AI application is allowing your users to connect with an MCP service. This can be kicked off simply with the URL of an MCP-compatible server, like `https://example.com/mcp`. Normally, your app would implement a text field where the user can enter an MCP endpoint, or have a pre-built integration where clicking a button would trigger an MCP connection flow with a baked-in endpoint URL.
 
-The process of actually making the MCP connection using the SDK, however, is fairly arduous, so we expose some tools that can help make this easier.
+The process of actually making the MCP connection using the SDK, however, is fairly arduous, so we expose some tools that can help make this easier. They run on the MCP SDK 1.x, which `@clerk/mcp-tools/client` needs installed:
+
+```bash
+npm install @clerk/mcp-tools @modelcontextprotocol/sdk
+```
 
 #### Framework-agnostic client creation
 

@@ -1,6 +1,5 @@
 import type { ClerkClient } from '@clerk/backend';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { NextRequest } from 'next/server';
+import type { AuthInfo } from '../mcp-types';
 import {
   type McpAuthClerkOptions,
   type McpAuthOptions,
@@ -12,7 +11,6 @@ import {
   authenticateBearer,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
-import { type McpClientStore, completeAuthWithCode } from '../client';
 import {
   corsHeaders,
   fetchClerkAuthorizationServerMetadata,
@@ -21,40 +19,6 @@ import {
   requireAdditionalScopes,
   verifyClerkToken,
 } from '../server';
-
-/**
- * A request handler intended to be run at the OAuth callback endpoint.
- * It will complete the OAuth flow by exchanging the authorization code for a
- * token, store the token, then call the passed in callback fn when complete.
- * @param store - The client store to use for storing the token.
- * @param callback - A function to call once the OAuth flow is complete.
- */
-export function completeOAuthHandler({
-  store,
-  callback,
-}: {
-  store: McpClientStore;
-  callback: (params: Awaited<ReturnType<typeof completeAuthWithCode>>) => void;
-}): (req: NextRequest) => Promise<Response | ReturnType<typeof callback>> {
-  return async (req: NextRequest): Promise<Response | ReturnType<typeof callback>> => {
-    const qs = req.nextUrl.searchParams;
-    const code = qs.get('code');
-    const state = qs.get('state');
-
-    if (!state) {
-      return Response.json({ error: 'State missing' }, { status: 400 });
-    }
-
-    if (!code) {
-      return Response.json({ error: 'Authorization code missing' }, { status: 400 });
-    }
-
-    // this function will run the state param check internally
-    const res = await completeAuthWithCode({ state, code, store });
-
-    return callback(res);
-  };
-}
 
 /**
  * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
