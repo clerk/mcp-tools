@@ -4,26 +4,27 @@ import { describe, test } from 'vitest';
 
 import { mcpAuthClerk as expressMcpAuthClerk } from './express';
 import { mcpAuthClerk as honoMcpAuthClerk } from './hono';
-import { mcpAuthClerk as nextMcpAuthClerk } from './next';
+import { withMcpAuth as nextWithMcpAuth } from './next';
 import { verifyClerkToken } from './server';
 
 describe('the clerkClient option', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
   const clerkClient = createClerkClient({ secretKey: 'sk_test_types' });
+  const handler = () => new Response();
 
   test("accepts the app's own client from createClerkClient in every adapter", () => {
     expressMcpAuthClerk({ resourceUrl, clerkClient });
     honoMcpAuthClerk({ resourceUrl, clerkClient });
-    nextMcpAuthClerk({ resourceUrl, clerkClient });
+    nextWithMcpAuth(handler, { resourceUrl, clerkClient });
   });
 
   test('accepts clerkClient from @clerk/nextjs/server in the Next.js adapter', () => {
-    nextMcpAuthClerk({ resourceUrl, clerkClient: nextClerkClient });
+    nextWithMcpAuth(handler, { resourceUrl, clerkClient: nextClerkClient });
   });
 
   test('is required in the Next.js adapter', () => {
     // @ts-expect-error no clerkClient
-    nextMcpAuthClerk({ resourceUrl });
+    nextWithMcpAuth(handler, { resourceUrl });
   });
 
   test("verifyClerkToken accepts Clerk's own OAuth auth object", async () => {

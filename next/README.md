@@ -43,7 +43,7 @@ export { handler as GET };
 
 ```ts
 // app/mcp/route.ts
-import { mcpAuthClerk } from '@clerk/mcp-tools/next';
+import { withMcpAuth } from '@clerk/mcp-tools/next';
 import { clerkClient } from '@clerk/nextjs/server';
 import { createMcpHandler } from 'mcp-handler';
 
@@ -52,7 +52,7 @@ const handler = createMcpHandler((server) => {
     'get-clerk-user-data',
     { description: 'Gets data about the Clerk user that authorized this request' },
     async (ctx) => {
-      // mcpAuthClerk only calls the handler with a verified token
+      // withMcpAuth only calls the handler with a verified token
       const userId = ctx.http!.authInfo!.extra!.userId as string;
       const userData = await (await clerkClient()).users.getUser(userId);
 
@@ -63,20 +63,20 @@ const handler = createMcpHandler((server) => {
   );
 });
 
-const authHandler = mcpAuthClerk({
+const authHandler = withMcpAuth(handler, {
   resourceUrl: 'https://mcp.example.com/mcp',
-  requiredScopes: ['profile', 'email'],
   clerkClient,
-})(handler);
+  requiredScopes: ['profile', 'email'],
+});
 
 export { authHandler as GET, authHandler as POST };
 ```
 
-**Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. `mcpAuthClerk` replaces its `withMcpAuth`.
+**Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. Import `withMcpAuth` from `@clerk/mcp-tools/next` instead of `mcp-handler`: it takes options instead of a verifier function and verifies tokens with Clerk.
 
-### `mcpAuthClerk`
+### `withMcpAuth`
 
-Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including that its `aud` claim includes `resourceUrl`. It matches `mcpAuthClerk` in the Express and Hono adapters.
+Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including that its `aud` claim includes `resourceUrl`. It takes the same options as `mcpAuthClerk` in the Express and Hono adapters, except that `clerkClient` is required.
 
 **Options:**
 
