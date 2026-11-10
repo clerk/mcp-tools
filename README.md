@@ -724,17 +724,8 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     {
       resource: string;
       authorization_servers: string[];
-      token_types_supported: string[];
-      token_introspection_endpoint: string;
-      token_introspection_endpoint_auth_methods_supported: string[];
-      jwks_uri: string;
-      authorization_data_types_supported: string[];
-      authorization_data_locations_supported: string[];
-      key_challenges_supported: Array<{
-        challenge_type: string;
-        challenge_algs: string[];
-      }>;
-      [key: string]: any; // Additional properties if provided
+      bearer_methods_supported: ['header'];
+      [key: string]: any; // Additional properties if provided, such as resource_name
     }
     ```
 

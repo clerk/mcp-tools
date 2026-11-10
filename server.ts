@@ -15,11 +15,15 @@ export type ClerkOAuthAuthObject = {
 };
 
 /**
- * Generates protected resource metadata for the given auth server url and
- * resource server url.
+ * Generates RFC 9728 protected resource metadata for the given auth server url and
+ * resource url. It holds only parameters RFC 9728 section 2 defines: `resource`,
+ * `authorization_servers`, and `bearer_methods_supported`, since the adapters
+ * read the token from the `Authorization` header alone. Pass others, such as
+ * `resource_name` or `resource_documentation`, in `properties`.
  *
- * @param authServerUrl - URL of the auth server
- * @param resourceServerUrl - URL of the resource server
+ * @see https://datatracker.ietf.org/doc/html/rfc9728#section-2
+ * @param authServerUrl - Issuer identifier of the authorization server
+ * @param resourceUrl - Resource identifier of the protected resource
  * @param properties - Additional properties to include in the metadata
  * @returns Protected resource metadata, serializable to JSON
  */
@@ -36,21 +40,7 @@ export function generateProtectedResourceMetadata({
     {
       resource: resourceUrl,
       authorization_servers: [authServerUrl],
-      token_types_supported: ['urn:ietf:params:oauth:token-type:access_token'],
-      token_introspection_endpoint: `${authServerUrl}/oauth/token`,
-      token_introspection_endpoint_auth_methods_supported: [
-        'client_secret_post',
-        'client_secret_basic',
-      ],
-      jwks_uri: `${authServerUrl}/.well-known/jwks.json`,
-      authorization_data_types_supported: ['oauth_scope'],
-      authorization_data_locations_supported: ['header', 'body'],
-      key_challenges_supported: [
-        {
-          challenge_type: 'urn:ietf:params:oauth:pkce:code_challenge',
-          challenge_algs: ['S256'],
-        },
-      ],
+      bearer_methods_supported: ['header'],
     },
     properties,
   );
@@ -58,11 +48,11 @@ export function generateProtectedResourceMetadata({
 
 /**
  * Generates protected resource metadata for the given Clerk publishable key
- * and resource origin.
+ * and resource url, with Clerk's documentation as `resource_documentation`.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  * @param publishableKey - Clerk publishable key
- * @param origin - Origin of the resource to which the metadata applies
+ * @param resourceUrl - Resource identifier of the protected resource
  * @returns Protected resource metadata, serializable to JSON
  */
 export function generateClerkProtectedResourceMetadata({
@@ -80,7 +70,7 @@ export function generateClerkProtectedResourceMetadata({
     authServerUrl: fapiUrl,
     resourceUrl,
     properties: {
-      service_documentation: 'https://clerk.com/docs',
+      resource_documentation: 'https://clerk.com/docs',
       ...properties,
     },
   });

@@ -188,7 +188,7 @@ export function mcpAuthClerk(
  *   protectedResourceHandler({
  *     authServerUrl: "https://auth.example.com",
  *     properties: {
- *       service_documentation: "https://example.com/docs"
+ *       resource_documentation: "https://example.com/docs"
  *     }
  *   })
  * );
