@@ -100,12 +100,13 @@ app.use(express.json());
 const resourceUrl = 'https://mcp.example.com/mcp';
 
 // Custom token verification
-async function verifyToken(token: string, req: express.Request) {
+// Return `undefined` to reject the token
+async function verifyToken(token: string) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
     return { userId: decoded.sub, email: decoded.email };
-  } catch (error) {
-    return false;
+  } catch {
+    return undefined;
   }
 }
 
