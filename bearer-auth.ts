@@ -281,13 +281,18 @@ export function clerkTokenVerifier<Req>(
 }
 
 /**
- * The `CLERK_PUBLISHABLE_KEY` the Express and Hono metadata handlers read, or an error when it is not set.
- * @param publishableKey - The value of `CLERK_PUBLISHABLE_KEY` in the app's environment
+ * The publishable key the metadata handlers read from the app's environment, or an error when it is not set. The
+ * adapters read the variable themselves: Next.js only inlines `process.env.NEXT_PUBLIC_*` where it is written out.
+ * @param publishableKey - The value of the variable in the app's environment
+ * @param name - The variable's name, for the error: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` in Next.js
  * @returns The publishable key
  */
-export function requirePublishableKey(publishableKey: string | undefined): string {
+export function requirePublishableKey(
+  publishableKey: string | undefined,
+  name = 'CLERK_PUBLISHABLE_KEY',
+): string {
   if (!publishableKey) {
-    throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
+    throw new Error(`${name} environment variable is required`);
   }
   return publishableKey;
 }

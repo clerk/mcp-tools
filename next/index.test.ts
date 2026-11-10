@@ -38,6 +38,14 @@ describe('protectedResourceMetadataHandler', () => {
     expect((await res.json()).resource).toBe(resource);
   });
 
+  test('throws naming the variable when the publishable key is not set', () => {
+    delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
+    expect(() => protectedResourceMetadataHandler()(new Request(`${METADATA_ROOT}/mcp`))).toThrow(
+      'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable is required',
+    );
+  });
+
   test('sets resource from properties instead of the route path', async () => {
     const properties = {
       resource: 'https://public.example.com/mcp',
