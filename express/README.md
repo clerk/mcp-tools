@@ -275,7 +275,7 @@ app.get(
   protectedResourceHandler({
     authServerUrl: 'https://auth.example.com',
     properties: {
-      service_documentation: 'https://example.com/docs',
+      resource_documentation: 'https://example.com/docs',
       custom_property: 'custom_value',
     },
   }),
