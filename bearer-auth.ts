@@ -3,14 +3,20 @@ import type { ClerkClient } from '@clerk/backend';
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
-import { verifyClerkToken } from './server';
+import { matchResourceUrl, verifyClerkToken } from './server';
 
 /**
- * Why `mcpAuth` answered a request with a 401 or 403 challenge. The adapters record it on the request context, such
- * as Express `res.locals.mcpAuthFailure` or Hono `c.get('mcpAuthFailure')`, for example for logging.
+ * Why `mcpAuth` answered a request with a 401 or 403 challenge, or with a 421 for a request to an origin that no
+ * listed `resourceUrl` has. The adapters record it on the request context, such as Express `res.locals.mcpAuthFailure`
+ * or Hono `c.get('mcpAuthFailure')`, for example for logging.
  */
 export type McpAuthFailure = {
-  reason: 'missing_token' | 'malformed_token' | 'invalid_token' | 'insufficient_scope';
+  reason:
+    | 'missing_token'
+    | 'malformed_token'
+    | 'invalid_token'
+    | 'insufficient_scope'
+    | 'misdirected_request';
 };
 
 /**
@@ -32,22 +38,24 @@ export class McpAuthError extends Error {
 }
 
 /**
- * The exact URL clients use for an MCP endpoint, or a function that returns it for a request, such as for a server that
- * answers on several hostnames. A function is called for every request.
+ * The exact URL clients use for an MCP endpoint, or a list of them, one for each origin, for a server that answers on
+ * several hostnames. With a list, a request uses the URL with its own origin, and a request to any other origin gets a
+ * 421 Misdirected Request (RFC 9110 section 15.5.20).
  */
-export type McpResourceUrl<Req> = string | ((request: Req) => string);
+export type McpResourceUrl = string | readonly string[];
 
 /**
  * Options for the `mcpAuth` middleware.
  */
-export type McpAuthOptions<Req = never> = {
+export type McpAuthOptions = {
   /**
-   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a function that returns
-   * it for the request. The challenge's `resource_metadata` is derived from it. When omitted, it is derived from the
+   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
+   * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
+   * origin gets a 421. The challenge's `resource_metadata` is derived from it. When omitted, it is derived from the
    * incoming request, which can differ from the public URL behind a proxy. Set the protected resource metadata route's
-   * `resource` to the same URL, since that route also derives it from the request.
+   * `resource` to the same URL, as `matchResourceUrl` picks it, since that route also derives it from the request.
    */
-  resourceUrl?: McpResourceUrl<Req> | undefined;
+  resourceUrl?: McpResourceUrl | undefined;
   /**
    * The scopes every request needs. A token without them gets a 403 `insufficient_scope` challenge, and the 401
    * challenge lists them in its `scope`.
@@ -64,60 +72,71 @@ export type McpAuthOptions<Req = never> = {
 /**
  * Options for the `mcpAuthClerk` middleware.
  */
-export type McpAuthClerkOptions<Req = never> = McpAuthOptions<Req> & {
+export type McpAuthClerkOptions = McpAuthOptions & {
   /**
-   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a function that returns
-   * it for the request. Clerk rejects a token whose `aud` claim does not include it, and the challenge's
-   * `resource_metadata` is derived from it. Set the protected resource metadata route's `resource` to the same URL,
-   * since that route derives it from the request.
+   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
+   * for each origin the server answers on. Clerk rejects a token whose `aud` claim does not include the URL for the
+   * request's origin, so a token issued for one listed URL does not pass on another, and a request to any other origin
+   * gets a 421. The challenge's `resource_metadata` is derived from it. Set the protected resource metadata route's
+   * `resource` to the same URL, as `matchResourceUrl` picks it, since that route derives it from the request.
    */
-  resourceUrl: McpResourceUrl<Req>;
+  resourceUrl: McpResourceUrl;
 };
 
 type BearerResult =
   | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
-  | { ok: false; failure: McpAuthFailure; status: 401 | 403; challenge: string; error: string };
+  | {
+      ok: false;
+      failure: McpAuthFailure;
+      status: 401 | 403 | 421;
+      challenge: string | undefined;
+      error: string;
+    };
 
 /** Throws a `Clerk error:` message when the options cannot produce a valid challenge. */
 export function assertMcpAuthOptions(caller: string, options: McpAuthOptions | undefined) {
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
-  const resourceUrl = options?.resourceUrl;
-  if (resourceUrl === undefined || typeof resourceUrl === 'function') return;
-  assertResourceUrl(caller, resourceUrl);
+  if (options?.resourceUrl !== undefined) assertResourceUrls(caller, options.resourceUrl);
 }
 
-function assertResourceUrl(caller: string, resourceUrl: unknown): asserts resourceUrl is string {
-  if (typeof resourceUrl !== 'string' || !isResourceUrl(resourceUrl)) {
-    throw new Error(
-      `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials`,
-    );
+// Each URL is checked once here, so a request only has to find the one with its origin.
+function assertResourceUrls(caller: string, resourceUrl: unknown) {
+  const urls: unknown = typeof resourceUrl === 'string' ? [resourceUrl] : resourceUrl;
+  if (!Array.isArray(urls) || urls.length === 0) {
+    throw new Error(`Clerk error: ${caller} resourceUrl must be a URL or a non-empty list of URLs`);
+  }
+
+  const origins = new Set<string>();
+  for (const url of urls) {
+    if (typeof url !== 'string' || !isResourceUrl(url)) {
+      throw new Error(
+        `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials`,
+      );
+    }
+    // The request's origin picks the URL, so two URLs with one origin would leave the choice ambiguous
+    const { origin } = new URL(url);
+    if (origins.has(origin)) {
+      throw new Error(
+        `Clerk error: ${caller} resourceUrl lists more than one URL for ${origin}. List one URL for each origin`,
+      );
+    }
+    origins.add(origin);
   }
 }
 
 /**
- * The `resourceUrl` for one request, or `undefined` when it is not set. Throws a `Clerk error:` message when a
- * `resourceUrl` function returns an invalid URL.
+ * The audience for a request that `mcpAuth` let through, which always matches a listed `resourceUrl`, since a request
+ * to any other origin gets a 421 first.
  */
-export function resolveResourceUrl<Req>(
-  caller: string,
-  resourceUrl: McpResourceUrl<Req>,
-  request: Req,
-): string;
-export function resolveResourceUrl<Req>(
-  caller: string,
-  resourceUrl: McpResourceUrl<Req> | undefined,
-  request: Req,
-): string | undefined;
-export function resolveResourceUrl<Req>(
-  caller: string,
-  resourceUrl: McpResourceUrl<Req> | undefined,
-  request: Req,
-): string | undefined {
-  if (typeof resourceUrl !== 'function') return resourceUrl;
-  const url = resourceUrl(request);
-  assertResourceUrl(caller, url);
-  return url;
+export function audienceFor(resourceUrl: McpResourceUrl, requestUrl: string): string {
+  const audience = matchResourceUrl(resourceUrl, requestUrl);
+  if (!audience) {
+    throw new Error(
+      `Clerk error: no resourceUrl matches the origin of ${new URL(requestUrl).origin}`,
+    );
+  }
+  return audience;
 }
 
 // A URL with another scheme, such as `mailto:`, has no origin for the challenge, and `new Request` throws on a URL with
@@ -134,8 +153,7 @@ function isResourceUrl(value: string): boolean {
  * the options belong. Without this check that call would quietly return a middleware and the request would hang.
  */
 export function assertMcpAuthClerkOptions(options: McpAuthClerkOptions) {
-  const resourceUrlType = typeof options?.resourceUrl;
-  if (resourceUrlType !== 'string' && resourceUrlType !== 'function') {
+  if (typeof options?.resourceUrl !== 'string' && !Array.isArray(options?.resourceUrl)) {
     throw new Error(
       "Clerk error: mcpAuthClerk needs a resourceUrl. Call it as mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }) instead of passing mcpAuthClerk to the route directly",
     );
@@ -181,8 +199,17 @@ function parseAuthorization(header: string | undefined): ParsedAuthorization {
   return { token };
 }
 
+// The RFC 9728 metadata URL for the request's own path, used when `resourceUrl` is not set. The query is left out.
+function requestResourceMetadataUrl(requestUrl: string): string {
+  const { origin, pathname } = new URL(requestUrl);
+  return `${origin}/.well-known/oauth-protected-resource${pathname}`;
+}
+
 /**
- * Applies the response rule the adapters share. A missing or malformed header gets a challenge without an error code,
+ * Applies the response rule the adapters share. With a list of `resourceUrl`s, a request to an origin none of them has
+ * gets a 421 without a challenge, before the token is read: no metadata URL there describes this server, and RFC 8707
+ * section 3 audience-restricts a token so it cannot be presented to another resource. Otherwise the request uses the
+ * listed URL with its origin. A missing or malformed header gets a challenge without an error code,
  * a rejected token adds `error="invalid_token"` (RFC 6750 section 3), and both 401 challenges list `requiredScopes`
  * then `challengeScopes` in `scope` (RFC 6750 section 3). A token without `requiredScopes` gets a 403 with
  * `error="insufficient_scope"` (RFC 6750 section 3.1). The 403 `scope` is the granted scopes followed by the missing
@@ -192,17 +219,37 @@ function parseAuthorization(header: string | undefined): ParsedAuthorization {
  */
 export async function authenticateBearer({
   authorization,
-  resourceMetadataUrl,
+  requestUrl,
+  resourceUrl,
   requiredScopes = [],
   challengeScopes: extraChallengeScopes = [],
   verifyToken,
 }: {
   authorization: string | undefined;
-  resourceMetadataUrl: string;
+  /** The URL the request was made to, used to pick a listed `resourceUrl`, or to derive one when it is not set. */
+  requestUrl: string;
+  resourceUrl: McpResourceUrl | undefined;
   requiredScopes: readonly string[] | undefined;
   challengeScopes: readonly string[] | undefined;
   verifyToken: (token: string) => Promise<AuthInfo | undefined>;
 }): Promise<BearerResult> {
+  let resourceMetadataUrl: string;
+  if (resourceUrl === undefined) {
+    resourceMetadataUrl = requestResourceMetadataUrl(requestUrl);
+  } else {
+    const matched = matchResourceUrl(resourceUrl, requestUrl);
+    if (!matched) {
+      return {
+        ok: false,
+        failure: { reason: 'misdirected_request' },
+        status: 421,
+        challenge: undefined,
+        error: 'misdirected_request',
+      };
+    }
+    resourceMetadataUrl = resourceMetadataUrlFor(matched);
+  }
+
   const unauthorizedScopes = [...new Set([...requiredScopes, ...extraChallengeScopes])];
 
   const parsed = parseAuthorization(authorization);

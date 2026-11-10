@@ -11,9 +11,8 @@ import {
   McpAuthError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
+  audienceFor,
   authenticateBearer,
-  resolveResourceUrl,
-  resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
@@ -25,7 +24,7 @@ import {
 declare module 'hono' {
   interface ContextVariableMap {
     mcpAuth: AuthInfo;
-    /** Why `mcpAuth` answered this request with a 401 or 403 challenge, when it did. */
+    /** Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did. */
     mcpAuthFailure: McpAuthFailure;
   }
 }
@@ -86,15 +85,15 @@ export async function authServerMetadataHandlerClerk(c: Context) {
  */
 export function mcpAuth(
   verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions<Context>,
+  options?: McpAuthOptions,
 ): MiddlewareHandler {
   assertMcpAuthOptions('mcpAuth', options);
 
   return async (c: Context, next: Next) => {
-    const resourceUrl = resolveResourceUrl('mcpAuth', options?.resourceUrl, c);
     const result = await authenticateBearer({
       authorization: c.req.header('authorization'),
-      resourceMetadataUrl: resourceUrl ? resourceMetadataUrlFor(resourceUrl) : getPRMUrl(c),
+      requestUrl: c.req.url,
+      resourceUrl: options?.resourceUrl,
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, c),
@@ -104,7 +103,10 @@ export function mcpAuth(
       c.set('mcpAuthFailure', result.failure);
       return c.json(
         { error: result.error },
-        { status: result.status, headers: { 'WWW-Authenticate': result.challenge } },
+        {
+          status: result.status,
+          headers: result.challenge ? { 'WWW-Authenticate': result.challenge } : undefined,
+        },
       );
     }
 
@@ -124,7 +126,7 @@ export function mcpAuth(
  * a 403 challenge.
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions<Context> & {
+  options: McpAuthClerkOptions & {
     clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
   },
 ): MiddlewareHandler {
@@ -138,11 +140,7 @@ export function mcpAuthClerk(
         'Clerk error: mcpAuthClerk needs a clerkClient option or clerkMiddleware() to run first',
       );
     }
-    return verifyClerkOAuthToken(
-      client,
-      token,
-      resolveResourceUrl('mcpAuthClerk', options.resourceUrl, c),
-    );
+    return verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, c.req.url));
   }, options);
 }
 
@@ -185,9 +183,4 @@ function getResourceUrl(c: Context): string {
   const url = new URL(c.req.url);
   url.pathname = url.pathname.replace(/\.well-known\/oauth-protected-resource\/?/, '');
   return url.toString();
-}
-
-function getPRMUrl(c: Context): string {
-  const url = new URL(c.req.url);
-  return `${url.origin}/.well-known/oauth-protected-resource${url.pathname}`;
 }

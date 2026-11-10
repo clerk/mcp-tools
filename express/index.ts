@@ -11,9 +11,8 @@ import {
   McpAuthError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
+  audienceFor,
   authenticateBearer,
-  resolveResourceUrl,
-  resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
@@ -25,7 +24,7 @@ import {
 declare global {
   namespace Express {
     interface Locals {
-      /** Why `mcpAuth` answered this request with a 401 or 403 challenge, when it did. */
+      /** Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did. */
       mcpAuthFailure?: McpAuthFailure;
     }
   }
@@ -64,15 +63,15 @@ export { McpAuthError, type McpAuthFailure };
  */
 export function mcpAuth(
   verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions<express.Request>,
+  options?: McpAuthOptions,
 ) {
   assertMcpAuthOptions('mcpAuth', options);
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const resourceUrl = resolveResourceUrl('mcpAuth', options?.resourceUrl, req);
     const result = await authenticateBearer({
       authorization: req.headers.authorization,
-      resourceMetadataUrl: resourceUrl ? resourceMetadataUrlFor(resourceUrl) : getPRMUrl(req),
+      requestUrl: getRequestUrl(req),
+      resourceUrl: options?.resourceUrl,
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
@@ -80,10 +79,9 @@ export function mcpAuth(
 
     if (!result.ok) {
       res.locals.mcpAuthFailure = result.failure;
-      res
-        .status(result.status)
-        .set('WWW-Authenticate', result.challenge)
-        .json({ error: result.error });
+      res.status(result.status);
+      if (result.challenge) res.set('WWW-Authenticate', result.challenge);
+      res.json({ error: result.error });
       return;
     }
 
@@ -119,7 +117,7 @@ export function mcpAuth(
  * ```
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions<express.Request> & {
+  options: McpAuthClerkOptions & {
     clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
   },
 ) {
@@ -127,11 +125,7 @@ export function mcpAuthClerk(
   const client = options.clerkClient ?? clerkClient;
   return mcpAuth(
     (token, req) =>
-      verifyClerkOAuthToken(
-        client,
-        token,
-        resolveResourceUrl('mcpAuthClerk', options.resourceUrl, req),
-      ),
+      verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, getRequestUrl(req))),
     options,
   );
 }
@@ -221,11 +215,10 @@ function getResourceUrl(req: express.Request) {
   return url.toString();
 }
 
-// Get given a request, generate a protected resource metadata url for the
-// given resource url
-function getPRMUrl(req: express.Request) {
-  const [pathname] = req.originalUrl.split('?');
-  return `${req.protocol}://${req.get('host')}/.well-known/oauth-protected-resource${pathname}`;
+// The URL the request was made to. Behind a proxy, `req.protocol` and the host come from `X-Forwarded-*` headers only
+// when the app sets `trust proxy`.
+function getRequestUrl(req: express.Request) {
+  return `${req.protocol}://${req.get('host')}${req.originalUrl}`;
 }
 
 /**

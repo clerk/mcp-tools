@@ -551,17 +551,26 @@ describe('mcpAuthClerk', () => {
     expect(await res.json()).toMatchObject({ clientId: 'client-1', token: 'token-1' });
   });
 
-  test('checks the audience and challenge against a resourceUrl function for each request', async () => {
-    clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
+  function listedApp() {
     const app = new Hono();
+    app.use(async (c, next) => {
+      await next();
+      if (c.get('mcpAuthFailure')) c.header('X-Failure', c.get('mcpAuthFailure').reason);
+    });
     app.post(
       '/mcp',
       mcpAuthClerk({
-        resourceUrl: (c) => `${new URL(c.req.url).origin}/mcp`,
+        resourceUrl: ['https://a.example.com/mcp', 'https://b.example.com/mcp'],
         clerkClient: clerk as never,
       }),
       (c) => c.json({ ok: true }),
     );
+    return app;
+  }
+
+  test('checks the audience and challenge against the listed resourceUrl with the request origin', async () => {
+    clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
+    const app = listedApp();
 
     for (const origin of ['https://a.example.com', 'https://b.example.com']) {
       clerk.authenticateRequest.mockClear();
@@ -579,24 +588,30 @@ describe('mcpAuthClerk', () => {
     }
   });
 
-  test('fails with a Clerk error when a resourceUrl function returns an invalid URL', async () => {
-    const app = new Hono();
-    let error: unknown;
-    app.onError((err, c) => {
-      error = err;
-      return c.text('error', 500);
+  test('answers a request to an unlisted origin with a 421 and records why', async () => {
+    const res = await listedApp().request('https://evil.example.com/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-1' },
     });
-    app.post(
-      '/mcp',
-      mcpAuthClerk({ resourceUrl: () => '/mcp', clerkClient: clerk as never }),
-      (c) => c.json({ ok: true }),
-    );
 
-    const res = await post(app);
-
-    expect(res.status).toBe(500);
-    expect(String(error)).toContain('Clerk error: mcpAuth resourceUrl must be an absolute');
+    expect(res.status).toBe(421);
+    expect(res.headers.get('WWW-Authenticate')).toBeNull();
+    expect(res.headers.get('X-Failure')).toBe('misdirected_request');
     expect(clerk.authenticateRequest).not.toHaveBeenCalled();
+  });
+
+  test('throws at setup for an empty list or two URLs with one origin', () => {
+    expect(() => mcpAuthClerk({ resourceUrl: [], clerkClient: clerk as never })).toThrow(
+      'Clerk error: mcpAuthClerk resourceUrl must be a URL or a non-empty list of URLs',
+    );
+    expect(() =>
+      mcpAuthClerk({
+        resourceUrl: ['https://a.example.com/mcp', 'https://a.example.com/other'],
+        clerkClient: clerk as never,
+      }),
+    ).toThrow(
+      'Clerk error: mcpAuthClerk resourceUrl lists more than one URL for https://a.example.com',
+    );
   });
 
   test('answers a rejected token with the invalid_token challenge', async () => {
