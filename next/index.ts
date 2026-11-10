@@ -2,7 +2,7 @@ import type { AuthInfo } from '../mcp-types';
 import {
   type ClerkAuthOptions,
   type CustomVerifierAuthOptions,
-  type ProtectedResourceMetadataOptions,
+  type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertMcpAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertVerifierOrResourceUrl,
@@ -18,7 +18,13 @@ import {
   fetchAuthorizationServerMetadata,
 } from '../server';
 
-export type { ProtectedResourceMetadataOptions };
+/**
+ * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withMcpAuth`, all optional, plus
+ * `properties`, so one object, such as one exported from `lib/mcp.ts`, can be passed to both. It ignores
+ * `clerkClient`, `verifyToken`, and `onAuthFailure`.
+ */
+export type ProtectedResourceMetadataOptions =
+  SharedProtectedResourceMetadataOptions<McpAuthOptions>;
 
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
@@ -27,9 +33,11 @@ export * from '../server';
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withMcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
- * @param options - `resourceUrl`, the same value you give `withMcpAuth`, so the metadata's `resource` is the URL it
- * checks, and `properties`, additional metadata such as `scopes_supported`, which overrides the generated metadata.
- * Without `resourceUrl`, the `resource` is the URL the metadata route was requested at, without the well-known path.
+ * @param options - The options you give `withMcpAuth`, and `properties`, additional metadata such as
+ * `resource_name`, which overrides the generated metadata. `resourceUrl` makes the metadata's `resource` the URL
+ * `withMcpAuth` checks; without it, the `resource` is the URL the metadata route was requested at, without the
+ * well-known path. `scopes_supported` lists `requiredScopes` then `challengeScopes`, unless `properties` sets it, and
+ * then that list must include each of them.
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is not set.
  * @example

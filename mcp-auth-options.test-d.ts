@@ -2,9 +2,21 @@ import type { Request as ExpressRequest } from 'express';
 import type { Context } from 'hono';
 import { describe, test } from 'vitest';
 
-import { type McpAuthOptions as ExpressMcpAuthOptions, mcpAuth as expressMcpAuth } from './express';
-import { type McpAuthOptions as HonoMcpAuthOptions, mcpAuth as honoMcpAuth } from './hono';
-import { type McpAuthOptions as NextMcpAuthOptions, withMcpAuth as nextWithMcpAuth } from './next';
+import {
+  type McpAuthOptions as ExpressMcpAuthOptions,
+  mcpAuth as expressMcpAuth,
+  protectedResourceMetadataHandler as expressMetadataHandler,
+} from './express';
+import {
+  type McpAuthOptions as HonoMcpAuthOptions,
+  mcpAuth as honoMcpAuth,
+  protectedResourceMetadataHandler as honoMetadataHandler,
+} from './hono';
+import {
+  type McpAuthOptions as NextMcpAuthOptions,
+  withMcpAuth as nextWithMcpAuth,
+  protectedResourceMetadataHandler as nextMetadataHandler,
+} from './next';
 import type { ClerkOAuthClient } from './server';
 
 describe('the mcpAuth options', () => {
@@ -83,6 +95,62 @@ describe('the mcpAuth options', () => {
     honoMcpAuth(verifyToken, { resourceUrl });
     // @ts-expect-error mcp-handler's call form
     nextWithMcpAuth(handler, verifyToken);
+  });
+
+  test('are accepted by protectedResourceMetadataHandler as one shared object', () => {
+    const expressOptions = {
+      resourceUrl,
+      clerkClient,
+      requiredScopes: ['profile'],
+      challengeScopes: ['email'],
+    };
+    expressMcpAuth(expressOptions);
+    expressMetadataHandler(expressOptions);
+
+    const expressVerifierOptions = {
+      verifyToken: async (_token: string, _req: ExpressRequest) => undefined,
+      resourceUrl,
+    };
+    expressMcpAuth(expressVerifierOptions);
+    expressMetadataHandler(expressVerifierOptions);
+
+    const honoOptions = { resourceUrl, requiredScopes: ['profile'] };
+    honoMcpAuth(honoOptions);
+    honoMetadataHandler(honoOptions);
+
+    const honoVerifierOptions = { verifyToken: async (_token: string, _c: Context) => undefined };
+    honoMcpAuth(honoVerifierOptions);
+    honoMetadataHandler(honoVerifierOptions);
+
+    const nextOptions = {
+      resourceUrl,
+      clerkClient,
+      requiredScopes: ['profile'],
+      onAuthFailure: () => {},
+    } satisfies NextMcpAuthOptions;
+    nextWithMcpAuth(handler, nextOptions);
+    nextMetadataHandler(nextOptions);
+  });
+
+  // A literal written in the call gets the excess-property check a shared variable does not
+  test("accept every key of the adapter's mcpAuth options in protectedResourceMetadataHandler", () => {
+    expressMetadataHandler({ resourceUrl, clerkClient, requiredScopes: ['profile'] });
+    expressMetadataHandler({
+      verifyToken: async (_token: string, _req: ExpressRequest) => undefined,
+    });
+    honoMetadataHandler({ resourceUrl, clerkClient, challengeScopes: ['email'] });
+    honoMetadataHandler({ verifyToken: async (_token: string, _c: Context) => undefined });
+    nextMetadataHandler({ resourceUrl, clerkClient, requiredScopes: ['profile'] });
+    nextMetadataHandler({ verifyToken, onAuthFailure: () => {} });
+  });
+
+  test('keep the metadata options free of keys mcpAuth does not take', () => {
+    // @ts-expect-error the old form, additional metadata in place of options
+    expressMetadataHandler({ scopes_supported: ['email'] });
+    // @ts-expect-error a key neither call takes
+    honoMetadataHandler({ resourceUrl, resource_name: 'MCP' });
+    // @ts-expect-error a verifier for another framework's request
+    nextMetadataHandler({ verifyToken: async (_token: string, _c: Context) => undefined });
   });
 
   test('name one options type per adapter', () => {

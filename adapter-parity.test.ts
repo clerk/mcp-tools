@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 vi.mock('@clerk/express', () => ({ clerkClient: { authenticateRequest: vi.fn() } }));
 
 import type { AuthInfo } from './mcp-types';
-import { resourceMetadataUrlFor } from './bearer-auth';
+import { type ProtectedResourceMetadataOptions, resourceMetadataUrlFor } from './bearer-auth';
 import * as expressAdapter from './express';
 import * as honoAdapter from './hono';
 import * as nextAdapter from './next';
@@ -116,7 +116,8 @@ describe.each(metadataRoutes)('%s protectedResourceMetadataHandler', (_name, sen
   });
 });
 
-type MetadataOptions = expressAdapter.ProtectedResourceMetadataOptions;
+// The options every adapter's handler takes, without an adapter's verification-only keys
+type MetadataOptions = ProtectedResourceMetadataOptions;
 
 /** Sends a metadata request to a handler whose options are made from the origin the app sees. */
 type SendWithOptions = (optionsFor: (origin: string) => MetadataOptions) => ReturnType<Send>;
@@ -206,6 +207,121 @@ describe.each(metadataRoutesWithOptions)(
         resource_documentation: 'https://example.com',
       });
     });
+
+    // RFC 9728 section 2: `scopes_supported` lists the scope values used to request access to this resource
+    test('lists requiredScopes then challengeScopes, each once, as scopes_supported', async () => {
+      const res = await send(() => ({
+        resourceUrl: 'https://public.example.com/mcp',
+        requiredScopes: ['profile', 'email'],
+        challengeScopes: ['email', 'projects:read'],
+      }));
+
+      expect(res.status).toBe(200);
+      expect((res.body as { scopes_supported: unknown }).scopes_supported).toEqual([
+        'profile',
+        'email',
+        'projects:read',
+      ]);
+    });
+
+    test('leaves scopes_supported out without scopes', async () => {
+      const res = await send(() => ({ resourceUrl: 'https://public.example.com/mcp' }));
+
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty('scopes_supported');
+    });
+
+    // RFC 9728 section 2 lets a resource advertise scopes it does not require
+    test('uses an explicit scopes_supported that lists every scope as given', async () => {
+      const res = await send(() => ({
+        resourceUrl: 'https://public.example.com/mcp',
+        requiredScopes: ['profile'],
+        challengeScopes: ['email'],
+        properties: { scopes_supported: ['email', 'admin', 'profile'] },
+      }));
+
+      expect(res.status).toBe(200);
+      expect((res.body as { scopes_supported: unknown }).scopes_supported).toEqual([
+        'email',
+        'admin',
+        'profile',
+      ]);
+    });
+  },
+);
+
+/** Serves a metadata request from a handler given `options`, a shared object typed by the adapter's own options. */
+const metadataRoutesWithAuthOptions: [string, (options: object) => ReturnType<Send>][] = [
+  [
+    'express',
+    (options) => {
+      const app = express();
+      app.use(
+        WELL_KNOWN,
+        expressAdapter.protectedResourceMetadataHandler(
+          options as expressAdapter.ProtectedResourceMetadataOptions,
+        ),
+      );
+      return sendExpress(app, `${WELL_KNOWN}/mcp`);
+    },
+  ],
+  [
+    'hono',
+    async (options) => {
+      const app = new Hono();
+      app.get(
+        '*',
+        honoAdapter.protectedResourceMetadataHandler(
+          options as honoAdapter.ProtectedResourceMetadataOptions,
+        ),
+      );
+      return answer(await app.request(`${origin}${WELL_KNOWN}/mcp`), origin);
+    },
+  ],
+  [
+    'next',
+    async (options) =>
+      answer(
+        nextAdapter.protectedResourceMetadataHandler(
+          options as nextAdapter.ProtectedResourceMetadataOptions,
+        )(new Request(`${origin}${WELL_KNOWN}/mcp`)),
+        origin,
+      ),
+  ],
+];
+
+describe.each(metadataRoutesWithAuthOptions)(
+  '%s protectedResourceMetadataHandler given the mcpAuth options',
+  (_name, send) => {
+    beforeEach(() => {
+      process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    });
+
+    afterEach(() => {
+      delete process.env.CLERK_PUBLISHABLE_KEY;
+      delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+    });
+
+    test.each([
+      ['clerkClient', { clerkClient: { authenticateRequest: vi.fn() } }],
+      ['verifyToken', { verifyToken: vi.fn() }],
+    ])('ignores %s', async (_key, verifier) => {
+      const res = await send({
+        resourceUrl: 'https://public.example.com/mcp',
+        requiredScopes: ['profile'],
+        ...verifier,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        resource: 'https://public.example.com/mcp',
+        scopes_supported: ['profile'],
+      });
+      for (const fn of Object.values(verifier)) {
+        expect(fn instanceof Function ? fn : fn.authenticateRequest).not.toHaveBeenCalled();
+      }
+    });
   },
 );
 
@@ -239,6 +355,27 @@ describe.each([
     expect(() =>
       protectedResourceMetadataHandler({ resourceUrl: [`${origin}/mcp`, `${origin}/other`] }),
     ).toThrow('Clerk error: protectedResourceMetadataHandler resourceUrl lists more than one URL');
+  });
+
+  test.each([
+    ['a required scope', { requiredScopes: ['profile', 'email'] }, 'email'],
+    ['a challenge scope', { challengeScopes: ['projects:read'] }, 'projects:read'],
+  ])('throws at setup when scopes_supported leaves out %s', (_case, scopes, missing) => {
+    expect(() =>
+      protectedResourceMetadataHandler({
+        resourceUrl: origin,
+        ...scopes,
+        properties: { scopes_supported: ['profile'] },
+      }),
+    ).toThrow(
+      `Clerk error: protectedResourceMetadataHandler properties.scopes_supported leaves out ${missing},`,
+    );
+  });
+
+  test('throws at setup for a requiredScopes entry that is not a scope token', () => {
+    expect(() => protectedResourceMetadataHandler({ requiredScopes: ['two words'] })).toThrow(
+      'Clerk error: protectedResourceMetadataHandler requiredScopes must contain only scope tokens',
+    );
   });
 });
 
