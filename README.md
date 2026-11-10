@@ -315,10 +315,10 @@ export async function initializeMCPConnection(mcpEndpoint: string) {
 After the user completes the OAuth flow, you'll need to handle the callback:
 
 ```ts
-import { completeAuthWithCode } from '@clerk/mcp-tools/client';
+import { completeOAuth } from '@clerk/mcp-tools/client';
 
 export async function handleOAuthCallback(code: string, state: string) {
-  const result = await completeAuthWithCode({
+  const result = await completeOAuth({
     state,
     code,
     store,
@@ -334,10 +334,10 @@ export async function handleOAuthCallback(code: string, state: string) {
 Once authentication is complete, you can call MCP tools:
 
 ```ts
-import { getClientBySessionId } from '@clerk/mcp-tools/client';
+import { getMcpClientBySessionId } from '@clerk/mcp-tools/client';
 
 export async function callMCPTool(sessionId: string, toolName: string, args: any) {
-  const { client, connect } = getClientBySessionId({
+  const { client, connect } = getMcpClientBySessionId({
     sessionId,
     store,
   });
@@ -370,7 +370,9 @@ As such, each of the client functions require that you pass in a store adapter. 
 #### File System Store (Development)
 
 ```ts
-import fsStore from '@clerk/mcp-tools/stores/fs';
+import { createFsStore } from '@clerk/mcp-tools/stores/fs';
+
+const store = createFsStore();
 ```
 
 This uses a temporary file and is fast, easy, and adequate for local development and testing. However, it's not suitable for production since the file could be deleted at any time.
@@ -441,7 +443,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Arguments**:
 
     ```ts
-    interface CreateKnownCredentialsMcpClientParams {
+    interface CreateKnownCredentialsMcpClientOptions {
       /**
        * OAuth client id, expected to be collected via user input
        */
@@ -488,7 +490,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface McpClientReturnType {
+    interface McpClientConnection {
       /**
        * Represents a session associated with the connected MCP service endpoint.
        */
@@ -520,7 +522,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Arguments**:
 
     ```ts
-    interface CreateDynamicallyRegisteredMcpClientParams {
+    interface CreateDynamicallyRegisteredMcpClientOptions {
       /**
        * The endpoint of the MCP service, expected to be collected via user input
        */
@@ -572,7 +574,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface McpClientReturnType {
+    interface McpClientConnection {
       /**
        * Represents a session associated with the connected MCP service endpoint.
        */
@@ -599,12 +601,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     }
     ```
 
-- `getClientBySessionId`
+- `getMcpClientBySessionId`
   - **Description:** Given an existing session id, constructs a MCP client that matches the information used to create the client/session initially. Intended to be used in OAuth callback routes and any subsequent MCP calls once the service has been initialized.
   - **Arguments**:
 
   ```ts
-  interface GetClientBySessionIdParams {
+  interface GetMcpClientBySessionIdOptions {
     /**
      * The session id to retrieve the client details for
      */
@@ -625,7 +627,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface McpClientReturnType {
+    interface McpClientConnection {
       /**
        * Represents a session associated with the connected MCP service endpoint.
        */
@@ -652,12 +654,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     }
     ```
 
-- `completeAuthWithCode`
+- `completeOAuth`
   - **Description:** Designed to be used in the OAuth callback route. Passing in the code, state, and your store will finish the auth process
   - **Arguments:**
 
     ```ts
-    interface CompleteAuthWithCodeParams {
+    interface CompleteOAuthOptions {
       /**
        * The authorization code returned from the auth provider via querystring.
        * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1
@@ -679,7 +681,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface CompleteAuthWithCodeReturnType {
+    interface CompleteOAuthResult {
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119

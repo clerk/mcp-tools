@@ -12,17 +12,17 @@ type Surface = { values: string[]; types: string[] } | null;
 const PINNED: Record<string, Surface> = {
   './client': {
     values: [
-      'completeAuthWithCode',
+      'completeOAuth',
       'createDynamicallyRegisteredMcpClient',
       'createKnownCredentialsMcpClient',
-      'getClientBySessionId',
+      'getMcpClientBySessionId',
     ],
     types: [
-      'ClientData',
-      'CreateDynamicallyRegisteredMcpClientParams',
-      'CreateKnownCredentialsMcpClientParams',
+      'CreateDynamicallyRegisteredMcpClientOptions',
+      'CreateKnownCredentialsMcpClientOptions',
       'JsonSerializable',
-      'McpClientReturnType',
+      'McpClientConnection',
+      'McpClientData',
       'McpClientStore',
     ],
   },
@@ -148,9 +148,7 @@ const PINNED: Record<string, Surface> = {
       'WebStandardStreamableHttpTransport',
     ],
   },
-  // A bare directory, not a module
-  './stores': null,
-  './stores/fs': { values: ['createFsStore', 'default'], types: ['FsStoreConfig'] },
+  './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
   './stores/redis': { values: ['createRedisStore'], types: ['RedisStoreConfig'] },
   './stores/postgres': { values: ['createPostgresStore'], types: ['PostgresStoreConfig'] },
   './stores/sqlite': { values: ['createSqliteStore'], types: ['SqliteStoreConfig'] },
