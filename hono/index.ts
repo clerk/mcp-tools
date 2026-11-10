@@ -9,6 +9,7 @@ import {
   type McpAuthFailure,
   type McpAuthOptions,
   McpAuthError,
+  McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   audienceFor,
@@ -29,7 +30,7 @@ declare module 'hono' {
   }
 }
 
-export { McpAuthError, type McpAuthFailure };
+export { McpAuthError, type McpAuthFailure, McpTokenVerificationError };
 
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;

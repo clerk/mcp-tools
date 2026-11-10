@@ -5,6 +5,7 @@ import {
   type McpAuthClerkOptions,
   type McpAuthOptions,
   McpAuthError,
+  McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   audienceFor,
@@ -260,4 +261,4 @@ function getResourceUrl(req: Request): string {
 }
 
 // re-export the verifyClerkToken function for convenience
-export { McpAuthError, requireAdditionalScopes, verifyClerkToken };
+export { McpAuthError, McpTokenVerificationError, requireAdditionalScopes, verifyClerkToken };

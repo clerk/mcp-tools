@@ -24,6 +24,8 @@ import { generateClerkProtectedResourceMetadata } from '../server';
 
 import {
   McpAuthError,
+  type McpAuthFailure,
+  McpTokenVerificationError,
   protectedResourceHandler,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
@@ -415,6 +417,32 @@ describe('mcpAuth', () => {
     expect(errors[0]).toMatchObject({ reason: 'verification_failed', cause });
   });
 
+  test('rejects a token whose verifier throws an McpTokenVerificationError, with it as the cause', async () => {
+    const cause = new McpTokenVerificationError('token-revoked', 'The token was revoked');
+    const failures: unknown[] = [];
+    const app = new Hono();
+    app.use(async (c, next) => {
+      await next();
+      failures.push(c.get('mcpAuthFailure'));
+    });
+    app.get(
+      '/mcp',
+      mcpAuth(async () => {
+        throw cause;
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
+    expect(await res.text()).not.toContain('revoked');
+    expect(failures).toEqual([{ reason: 'invalid_token', cause }]);
+  });
+
   test('calls next and stores authInfo in context when token is valid', async () => {
     const authInfo: AuthInfo = {
       token: 'valid',
@@ -625,21 +653,60 @@ describe('mcpAuthClerk', () => {
     );
   });
 
+  test('records what Clerk reported for a rejected token without sending it to the client', async () => {
+    clerk.authenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'token-verification-failed',
+      message: 'JWT is expired. (code=token-verification-failed, status=n/a)',
+    });
+    const failures: unknown[] = [];
+    const app = new Hono();
+    app.use(async (c, next) => {
+      await next();
+      failures.push(c.get('mcpAuthFailure'));
+    });
+    app.post('/mcp', mcpAuthClerk({ resourceUrl, clerkClient: clerk as never }), (c) =>
+      c.json({ ok: true }),
+    );
+
+    const res = await post(app);
+
+    const [failure] = failures as McpAuthFailure[];
+    expect(failure?.reason).toBe('invalid_token');
+    expect(failure?.cause).toBeInstanceOf(McpTokenVerificationError);
+    expect(failure?.cause).toMatchObject({
+      code: 'token-verification-failed',
+      message: 'JWT is expired. (code=token-verification-failed, status=n/a)',
+    });
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+    );
+    expect(await res.text()).not.toContain('expired');
+  });
+
   test.each(['unexpected-error', 'secret-key-invalid'])(
     'answers a %s verification failure with a 500 instead of a challenge',
     async (reason) => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       clerk.authenticateRequest.mockResolvedValue({
         isAuthenticated: false,
         reason,
         message: 'Unexpected error',
       });
+      const errors: unknown[] = [];
+      const app = clerkApp();
+      app.onError((err, c) => {
+        errors.push(err);
+        return c.text('error', 500);
+      });
 
-      const res = await post(clerkApp());
+      const res = await post(app);
 
       expect(res.status).toBe(500);
       expect(res.headers.get('WWW-Authenticate')).toBeNull();
-      consoleError.mockRestore();
+      expect(errors[0]).toBeInstanceOf(McpAuthError);
+      const { cause } = errors[0] as McpAuthError;
+      expect(cause).toBeInstanceOf(McpTokenVerificationError);
+      expect(cause).toMatchObject({ code: reason, message: 'Unexpected error' });
     },
   );
 

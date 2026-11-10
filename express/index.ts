@@ -9,6 +9,7 @@ import {
   type McpAuthFailure,
   type McpAuthOptions,
   McpAuthError,
+  McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   audienceFor,
@@ -30,7 +31,7 @@ declare global {
   }
 }
 
-export { McpAuthError, type McpAuthFailure };
+export { McpAuthError, type McpAuthFailure, McpTokenVerificationError };
 
 /**
  * Express middleware that enforces authentication for MCP requests.
