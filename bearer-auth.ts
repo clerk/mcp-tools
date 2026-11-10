@@ -93,22 +93,40 @@ export type MiddlewareAuthOptions<Req> =
   | CustomVerifierAuthOptions<Req>;
 
 /**
- * The options of every adapter's `protectedResourceMetadataHandler`.
+ * The options of every adapter's `protectedResourceMetadataHandler`: the adapter's `McpAuthOptions`, all optional,
+ * plus `properties`, so one object can be passed to both. The handler reads `resourceUrl`, `requiredScopes`,
+ * `challengeScopes`, and `properties`, and ignores the keys that only verify tokens, such as `clerkClient` and
+ * `verifyToken`.
  */
-export type ProtectedResourceMetadataOptions = {
+export type ProtectedResourceMetadataOptions<
+  AuthOptions extends BaseAuthOptions = BaseAuthOptions,
+> = Partial<AuthOptions> & {
   /**
-   * The `resourceUrl` given to `mcpAuth` or `withMcpAuth` for the endpoint this metadata describes: one URL, or a list
-   * with one for each origin. The metadata's `resource` is then the URL they check for the same request, whatever
-   * origin the app sees behind a proxy for a single URL, and with a list a request to an origin none of them has gets
-   * a 421. Without it, `resource` is derived from the URL the metadata route was requested at, which can differ from
-   * the public URL behind a proxy.
+   * The `resourceUrl` given to `mcpAuth` or `withMcpAuth` for the endpoint this metadata describes: one URL, or a
+   * list with one for each origin. The metadata's `resource` is then the URL they check for the same request,
+   * whatever origin the app sees behind a proxy for a single URL, and with a list a request to an origin none of
+   * them has gets a 421. Without it, `resource` is derived from the URL the metadata route was requested at, which
+   * can differ from the public URL behind a proxy.
    */
   resourceUrl?: McpResourceUrl | undefined;
   /**
-   * Additional metadata, such as `resource_name` or `scopes_supported`. It overrides the generated metadata.
+   * Additional metadata, such as `resource_name`. It overrides the generated metadata. Without `scopes_supported`,
+   * the metadata lists `requiredScopes` then `challengeScopes`, each once. A `scopes_supported` given here is used
+   * as is, and must list every one of them.
    */
   properties?: Record<string, unknown> | undefined;
 };
+
+// The keys of any adapter's `McpAuthOptions` the metadata handler accepts, so one object can be passed to both.
+const protectedResourceMetadataOptionKeys = new Set([
+  'resourceUrl',
+  'requiredScopes',
+  'challengeScopes',
+  'properties',
+  'clerkClient',
+  'verifyToken',
+  'onAuthFailure',
+]);
 
 type BearerResult =
   | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
@@ -159,10 +177,12 @@ function assertResourceUrls(caller: string, resourceUrl: unknown) {
 }
 
 /**
- * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only `resourceUrl` and
- * `properties`, then checks `resourceUrl` as `mcpAuth` does. The handler took the additional metadata itself before it
- * took options, so code written for that form, such as `protectedResourceMetadataHandler({ scopes_supported })`, fails
- * at startup with a message naming the new form instead of serving metadata without it.
+ * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only the keys of `mcpAuth`'s
+ * options and `properties`, then checks `resourceUrl` and the scopes as `mcpAuth` does, and that an explicit
+ * `properties.scopes_supported` lists every required and challenge scope. The handler took the additional metadata
+ * itself before it took options, so code written for that form, such as
+ * `protectedResourceMetadataHandler({ scopes_supported })`, fails at startup with a message naming the new form
+ * instead of serving metadata without it.
  */
 export function assertProtectedResourceMetadataOptions(options: unknown) {
   if (options === undefined) return;
@@ -170,13 +190,30 @@ export function assertProtectedResourceMetadataOptions(options: unknown) {
     typeof options === 'object' &&
     options !== null &&
     !Array.isArray(options) &&
-    Object.keys(options).every((key) => key === 'resourceUrl' || key === 'properties');
+    Object.keys(options).every((key) => protectedResourceMetadataOptionKeys.has(key));
   if (!isOptions) {
     throw new Error(
-      "Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties. Pass the resourceUrl you give mcpAuth or withMcpAuth, and any other metadata in properties, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp', properties: { scopes_supported: ['email'] } })",
+      "Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties. Pass the options you give mcpAuth or withMcpAuth, and any other metadata in properties, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp', properties: { resource_name: 'Example' } })",
     );
   }
-  assertMcpAuthOptions('protectedResourceMetadataHandler', options);
+  const { properties, ...authOptions } = options as ProtectedResourceMetadataOptions;
+  assertMcpAuthOptions('protectedResourceMetadataHandler', authOptions);
+
+  const listed = properties?.scopes_supported;
+  if (listed === undefined) return;
+  const missing = scopesSupported(authOptions).filter(
+    (scope) => !Array.isArray(listed) || !listed.includes(scope),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Clerk error: protectedResourceMetadataHandler properties.scopes_supported leaves out ${missing.join(', ')}, which requiredScopes or challengeScopes lists. Add them to scopes_supported, or leave scopes_supported out to list requiredScopes and challengeScopes automatically`,
+    );
+  }
+}
+
+// `requiredScopes` then `challengeScopes`, each once: the scopes a token for this resource is requested with.
+function scopesSupported({ requiredScopes = [], challengeScopes = [] }: BaseAuthOptions): string[] {
+  return [...new Set([...requiredScopes, ...challengeScopes])];
 }
 
 /**
@@ -184,14 +221,15 @@ export function assertProtectedResourceMetadataOptions(options: unknown) {
  * `undefined` when a list of `resourceUrl`s has none with the request's origin, which the adapters answer with a 421,
  * as `mcpAuth` does (RFC 9110 section 15.5.20). The `resource` is the `resourceUrl` for the request, the URL `mcpAuth`
  * checks, or without `resourceUrl` the resource the requested metadata URL describes, so it is identical to the URL
- * the client derived the metadata URL from (RFC 9728 section 3.3).
+ * the client derived the metadata URL from (RFC 9728 section 3.3). `scopes_supported` (RFC 9728 section 2) lists
+ * `requiredScopes` then `challengeScopes`, each once, unless `properties` sets it, and is left out without scopes.
  * @param options - The handler's options, already checked
  * @param metadataUrl - The URL the metadata route was requested at
  * @param publishableKey - The Clerk publishable key
  * @returns The metadata, or `undefined` for a request to an origin no `resourceUrl` lists
  */
 export function clerkProtectedResourceMetadata(
-  { resourceUrl, properties }: ProtectedResourceMetadataOptions,
+  { resourceUrl, requiredScopes, challengeScopes, properties }: ProtectedResourceMetadataOptions,
   metadataUrl: string,
   publishableKey: string,
 ) {
@@ -200,7 +238,12 @@ export function clerkProtectedResourceMetadata(
       ? resourceFromMetadataUrl(metadataUrl)
       : matchResourceUrl(resourceUrl, metadataUrl);
   if (resource === undefined) return undefined;
-  return generateProtectedResourceMetadata({ publishableKey, resourceUrl: resource, properties });
+  const scopes = scopesSupported({ requiredScopes, challengeScopes });
+  return generateProtectedResourceMetadata({
+    publishableKey,
+    resourceUrl: resource,
+    properties: scopes.length > 0 ? { scopes_supported: scopes, ...properties } : properties,
+  });
 }
 
 /**

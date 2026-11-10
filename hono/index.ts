@@ -4,7 +4,7 @@ import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
   type MiddlewareAuthOptions,
-  type ProtectedResourceMetadataOptions,
+  type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertServerFactory,
@@ -15,8 +15,6 @@ import {
   requirePublishableKey,
 } from '../bearer-auth';
 import { type McpAuthFailure, fetchAuthorizationServerMetadata } from '../server';
-
-export type { ProtectedResourceMetadataOptions };
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -37,6 +35,13 @@ export * from '../server';
  * function verifies each token with the Hono context, `resourceUrl` is optional, and `clerkClient` is not allowed.
  */
 export type McpAuthOptions = MiddlewareAuthOptions<Context>;
+
+/**
+ * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`, so one object
+ * can be passed to both. It ignores `clerkClient` and `verifyToken`.
+ */
+export type ProtectedResourceMetadataOptions =
+  SharedProtectedResourceMetadataOptions<McpAuthOptions>;
 
 /**
  * The part of a web-standard streamable HTTP server transport, such as `WebStandardStreamableHTTPServerTransport` from
@@ -65,9 +70,11 @@ type ClerkEnv = {
  * A Hono handler that serves RFC 9728 protected resource metadata for a Clerk instance, using the publishable key in
  * the `CLERK_PUBLISHABLE_KEY` environment variable. Mount it at the path `mcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
- * @param options - `resourceUrl`, the same value you give `mcpAuth`, so the metadata's `resource` is the URL it
- * checks, and `properties`, additional metadata such as `scopes_supported`, which overrides the generated metadata.
- * Without `resourceUrl`, the `resource` is the URL the metadata route was requested at, without the well-known path.
+ * @param options - The options you give `mcpAuth`, and `properties`, additional metadata such as `resource_name`,
+ * which overrides the generated metadata. `resourceUrl` makes the metadata's `resource` the URL `mcpAuth` checks;
+ * without it, the `resource` is the URL the metadata route was requested at, without the well-known path.
+ * `scopes_supported` lists `requiredScopes` then `challengeScopes`, unless `properties` sets it, and then that list
+ * must include each of them.
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
  * `CLERK_PUBLISHABLE_KEY` is not set.
  * @example
