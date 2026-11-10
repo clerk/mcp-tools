@@ -6,7 +6,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type express from 'express';
 import {
   type McpAuthClerkOptions,
+  type McpAuthFailure,
   type McpAuthOptions,
+  McpAuthError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
@@ -18,6 +20,17 @@ import {
   generateClerkProtectedResourceMetadata,
   generateProtectedResourceMetadata,
 } from '../server';
+
+declare global {
+  namespace Express {
+    interface Locals {
+      /** Why `mcpAuth` answered this request with a 401 or 403 challenge, when it did. */
+      mcpAuthFailure?: McpAuthFailure;
+    }
+  }
+}
+
+export { McpAuthError, type McpAuthFailure };
 
 /**
  * Express middleware that enforces authentication for MCP requests.
@@ -61,10 +74,12 @@ export function mcpAuth(
         ? resourceMetadataUrlFor(options.resourceUrl)
         : getPRMUrl(req),
       requiredScopes: options?.requiredScopes,
+      challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
     });
 
     if (!result.ok) {
+      res.locals.mcpAuthFailure = result.failure;
       res
         .status(result.status)
         .set('WWW-Authenticate', result.challenge)
