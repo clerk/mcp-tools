@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(zod@4.6.7)
     devDependencies:
       '@changesets/cli':
         specifier: ^2.29.4
@@ -27,6 +23,9 @@ importers:
       '@clerk/nextjs':
         specifier: ^7.9.5
         version: 7.9.25(next@15.5.15(react-dom@19.1.0(react@19.1.0))(react@19.1.0))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.6.7)
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
