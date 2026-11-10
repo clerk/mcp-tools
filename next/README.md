@@ -110,32 +110,9 @@ The MCP client functionality uses the core `@clerk/mcp-tools/client` utilities. 
 
 Key Next.js-specific patterns include:
 
-### `protectedResourceHandler`
-
-Generic Next.js route handler that returns OAuth protected resource metadata for any OAuth authorization server, as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728).
-
-**Parameters:**
-
-- `authServerUrl: string` - The URL of your OAuth authorization server
-- `properties?: Record<string, unknown>` - Additional metadata properties. Set `resource` to the `resourceUrl` you pass to `mcpAuth`: the route derives it from the request when it is not set.
-
-**Example:**
-
-```ts
-// app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/next';
-
-const handler = protectedResourceHandler({
-  authServerUrl: 'https://auth.example.com',
-  properties: { resource: 'https://mcp.example.com/mcp' },
-});
-
-export { handler as GET };
-```
-
 ### `protectedResourceHandlerClerk`
 
-Next.js route handler that returns OAuth protected resource metadata for Clerk integration.
+Next.js route handler that returns OAuth protected resource metadata for Clerk integration, as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, see [With Custom Authentication](#with-custom-authentication).
 
 **Example:**
 
@@ -266,17 +243,24 @@ The protected resource handlers will automatically use these values.
 
 ### With Custom Authentication
 
-For custom authentication systems, you'll need to implement your own token verification and use the generic handlers:
+For custom authentication systems, verify tokens with `mcpAuth` and serve the metadata from your own route with `generateProtectedResourceMetadata`. Pass it the same `resourceUrl` you pass to `mcpAuth`:
 
 ```ts
-// app/.well-known/oauth-protected-resource/route.ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/next';
+// app/.well-known/oauth-protected-resource/mcp/route.ts
+import { metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
+import { corsHeaders, generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 
-const handler = protectedResourceHandler({
-  authServerUrl: 'https://your-auth-server.com',
-});
+export function GET() {
+  return Response.json(
+    generateProtectedResourceMetadata({
+      authServerUrl: 'https://your-auth-server.com',
+      resourceUrl: 'https://mcp.example.com/mcp',
+    }),
+    { headers: corsHeaders },
+  );
+}
 
-export { handler as GET };
+export const OPTIONS = metadataCorsOptionsRequestHandler();
 ```
 
 ## Session Management and Stores

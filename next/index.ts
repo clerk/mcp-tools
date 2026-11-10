@@ -17,43 +17,9 @@ import {
   corsHeaders,
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
-  generateProtectedResourceMetadata,
   requireAdditionalScopes,
   verifyClerkToken,
 } from '../server';
-
-/**
- * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728
- * @see https://datatracker.ietf.org/doc/html/rfc9728
- * @param authServerUrl - The URL of the OAuth 2.0 Authorization Server.
- * @param properties - Additional properties to include in the metadata, such as the `resource` that matches the
- * `resourceUrl` of `mcpAuth`.
- */
-export function protectedResourceHandler({
-  authServerUrl,
-  properties,
-}: {
-  authServerUrl: string;
-  properties?: Record<string, unknown>;
-}): (req: Request) => Response {
-  return (req: Request): Response => {
-    const metadata = generateProtectedResourceMetadata({
-      authServerUrl: authServerUrl,
-      resourceUrl: resourceFromMetadataUrl(req.url),
-      properties,
-    });
-
-    return Response.json(metadata, {
-      headers: Object.assign(
-        {
-          'Cache-Control': 'max-age=3600',
-          'Content-Type': 'application/json',
-        },
-        corsHeaders,
-      ),
-    });
-  };
-}
 
 /**
  * OAuth 2.0 Protected Resource Metadata endpoint based on RFC 9728

@@ -27,7 +27,6 @@ import {
   McpAuthError,
   type McpAuthFailure,
   McpTokenVerificationError,
-  protectedResourceHandler,
   protectedResourceHandlerClerk,
   authServerMetadataHandlerClerk,
   mcpAuth,
@@ -57,49 +56,6 @@ function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });
 }
 
-describe('protectedResourceHandler', () => {
-  test('returns metadata with auth server URL and derived resource URL', async () => {
-    const app = new Hono();
-    app.get(
-      '/.well-known/oauth-protected-resource',
-      protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
-    );
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.resource).toBe('http://myapp.com');
-    expect(json.authorization_servers).toEqual(['https://auth.example.com']);
-  });
-
-  test('strips sub-path from resource URL', async () => {
-    const app = new Hono();
-    app.get(
-      '/.well-known/oauth-protected-resource/mcp',
-      protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
-    );
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource/mcp');
-    const json = await res.json();
-    expect(json.resource).toBe('http://myapp.com/mcp');
-  });
-
-  test('merges additional properties', async () => {
-    const app = new Hono();
-    app.get(
-      '/.well-known/oauth-protected-resource',
-      protectedResourceHandler({
-        authServerUrl: 'https://auth.example.com',
-        properties: { scopes_supported: ['read', 'write'] },
-      }),
-    );
-
-    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
-    const json = await res.json();
-    expect(json.scopes_supported).toEqual(['read', 'write']);
-  });
-});
-
 describe('protectedResourceHandlerClerk', () => {
   beforeEach(() => {
     vi.mocked(env).mockImplementation(() => process.env);
@@ -119,6 +75,18 @@ describe('protectedResourceHandlerClerk', () => {
     const json = await res.json();
     expect(json.authorization_servers).toEqual(['https://clerk.example.com']);
     expect(json.resource).toBe('http://myapp.com');
+  });
+
+  test('merges additional properties', async () => {
+    const app = new Hono();
+    app.get(
+      '/.well-known/oauth-protected-resource',
+      protectedResourceHandlerClerk({ scopes_supported: ['read', 'write'] }),
+    );
+
+    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
+    const json = await res.json();
+    expect(json.scopes_supported).toEqual(['read', 'write']);
   });
 
   test('works in edge runtimes without Node.js Buffer', () => {

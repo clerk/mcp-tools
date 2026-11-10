@@ -21,7 +21,6 @@ import {
 import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
-  generateProtectedResourceMetadata,
 } from '../server';
 
 declare module 'hono' {
@@ -66,23 +65,6 @@ export interface WebStandardStreamableHttpTransport {
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
 };
-
-export function protectedResourceHandler({
-  authServerUrl,
-  properties,
-}: {
-  authServerUrl: string;
-  properties?: Record<string, unknown>;
-}) {
-  return (c: Context) => {
-    const metadata = generateProtectedResourceMetadata({
-      authServerUrl,
-      resourceUrl: resourceFromMetadataUrl(c.req.url),
-      properties,
-    });
-    return c.json(metadata);
-  };
-}
 
 export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
   return (c: Context) => {
