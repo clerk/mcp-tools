@@ -86,6 +86,7 @@ const PINNED: Record<string, Surface> = {
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
+      'ProtectedResourceMetadataOptions',
     ],
   },
   './next/client': {
@@ -114,6 +115,7 @@ const PINNED: Record<string, Surface> = {
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
+      'ProtectedResourceMetadataOptions',
     ],
   },
   './hono': {
@@ -138,6 +140,7 @@ const PINNED: Record<string, Surface> = {
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
+      'ProtectedResourceMetadataOptions',
     ],
   },
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },

@@ -173,7 +173,7 @@ When an agent drives a browser for your user and lands on your app's sign-in pag
 
 The link starts a session as the user, so the access token check in front of this tool must be strict. Verify the token with `authenticateRequest` and an `audience` equal to your MCP server's resource URL. Here is a Next.js setup on `@modelcontextprotocol/server` 2.1 or later, so that the SDK can send the step-up challenge. It calls `createMcpHandler` from the SDK directly, in place of the `mcp-handler` route from the [Next.js guide](./next/README.md#building-an-mcp-server). The tool also works behind the guide's `withMcpAuth` route, which checks the audience and sets `resourceMetadataUrl`.
 
-First, serve the protected resource metadata at the path form of the MCP endpoint, with `resource` set to the same URL the route uses as its `audience`. MCP clients send that `resource` when they request a token, and Clerk puts it in the token's `aud`, so the two must match. A metadata route at the root `/.well-known/oauth-protected-resource` advertises only the origin, and every token would then fail the audience check. Enable the scopes the tool requires for the OAuth application. List them in `scopes_supported` too: a client without step-up support requests that list on its first connection, so that is the only way it asks for them. See [Step-up for your own tools](#step-up-for-your-own-tools):
+First, serve the protected resource metadata at the path form of the MCP endpoint, with `resourceUrl` set to the same URL the route uses as its `audience`. The metadata's `resource` is that URL. MCP clients send that `resource` when they request a token, and Clerk puts it in the token's `aud`, so the two must match. A metadata route at the root `/.well-known/oauth-protected-resource` advertises only the origin, and every token would then fail the audience check. Enable the scopes the tool requires for the OAuth application. List them in `scopes_supported` too: a client without step-up support requests that list on its first connection, so that is the only way it asks for them. See [Step-up for your own tools](#step-up-for-your-own-tools):
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
@@ -181,8 +181,8 @@ import { metadataCorsHandler, protectedResourceMetadataHandler } from '@clerk/mc
 
 // List every scope the server's tools need, here the `requiredScopes` of the tool below.
 const handler = protectedResourceMetadataHandler({
-  resource: 'https://app.example.com/mcp',
-  scopes_supported: ['browser_session'],
+  resourceUrl: 'https://app.example.com/mcp',
+  properties: { scopes_supported: ['browser_session'] },
 });
 const corsHandler = metadataCorsHandler();
 

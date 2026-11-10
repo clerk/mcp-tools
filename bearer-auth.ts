@@ -8,6 +8,7 @@ import {
   type McpResourceUrl,
   McpAuthError,
   McpTokenVerificationError,
+  generateProtectedResourceMetadata,
   matchResourceUrl,
   toClerkAuthInfo,
 } from './server';
@@ -23,9 +24,8 @@ export type BaseAuthOptions = {
    * `Host`, list those URLs or, in Express, set `trust proxy`. The challenge's `resource_metadata` is derived from it.
    * With `verifyToken` it can be omitted, and it is then derived from the incoming request, which can differ from the
    * public URL behind a proxy. Without `verifyToken` it is required: Clerk rejects a token whose `aud` claim does not
-   * include the URL for the request's origin, so a token issued for one listed URL does not pass on another. Set the
-   * protected resource metadata route's `resource` to the same URL, as `matchResourceUrl` picks it, since that route
-   * also derives it from the request.
+   * include the URL for the request's origin, so a token issued for one listed URL does not pass on another. Pass the
+   * same value to `protectedResourceMetadataHandler`, so its `resource` is the URL checked here.
    */
   resourceUrl?: McpResourceUrl | undefined;
   /**
@@ -49,8 +49,8 @@ export type ClerkAuthOptions = BaseAuthOptions & {
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. Clerk rejects a token whose `aud` claim does not include the URL for the
    * request's origin, so a token issued for one listed URL does not pass on another, and a request to any other origin
-   * gets a 421. The challenge's `resource_metadata` is derived from it. Set the protected resource metadata route's
-   * `resource` to the same URL, as `matchResourceUrl` picks it, since that route derives it from the request.
+   * gets a 421. The challenge's `resource_metadata` is derived from it. Pass the same value to
+   * `protectedResourceMetadataHandler`, so its `resource` is the URL checked here.
    */
   resourceUrl: McpResourceUrl;
 };
@@ -87,6 +87,24 @@ export type MiddlewareAuthOptions<Req> =
       verifyToken?: never;
     })
   | CustomVerifierAuthOptions<Req>;
+
+/**
+ * The options of every adapter's `protectedResourceMetadataHandler`.
+ */
+export type ProtectedResourceMetadataOptions = {
+  /**
+   * The `resourceUrl` given to `mcpAuth` or `withMcpAuth` for the endpoint this metadata describes: one URL, or a list
+   * with one for each origin. The metadata's `resource` is then the URL they check for the same request, whatever
+   * origin the app sees behind a proxy for a single URL, and with a list a request to an origin none of them has gets
+   * a 421. Without it, `resource` is derived from the URL the metadata route was requested at, which can differ from
+   * the public URL behind a proxy.
+   */
+  resourceUrl?: McpResourceUrl | undefined;
+  /**
+   * Additional metadata, such as `resource_name` or `scopes_supported`. It overrides the generated metadata.
+   */
+  properties?: Record<string, unknown> | undefined;
+};
 
 type BearerResult =
   | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
@@ -134,6 +152,51 @@ function assertResourceUrls(caller: string, resourceUrl: unknown) {
     }
     origins.add(origin);
   }
+}
+
+/**
+ * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only `resourceUrl` and
+ * `properties`, then checks `resourceUrl` as `mcpAuth` does. The handler took the additional metadata itself before it
+ * took options, so code written for that form, such as `protectedResourceMetadataHandler({ scopes_supported })`, fails
+ * at startup with a message naming the new form instead of serving metadata without it.
+ */
+export function assertProtectedResourceMetadataOptions(options: unknown) {
+  if (options === undefined) return;
+  const isOptions =
+    typeof options === 'object' &&
+    options !== null &&
+    !Array.isArray(options) &&
+    Object.keys(options).every((key) => key === 'resourceUrl' || key === 'properties');
+  if (!isOptions) {
+    throw new Error(
+      "Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties. Pass the resourceUrl you give mcpAuth or withMcpAuth, and any other metadata in properties, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp', properties: { scopes_supported: ['email'] } })",
+    );
+  }
+  assertMcpAuthOptions('protectedResourceMetadataHandler', options);
+}
+
+/**
+ * The protected resource metadata a Clerk instance's `protectedResourceMetadataHandler` serves for a request, or
+ * `undefined` when a list of `resourceUrl`s has none with the request's origin, which the adapters answer with a 421,
+ * as `mcpAuth` does (RFC 9110 section 15.5.20). The `resource` is the `resourceUrl` for the request, the URL `mcpAuth`
+ * checks, or without `resourceUrl` the resource the requested metadata URL describes, so it is identical to the URL
+ * the client derived the metadata URL from (RFC 9728 section 3.3).
+ * @param options - The handler's options, already checked
+ * @param metadataUrl - The URL the metadata route was requested at
+ * @param publishableKey - The Clerk publishable key
+ * @returns The metadata, or `undefined` for a request to an origin no `resourceUrl` lists
+ */
+export function clerkProtectedResourceMetadata(
+  { resourceUrl, properties }: ProtectedResourceMetadataOptions,
+  metadataUrl: string,
+  publishableKey: string,
+) {
+  const resource =
+    resourceUrl === undefined
+      ? resourceFromMetadataUrl(metadataUrl)
+      : matchResourceUrl(resourceUrl, metadataUrl);
+  if (resource === undefined) return undefined;
+  return generateProtectedResourceMetadata({ publishableKey, resourceUrl: resource, properties });
 }
 
 /**

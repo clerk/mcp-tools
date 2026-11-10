@@ -3,19 +3,19 @@ import type { McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
   type MiddlewareAuthOptions,
+  type ProtectedResourceMetadataOptions,
   assertMiddlewareAuthOptions,
+  assertProtectedResourceMetadataOptions,
   assertServerFactory,
   assertTransportClass,
   authenticateBearer,
+  clerkProtectedResourceMetadata,
   clerkTokenVerifier,
   requirePublishableKey,
-  resourceFromMetadataUrl,
 } from '../bearer-auth';
-import {
-  type McpAuthFailure,
-  fetchAuthorizationServerMetadata,
-  generateProtectedResourceMetadata,
-} from '../server';
+import { type McpAuthFailure, fetchAuthorizationServerMetadata } from '../server';
+
+export type { ProtectedResourceMetadataOptions };
 
 declare global {
   namespace Express {
@@ -166,17 +166,25 @@ export function authorizationServerMetadataHandler() {
 }
 
 /**
- * An express handler that will return OAuth protected resource metadata if you're using Clerk.
- * @see https://datatracker.ietf.org/doc/html/rfc9728#section-4.1
+ * An Express handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
+ * `CLERK_PUBLISHABLE_KEY`. Mount it at the path `mcpAuth`'s challenge points to.
+ * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
+ * @param options - `resourceUrl`, the same value you give `mcpAuth`, so the metadata's `resource` is the URL it
+ * checks, and `properties`, additional metadata such as `scopes_supported`, which overrides the generated metadata.
+ * Without `resourceUrl`, the `resource` is the URL the metadata route was requested at, without the well-known path.
+ * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
+ * `CLERK_PUBLISHABLE_KEY` is not set.
  * @example
  * ```ts
  * app.get(
  *   "/.well-known/oauth-protected-resource/mcp",
- *   protectedResourceMetadataHandler()
+ *   protectedResourceMetadataHandler({ resourceUrl: "https://mcp.example.com/mcp" })
  * );
  * ```
  */
-export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
+export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
+  assertProtectedResourceMetadataOptions(options);
+
   return (req: express.Request, res: express.Response) => {
     const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 
@@ -186,11 +194,11 @@ export function protectedResourceMetadataHandler(properties?: Record<string, unk
       return;
     }
 
-    const metadata = generateProtectedResourceMetadata({
-      publishableKey,
-      resourceUrl: resourceFromMetadataUrl(requestUrl),
-      properties,
-    });
+    const metadata = clerkProtectedResourceMetadata(options, requestUrl, publishableKey);
+    if (!metadata) {
+      res.status(421).json({ error: 'misdirected_request' });
+      return;
+    }
 
     res.json(metadata);
   };

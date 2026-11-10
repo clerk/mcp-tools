@@ -257,9 +257,10 @@ export { requireAdditionalScopes } from './scope-challenge';
 
 /**
  * The URL from `resourceUrl` that a request to `requestUrl` is for: `resourceUrl` itself when it is one URL, or the
- * listed URL with the request's origin. `undefined` when no listed URL has that origin. This is the rule `mcpAuth` and
- * `withMcpAuth` apply to their `resourceUrl`, so use it in the protected resource metadata route to keep its
- * `resource` identical to the URL they check, and answer `421` when it returns `undefined`.
+ * listed URL with the request's origin. `undefined` when no listed URL has that origin. This is the rule `mcpAuth`,
+ * `withMcpAuth`, and `protectedResourceMetadataHandler` apply to their `resourceUrl`, so use it in a protected resource
+ * metadata route of your own, such as one for another authorization server, to keep its `resource` identical to the
+ * URL they check, and answer `421` when it returns `undefined`.
  * @example
  * ```ts
  * const resource = matchResourceUrl(['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'], request.url);

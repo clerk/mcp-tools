@@ -77,8 +77,8 @@ function createServer() {
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceMetadataHandler({
-    resource: MCP_RESOURCE_URL,
-    scopes_supported: REQUIRED_SCOPES,
+    resourceUrl: MCP_RESOURCE_URL,
+    properties: { scopes_supported: REQUIRED_SCOPES },
   }),
 );
 app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
@@ -180,7 +180,7 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 
 **Options:**
 
-- `resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. Required unless you pass `verifyToken`. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. Under Clerk verification that URL is the audience: Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. With `verifyToken` and without `resourceUrl`, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceMetadataHandler({ resource: resourceUrl })`, or build it with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express`. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/express`.
+- `resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. Required unless you pass `verifyToken`. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. Under Clerk verification that URL is the audience: Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. With `verifyToken` and without `resourceUrl`, the URL comes from the request, which can differ from the public URL behind a proxy. Pass the same value to the metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, so its `resource` is the URL checked here. A route of your own, built with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express`, picks the URL for a list with `matchResourceUrl`.
 - `requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
@@ -259,6 +259,11 @@ Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 
 
 Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express` in your own route.
 
+**Options:**
+
+- `resourceUrl` (optional) - The same value you pass to `mcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
+- `properties` (optional) - Additional metadata, such as `scopes_supported` or `resource_name`. It overrides the generated metadata.
+
 **Example:**
 
 ```ts
@@ -266,7 +271,10 @@ import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/express';
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceMetadataHandler({ scopes_supported: ['email'] }),
+  protectedResourceMetadataHandler({
+    resourceUrl: 'https://mcp.example.com/mcp',
+    properties: { scopes_supported: ['email'] },
+  }),
 );
 ```
 

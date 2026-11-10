@@ -116,6 +116,132 @@ describe.each(metadataRoutes)('%s protectedResourceMetadataHandler', (_name, sen
   });
 });
 
+type MetadataOptions = expressAdapter.ProtectedResourceMetadataOptions;
+
+/** Sends a metadata request to a handler whose options are made from the origin the app sees. */
+type SendWithOptions = (optionsFor: (origin: string) => MetadataOptions) => ReturnType<Send>;
+
+const metadataRoutesWithOptions: [string, SendWithOptions][] = [
+  [
+    'express',
+    (optionsFor) => {
+      const app = express();
+      // The port is not known until the app listens, so the handler is made from the request's own origin
+      app.use(WELL_KNOWN, (req, res) =>
+        expressAdapter.protectedResourceMetadataHandler(optionsFor(`http://${req.host}`))(req, res),
+      );
+      return sendExpress(app, `${WELL_KNOWN}/mcp`);
+    },
+  ],
+  [
+    'hono',
+    async (optionsFor) => {
+      const app = new Hono();
+      app.get('*', honoAdapter.protectedResourceMetadataHandler(optionsFor(origin)));
+      return answer(await app.request(`${origin}${WELL_KNOWN}/mcp`), origin);
+    },
+  ],
+  [
+    'next',
+    async (optionsFor) =>
+      answer(
+        nextAdapter.protectedResourceMetadataHandler(optionsFor(origin))(
+          new Request(`${origin}${WELL_KNOWN}/mcp`),
+        ),
+        origin,
+      ),
+  ],
+];
+
+describe.each(metadataRoutesWithOptions)(
+  '%s protectedResourceMetadataHandler with resourceUrl',
+  (_name, send) => {
+    beforeEach(() => {
+      process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    });
+
+    afterEach(() => {
+      delete process.env.CLERK_PUBLISHABLE_KEY;
+      delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+    });
+
+    // Behind a proxy the app sees another origin than the public one, and RFC 9728 section 3.3 has the client discard
+    // metadata whose `resource` is not the URL it derived the metadata URL from
+    test('describes a single resourceUrl whatever origin the request has', async () => {
+      const res = await send(() => ({ resourceUrl: 'https://public.example.com/mcp' }));
+
+      expect(res.status).toBe(200);
+      expect((res.body as { resource: string }).resource).toBe('https://public.example.com/mcp');
+    });
+
+    test('describes the listed resourceUrl with the origin of the request', async () => {
+      const res = await send((requestOrigin) => ({
+        resourceUrl: ['https://other.example.dev/mcp', `${requestOrigin}/mcp`],
+      }));
+
+      expect(res.status).toBe(200);
+      expect((res.body as { resource: string }).resource).toBe(`${res.origin}/mcp`);
+    });
+
+    // RFC 9110 section 15.5.20: the target URI matches no origin the server is configured for
+    test('answers a request to an origin no resourceUrl lists with a 421', async () => {
+      const res = await send(() => ({
+        resourceUrl: ['https://other.example.dev/mcp', 'https://another.example.dev/mcp'],
+      }));
+
+      expect(res.status).toBe(421);
+      expect(res.body).toEqual({ error: 'misdirected_request' });
+    });
+
+    test('merges properties over the generated metadata', async () => {
+      const res = await send(() => ({
+        resourceUrl: 'https://public.example.com/mcp',
+        properties: { scopes_supported: ['email'], resource_documentation: 'https://example.com' },
+      }));
+
+      expect(res.body).toMatchObject({
+        resource: 'https://public.example.com/mcp',
+        scopes_supported: ['email'],
+        resource_documentation: 'https://example.com',
+      });
+    });
+  },
+);
+
+describe.each([
+  ['express', expressAdapter.protectedResourceMetadataHandler],
+  ['hono', honoAdapter.protectedResourceMetadataHandler],
+  ['next', nextAdapter.protectedResourceMetadataHandler],
+])('%s protectedResourceMetadataHandler options', (_name, protectedResourceMetadataHandler) => {
+  test.each([
+    ['additional metadata', { scopes_supported: ['email'] }],
+    ['a resource', { resource: 'https://mcp.example.com/mcp' }],
+    ['additional metadata beside resourceUrl', { resourceUrl: origin, resource_name: 'MCP' }],
+  ])('throws at setup when given %s in place of options', (_case, options) => {
+    // @ts-expect-error the handler takes `resourceUrl` and `properties` only
+    expect(() => protectedResourceMetadataHandler(options)).toThrow(
+      'Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties',
+    );
+  });
+
+  test.each([
+    ['is not a URL', 'mcp.example.com/mcp'],
+    ['has a fragment', 'https://mcp.example.com/mcp#tools'],
+    ['is an empty list', []],
+  ])('throws at setup when resourceUrl %s', (_case, resourceUrl) => {
+    expect(() => protectedResourceMetadataHandler({ resourceUrl })).toThrow(
+      'Clerk error: protectedResourceMetadataHandler resourceUrl must be',
+    );
+  });
+
+  test('throws at setup when resourceUrl lists two URLs for one origin', () => {
+    expect(() =>
+      protectedResourceMetadataHandler({ resourceUrl: [`${origin}/mcp`, `${origin}/other`] }),
+    ).toThrow('Clerk error: protectedResourceMetadataHandler resourceUrl lists more than one URL');
+  });
+});
+
 const AUTH_SERVER_PATH = '/.well-known/oauth-authorization-server';
 const clerkMetadata = { issuer: 'https://clerk.example.com' };
 
