@@ -5,6 +5,7 @@ import { env } from 'hono/adapter';
 import {
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions,
+  assertAuthorizationServerMetadataHandlerCalled,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertServerFactory,
@@ -145,13 +146,16 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
  * A Hono handler that serves the RFC 8414 authorization server metadata of the Clerk instance named by
  * `CLERK_PUBLISHABLE_KEY`, fetched from its Frontend API on each request.
  * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
- * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set.
+ * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set. Passing
+ * `authorizationServerMetadataHandler` to the route without calling it throws a `Clerk error:` on the first request.
  * @example
  * ```ts
  * app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
  * ```
  */
 export function authorizationServerMetadataHandler() {
+  // `arguments`, not a rest parameter, so the declared signature still takes no arguments
+  assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (c: Context) => {
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
     const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
