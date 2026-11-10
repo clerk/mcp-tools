@@ -178,11 +178,13 @@ npm install @modelcontextprotocol/sdk
 ```ts
 // app/oauth_callback/route.ts
 import { completeOAuthHandler } from '@clerk/mcp-tools/next/client';
-import fsStore from '@clerk/mcp-tools/stores/fs';
+import { createFsStore } from '@clerk/mcp-tools/stores/fs';
 import { redirect } from 'next/navigation';
 
+const store = createFsStore();
+
 const handler = completeOAuthHandler({
-  store: fsStore,
+  store,
   callback: () => redirect('/dashboard'),
 });
 
@@ -195,9 +197,11 @@ For MCP tool calling in Next.js, use the framework-agnostic client utilities:
 
 ```ts
 // app/api/mcp-tools/route.ts
-import { getClientBySessionId } from '@clerk/mcp-tools/client';
+import { getMcpClientBySessionId } from '@clerk/mcp-tools/client';
 import { cookies } from 'next/headers';
-import fsStore from '@clerk/mcp-tools/stores/fs';
+import { createFsStore } from '@clerk/mcp-tools/stores/fs';
+
+const store = createFsStore();
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -209,9 +213,9 @@ export async function POST(request: Request) {
 
   const body = await request.json();
 
-  const { client, connect } = getClientBySessionId({
+  const { client, connect } = getMcpClientBySessionId({
     sessionId,
-    store: fsStore,
+    store,
   });
 
   await connect();
@@ -268,7 +272,7 @@ For detailed information about available stores and their configurations, see th
 
 The key consideration for Next.js applications is choosing a store that works well with serverless deployments:
 
-- **Development**: Use `fsStore` for local development
+- **Development**: Use `createFsStore()` for local development
 - **Production**: Use Redis, Postgres, or SQLite stores for persistent session storage
 
 ## App Router vs Pages Router

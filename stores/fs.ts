@@ -180,7 +180,3 @@ export function createFsStore(config: FsStoreConfig = {}) {
 
   return store;
 }
-
-// Export default for backward compatibility
-const fsStore = createFsStore();
-export default fsStore;

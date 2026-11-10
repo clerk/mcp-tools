@@ -61,7 +61,6 @@
       "import": "./dist/hono/index.mjs",
       "types": "./dist/hono/index.d.mts"
     },
-    "./stores": "./dist/stores",
     "./stores/fs": {
       "import": "./dist/stores/fs.mjs",
       "types": "./dist/stores/fs.d.mts"

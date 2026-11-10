@@ -15,7 +15,7 @@ const SESSION_PREFIX = 'session_';
  * This function is used to complete the OAuth flow. It is used in the OAuth
  * callback route to complete the OAuth flow given a state and auth code.
  */
-export async function completeAuthWithCode({
+export async function completeOAuth({
   state,
   code,
   store,
@@ -42,7 +42,7 @@ export async function completeAuthWithCode({
     throw new Error(`No session id associated with state "${state}" found in the store`);
   }
 
-  const { transport } = await getClientBySessionId({
+  const { transport } = await getMcpClientBySessionId({
     sessionId,
     store,
     state,
@@ -66,7 +66,7 @@ export async function completeAuthWithCode({
  * Given a client ID and a store, retrieves the client details and returns a
  * transport and MCP client configured with an auth provider.
  */
-export async function getClientBySessionId({
+export async function getMcpClientBySessionId({
   sessionId,
   store,
   state,
@@ -146,7 +146,7 @@ export async function getClientBySessionId({
 }
 
 // Return type for known credentials and dynamically registered clients
-export interface McpClientReturnType {
+export interface McpClientConnection {
   /**
    * Represents a session associated with the connected MCP service endpoint.
    */
@@ -172,7 +172,7 @@ export interface McpClientReturnType {
   authProvider: OAuthClientProvider;
 }
 
-export interface CreateKnownCredentialsMcpClientParams {
+export interface CreateKnownCredentialsMcpClientOptions {
   /**
    * OAuth client id, expected to be collected via user input
    */
@@ -223,7 +223,7 @@ export async function createKnownCredentialsMcpClient({
   redirect,
   store,
   ...client
-}: CreateKnownCredentialsMcpClientParams): Promise<McpClientReturnType> {
+}: CreateKnownCredentialsMcpClientOptions): Promise<McpClientConnection> {
   const state = randomUUID();
   const sessionId = randomUUID();
 
@@ -274,7 +274,7 @@ export async function createKnownCredentialsMcpClient({
   return createReturnValue(client, authProvider, sessionId);
 }
 
-export interface CreateDynamicallyRegisteredMcpClientParams {
+export interface CreateDynamicallyRegisteredMcpClientOptions {
   /**
    * The endpoint of the MCP service, expected to be collected via user input
    */
@@ -330,7 +330,7 @@ export async function createDynamicallyRegisteredMcpClient({
   redirect,
   store,
   ...clientParams
-}: CreateDynamicallyRegisteredMcpClientParams): Promise<McpClientReturnType> {
+}: CreateDynamicallyRegisteredMcpClientOptions): Promise<McpClientConnection> {
   const state = randomUUID();
   const sessionId = randomUUID();
 
@@ -428,7 +428,7 @@ export async function createDynamicallyRegisteredMcpClient({
  * values, so we abstract the common code here.
  */
 function createReturnValue(
-  client: ClientData,
+  client: McpClientData,
   authProvider: OAuthClientProvider,
   sessionId: string,
 ) {
@@ -474,7 +474,7 @@ function unexpectedFunctionCall(name: string, phase: string) {
 /**
  * The data that is stored in the store for a mcp client.
  */
-export interface ClientData {
+export interface McpClientData {
   oauthRedirectUrl: string;
   mcpEndpoint: string;
   mcpClientName: string;
@@ -505,5 +505,5 @@ async function getClientData(sessionId: string, store: McpClientStore) {
     throw new Error(`Session with ID "${sessionId}" not found in store`);
   }
 
-  return clientData as unknown as ClientData;
+  return clientData as unknown as McpClientData;
 }
