@@ -284,6 +284,26 @@ describe('mcpAuthClerk', () => {
     expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
   });
 
+  test('still sends the challenge, without an unhandled rejection, when onAuthFailure rejects', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const res = await mcpAuth(async () => undefined, {
+        resourceUrl,
+        onAuthFailure: async () => {
+          throw new Error('logger is down');
+        },
+      })(echoAuth)(request());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(res.status).toBe(401);
+      expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
   test('throws when Clerk could not verify the token, instead of answering with a challenge', async () => {
     defaultAuthenticateRequest.mockResolvedValue({
       isAuthenticated: false,

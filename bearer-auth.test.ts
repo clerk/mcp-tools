@@ -168,6 +168,19 @@ describe('authenticateBearer', () => {
     });
     expect(current).toMatchObject({ ok: true });
   });
+
+  test.each([Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a token whose expiresAt is %d instead of letting it through',
+    async (expiresAt) => {
+      const result = await authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt }) });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 401,
+        failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
+      });
+    },
+  );
 });
 
 describe('McpAuthError', () => {
@@ -210,14 +223,16 @@ describe('verifyClerkOAuthToken', () => {
   test.each([
     ['https://mcp.example.com', 'https://mcp.example.com/'],
     ['https://MCP.Example.com:443/mcp', 'https://mcp.example.com/mcp'],
-  ])('also accepts the normalized form of %s as the audience', async (resourceUrl, normalized) => {
+    // The root's protected resource metadata describes the bare origin, so a client can send that form back
+    ['https://mcp.example.com/', 'https://mcp.example.com'],
+  ])('also accepts the other form of %s as the audience', async (resourceUrl, other) => {
     const authenticateRequest = vi.fn().mockResolvedValue(authenticated);
 
     await verifyClerkOAuthToken({ authenticateRequest }, 't', resourceUrl);
 
     expect(authenticateRequest.mock.calls[0]?.[1]).toEqual({
       acceptsToken: 'oauth_token',
-      audience: [resourceUrl, normalized],
+      audience: [resourceUrl, other],
     });
   });
 

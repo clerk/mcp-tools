@@ -84,7 +84,7 @@ Wraps a Next.js MCP route handler so that every request needs an OAuth access to
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient` - The client that verifies tokens: `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. It is an option rather than an import of this package so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`: Next.js fails the build on any reference to a package that isn't installed.
-- `onAuthFailure?: (failure, req) => void` - Called with why a request is about to be answered with a `401` or `403` challenge or a `421`, for example for logging. `failure.reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`. For a token Clerk rejected, `failure.cause` is an `McpTokenVerificationError`, whose `code` is Clerk's reason and whose `message` says which check failed. The Express and Hono adapters record the same value on the request context instead.
+- `onAuthFailure?: (failure, req) => void | Promise<void>` - Called with why a request is about to be answered with a `401` or `403` challenge or a `421`, for example for logging. `failure.reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`. For a token Clerk rejected, `failure.cause` is an `McpTokenVerificationError`, whose `code` is Clerk's reason and whose `message` says which check failed. The Express and Hono adapters record the same value on the request context instead.
 
 A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws an `McpAuthError`, exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`. Next.js answers with a `500`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
@@ -121,11 +121,12 @@ Generic Next.js route handler that returns OAuth protected resource metadata for
 **Example:**
 
 ```ts
-// app/.well-known/oauth-protected-resource/route.ts
+// app/.well-known/oauth-protected-resource/mcp/route.ts
 import { protectedResourceHandler } from '@clerk/mcp-tools/next';
 
 const handler = protectedResourceHandler({
   authServerUrl: 'https://auth.example.com',
+  properties: { resource: 'https://mcp.example.com/mcp' },
 });
 
 export { handler as GET };
@@ -138,10 +139,10 @@ Next.js route handler that returns OAuth protected resource metadata for Clerk i
 **Example:**
 
 ```ts
-// app/.well-known/oauth-protected-resource/route.ts
+// app/.well-known/oauth-protected-resource/mcp/route.ts
 import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk();
+const handler = protectedResourceHandlerClerk({ resource: 'https://mcp.example.com/mcp' });
 
 export { handler as GET };
 ```
@@ -172,13 +173,13 @@ CORS options request handler for OAuth metadata endpoints. Necessary for MCP cli
 **Example:**
 
 ```ts
-// app/.well-known/oauth-protected-resource/route.ts
+// app/.well-known/oauth-protected-resource/mcp/route.ts
 import {
   protectedResourceHandlerClerk,
   metadataCorsOptionsRequestHandler,
 } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk();
+const handler = protectedResourceHandlerClerk({ resource: 'https://mcp.example.com/mcp' });
 const corsHandler = metadataCorsOptionsRequestHandler();
 
 export { handler as GET, corsHandler as OPTIONS };

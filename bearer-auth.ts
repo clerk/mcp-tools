@@ -353,11 +353,17 @@ export async function authenticateBearer({
   }
 
   // An expired token gets `invalid_token` (RFC 6750 section 3.1). Clerk rejects an expired token itself, but a
-  // `verifyToken` passed to `mcpAuth` can return the auth info of a token it decoded or cached
-  if (authInfo?.expiresAt !== undefined && authInfo.expiresAt <= Date.now() / 1000) {
+  // `verifyToken` passed to `mcpAuth` can return the auth info of a token it decoded or cached. An `expiresAt` that is
+  // not a finite number, such as `NaN`, is not a time the token is valid until, so it is rejected too.
+  if (
+    authInfo?.expiresAt !== undefined &&
+    !(Number.isFinite(authInfo.expiresAt) && authInfo.expiresAt > Date.now() / 1000)
+  ) {
     rejection = new McpTokenVerificationError(
       'token-expired',
-      `The token expired at ${new Date(authInfo.expiresAt * 1000).toISOString()}`,
+      Number.isFinite(authInfo.expiresAt)
+        ? `The token expired at ${new Date(authInfo.expiresAt * 1000).toISOString()}`
+        : `The token has no valid expiry time (${authInfo.expiresAt})`,
     );
     authInfo = undefined;
   }
@@ -413,13 +419,17 @@ export async function verifyClerkOAuthToken(
   audience: string,
 ) {
   // Clerk compares the audience exactly, and a client can send the resource in normalized form, such as
-  // `https://mcp.example.com/` for `https://mcp.example.com`, so both forms of the same URL are accepted
-  const normalized = new URL(audience).href;
+  // `https://mcp.example.com/` for `https://mcp.example.com`, so both forms of the same URL are accepted. For the root
+  // the bare origin is accepted too, because that is the `resource` the protected resource metadata describes for it.
+  const url = new URL(audience);
+  const forms = [audience, url.href];
+  if (url.pathname === '/' && !url.search) forms.push(url.origin);
+  const audiences = [...new Set(forms)];
   const requestState = await client.authenticateRequest(
     new Request(audience, { headers: { authorization: `Bearer ${token}` } }),
     {
       acceptsToken: 'oauth_token',
-      audience: normalized === audience ? audience : [audience, normalized],
+      audience: audiences.length === 1 ? audience : audiences,
     },
   );
   if (!requestState.isAuthenticated) {
