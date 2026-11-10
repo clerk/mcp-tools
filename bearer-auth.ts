@@ -298,6 +298,21 @@ export function requirePublishableKey(
 }
 
 /**
+ * Throws a `Clerk error:` message when `authorizationServerMetadataHandler` received arguments. It takes none, so any
+ * means it was passed to a route without being called, as 0.9.0's `authServerMetadataHandlerClerk` was, and the
+ * framework called it with the request: that would otherwise hang the request in Express and Hono, and get a generic
+ * error in Next.js.
+ * @param argumentCount - The number of arguments the handler factory received
+ */
+export function assertAuthorizationServerMetadataHandlerCalled(argumentCount: number) {
+  if (argumentCount > 0) {
+    throw new Error(
+      'Clerk error: call authorizationServerMetadataHandler() and pass its result to the route, instead of passing authorizationServerMetadataHandler itself',
+    );
+  }
+}
+
+/**
  * Throws a `Clerk error:` message unless `Transport` is a class. Code written before `streamableHttpHandler` took the
  * SDK transport as an argument calls it with the server factory alone, which would otherwise fail on every request
  * instead of at startup.

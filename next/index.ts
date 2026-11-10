@@ -3,6 +3,7 @@ import {
   type ClerkAuthOptions,
   type CustomVerifierAuthOptions,
   type ProtectedResourceMetadataOptions,
+  assertAuthorizationServerMetadataHandlerCalled,
   assertMcpAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertVerifierOrResourceUrl,
@@ -73,8 +74,12 @@ export function protectedResourceMetadataHandler(
 /**
  * OAuth 2.0 Authorization Server Metadata endpoint based on RFC 8414
  * @see https://datatracker.ietf.org/doc/html/rfc8414
+ * @returns The `GET` handler. Exporting `authorizationServerMetadataHandler` itself as `GET`, without calling it,
+ * throws a `Clerk error:` on the first request.
  */
 export function authorizationServerMetadataHandler(): () => Promise<Response> {
+  // `arguments`, not a rest parameter, so the declared signature still takes no arguments
+  assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (): Promise<Response> => {
     const publishableKey = requirePublishableKey(
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
