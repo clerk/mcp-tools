@@ -2,7 +2,7 @@
 import type { ClerkClient } from '@clerk/backend';
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { assertScopeTokens, stepUpScopes } from './scope-challenge';
+import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import { verifyClerkToken } from './server';
 
 /**
@@ -155,7 +155,7 @@ export async function authenticateBearer({
   authorization,
   resourceMetadataUrl,
   requiredScopes = [],
-  challengeScopes = [],
+  challengeScopes: extraChallengeScopes = [],
   verifyToken,
 }: {
   authorization: string | undefined;
@@ -164,7 +164,7 @@ export async function authenticateBearer({
   challengeScopes: readonly string[] | undefined;
   verifyToken: (token: string) => Promise<AuthInfo | undefined>;
 }): Promise<BearerResult> {
-  const unauthorizedScopes = [...new Set([...requiredScopes, ...challengeScopes])];
+  const unauthorizedScopes = [...new Set([...requiredScopes, ...extraChallengeScopes])];
 
   const parsed = parseAuthorization(authorization);
   if ('reason' in parsed) {
@@ -198,7 +198,7 @@ export async function authenticateBearer({
     };
   }
 
-  const scopes = stepUpScopes(requiredScopes, authInfo);
+  const scopes = challengeScopes(requiredScopes, authInfo);
   if (scopes) {
     return {
       ok: false,

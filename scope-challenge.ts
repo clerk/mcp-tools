@@ -67,7 +67,7 @@ export function missingScopes(required: readonly string[], authInfo: AuthInfo): 
  * The scopes to challenge for when `authInfo` lacks some of `required`, and `undefined` otherwise: the granted ones
  * followed by the missing ones, so the new grant keeps the old access.
  */
-export function stepUpScopes(
+export function challengeScopes(
   required: readonly string[],
   authInfo: AuthInfo,
 ): [string, ...string[]] | undefined {
@@ -96,7 +96,7 @@ export function requireAdditionalScopes<const T extends readonly [string, ...str
   assertScopeTokens('requireAdditionalScopes', 'requiredScopes', requiredScopes);
   return ({ authInfo }) => {
     if (authInfo === undefined) return undefined;
-    const scopes = stepUpScopes(requiredScopes, authInfo);
+    const scopes = challengeScopes(requiredScopes, authInfo);
     return scopes && { scopes };
   };
 }
