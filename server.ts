@@ -104,7 +104,16 @@ export type McpResourceUrl = string | readonly string[];
  * Input to `generateProtectedResourceMetadata`: a Clerk publishable key, or the issuer identifier of any other
  * authorization server, never both.
  */
-type GenerateProtectedResourceMetadataOptions =
+type GenerateProtectedResourceMetadataOptions = {
+  /**
+   * Resource identifier of the protected resource
+   */
+  resourceUrl: string;
+  /**
+   * Additional properties to include in the metadata. They override the generated ones.
+   */
+  properties?: Record<string, unknown>;
+} & (
   | {
       /**
        * Clerk publishable key. The authorization server is the instance's Frontend API, and Clerk's documentation is
@@ -112,14 +121,6 @@ type GenerateProtectedResourceMetadataOptions =
        */
       publishableKey: string;
       authServerUrl?: never;
-      /**
-       * Resource identifier of the protected resource
-       */
-      resourceUrl: string;
-      /**
-       * Additional properties to include in the metadata. They override the generated ones.
-       */
-      properties?: Record<string, unknown>;
     }
   | {
       /**
@@ -127,15 +128,8 @@ type GenerateProtectedResourceMetadataOptions =
        */
       authServerUrl: string;
       publishableKey?: never;
-      /**
-       * Resource identifier of the protected resource
-       */
-      resourceUrl: string;
-      /**
-       * Additional properties to include in the metadata. They override the generated ones.
-       */
-      properties?: Record<string, unknown>;
-    };
+    }
+);
 
 /**
  * Generates RFC 9728 protected resource metadata for the given resource url and either a Clerk publishable key or
