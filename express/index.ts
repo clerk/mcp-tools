@@ -175,17 +175,19 @@ export function mcpAuthClerk(
   );
 }
 
-export async function authServerMetadataHandlerClerk(_: express.Request, res: express.Response) {
-  const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
-  if (!publishableKey) {
-    throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
-  }
+export function authServerMetadataHandler() {
+  return async (_: express.Request, res: express.Response) => {
+    const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
+    if (!publishableKey) {
+      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
+    }
 
-  const metadata = await fetchClerkAuthorizationServerMetadata({
-    publishableKey,
-  });
+    const metadata = await fetchClerkAuthorizationServerMetadata({
+      publishableKey,
+    });
 
-  res.json(metadata);
+    res.json(metadata);
+  };
 }
 
 /**
@@ -195,11 +197,11 @@ export async function authServerMetadataHandlerClerk(_: express.Request, res: ex
  * ```ts
  * app.get(
  *   "/.well-known/oauth-protected-resource/mcp",
- *   protectedResourceHandlerClerk()
+ *   protectedResourceHandler()
  * );
  * ```
  */
-export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
+export function protectedResourceHandler(properties?: Record<string, unknown>) {
   return (req: express.Request, res: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {

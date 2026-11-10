@@ -66,7 +66,7 @@ type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
 };
 
-export function protectedResourceHandlerClerk(properties?: Record<string, unknown>) {
+export function protectedResourceHandler(properties?: Record<string, unknown>) {
   return (c: Context) => {
     const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
@@ -81,13 +81,15 @@ export function protectedResourceHandlerClerk(properties?: Record<string, unknow
   };
 }
 
-export async function authServerMetadataHandlerClerk(c: Context) {
-  const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
-  if (!publishableKey) {
-    throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
-  }
-  const metadata = await fetchClerkAuthorizationServerMetadata({ publishableKey });
-  return c.json(metadata);
+export function authServerMetadataHandler() {
+  return async (c: Context) => {
+    const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
+    if (!publishableKey) {
+      throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
+    }
+    const metadata = await fetchClerkAuthorizationServerMetadata({ publishableKey });
+    return c.json(metadata);
+  };
 }
 
 /**

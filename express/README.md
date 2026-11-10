@@ -32,8 +32,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createClerkClient } from '@clerk/express';
 import {
   mcpAuthClerk,
-  protectedResourceHandlerClerk,
-  authServerMetadataHandlerClerk,
+  protectedResourceHandler,
+  authServerMetadataHandler,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/express';
 
@@ -76,12 +76,12 @@ function createServer() {
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandlerClerk({
+  protectedResourceHandler({
     resource: MCP_RESOURCE_URL,
     scopes_supported: REQUIRED_SCOPES,
   }),
 );
-app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
 app.post(
   '/mcp',
   mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
@@ -231,7 +231,7 @@ Authentication middleware that verifies OAuth access tokens with Clerk, includin
 
 **Parameters:**
 
-- `options.resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, as for `mcpAuth`. Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/server`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
+- `options.resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, as for `mcpAuth`. Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/server`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs
 - `options.challengeScopes` (optional) - As for `mcpAuth`
 - `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
@@ -260,34 +260,34 @@ Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 
 
 ## Protected Resource Metadata
 
-### `protectedResourceHandlerClerk`
+### `protectedResourceHandler`
 
 Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server` in your own route.
 
 **Example:**
 
 ```ts
-import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/express';
+import { protectedResourceHandler } from '@clerk/mcp-tools/express';
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandlerClerk({ scopes_supported: ['email'] }),
+  protectedResourceHandler({ scopes_supported: ['email'] }),
 );
 ```
 
 ## Authorization Server Metadata
 
-### `authServerMetadataHandlerClerk`
+### `authServerMetadataHandler`
 
 Express handler that returns OAuth authorization server metadata for Clerk integration, as defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). This endpoint provides clients with information about Clerk's OAuth authorization server capabilities and endpoints.
 
 **Example:**
 
 ```ts
-import { authServerMetadataHandlerClerk } from '@clerk/mcp-tools/express';
+import { authServerMetadataHandler } from '@clerk/mcp-tools/express';
 
 // Serve authorization server metadata at the standard well-known location
-app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
 ```
 
 **Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata.

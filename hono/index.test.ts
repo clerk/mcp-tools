@@ -27,8 +27,8 @@ import {
   McpAuthError,
   type McpAuthFailure,
   McpTokenVerificationError,
-  protectedResourceHandlerClerk,
-  authServerMetadataHandlerClerk,
+  protectedResourceHandler,
+  authServerMetadataHandler,
   mcpAuth,
   mcpAuthClerk,
   streamableHttpHandler,
@@ -56,7 +56,7 @@ function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });
 }
 
-describe('protectedResourceHandlerClerk', () => {
+describe('protectedResourceHandler', () => {
   beforeEach(() => {
     vi.mocked(env).mockImplementation(() => process.env);
     process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
@@ -68,7 +68,7 @@ describe('protectedResourceHandlerClerk', () => {
 
   test('derives auth server URL from CLERK_PUBLISHABLE_KEY', async () => {
     const app = new Hono();
-    app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
+    app.get('/.well-known/oauth-protected-resource', protectedResourceHandler());
 
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
     expect(res.status).toBe(200);
@@ -81,7 +81,7 @@ describe('protectedResourceHandlerClerk', () => {
     const app = new Hono();
     app.get(
       '/.well-known/oauth-protected-resource',
-      protectedResourceHandlerClerk({ scopes_supported: ['read', 'write'] }),
+      protectedResourceHandler({ scopes_supported: ['read', 'write'] }),
     );
 
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
@@ -110,7 +110,7 @@ describe('protectedResourceHandlerClerk', () => {
     vi.mocked(env).mockReturnValue({ CLERK_PUBLISHABLE_KEY: FAKE_PK });
 
     const app = new Hono();
-    app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
+    app.get('/.well-known/oauth-protected-resource', protectedResourceHandler());
 
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
     expect(res.status).toBe(200);
@@ -121,14 +121,14 @@ describe('protectedResourceHandlerClerk', () => {
   test('returns 500 when CLERK_PUBLISHABLE_KEY is missing', async () => {
     delete process.env.CLERK_PUBLISHABLE_KEY;
     const app = new Hono();
-    app.get('/.well-known/oauth-protected-resource', protectedResourceHandlerClerk());
+    app.get('/.well-known/oauth-protected-resource', protectedResourceHandler());
 
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
     expect(res.status).toBe(500);
   });
 });
 
-describe('authServerMetadataHandlerClerk', () => {
+describe('authServerMetadataHandler', () => {
   beforeEach(() => {
     vi.mocked(env).mockImplementation(() => process.env);
     process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
@@ -140,7 +140,7 @@ describe('authServerMetadataHandlerClerk', () => {
 
   test('returns fetched Clerk metadata', async () => {
     const app = new Hono();
-    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
 
     const res = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
     expect(res.status).toBe(200);
@@ -153,7 +153,7 @@ describe('authServerMetadataHandlerClerk', () => {
     vi.mocked(env).mockReturnValue({ CLERK_PUBLISHABLE_KEY: FAKE_PK });
 
     const app = new Hono();
-    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
 
     const res = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
     expect(res.status).toBe(200);
@@ -164,7 +164,7 @@ describe('authServerMetadataHandlerClerk', () => {
   test('returns 500 when CLERK_PUBLISHABLE_KEY is missing', async () => {
     delete process.env.CLERK_PUBLISHABLE_KEY;
     const app = new Hono();
-    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+    app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
 
     const res = await app.request('http://myapp.com/.well-known/oauth-authorization-server');
     expect(res.status).toBe(500);

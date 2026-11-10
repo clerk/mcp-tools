@@ -28,8 +28,8 @@ import { clerkMiddleware } from '@clerk/hono';
 import { cors } from 'hono/cors';
 import {
   mcpAuthClerk,
-  protectedResourceHandlerClerk,
-  authServerMetadataHandlerClerk,
+  protectedResourceHandler,
+  authServerMetadataHandler,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/hono';
 
@@ -52,12 +52,12 @@ function createServer() {
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandlerClerk({
+  protectedResourceHandler({
     resource: MCP_RESOURCE_URL,
     scopes_supported: REQUIRED_SCOPES,
   }),
 );
-app.get('/.well-known/oauth-authorization-server', authServerMetadataHandlerClerk);
+app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
 app.post(
   '/mcp',
   mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
@@ -134,7 +134,7 @@ app.onError((err, c) => {
 
 ### `mcpAuthClerk({ resourceUrl, requiredScopes?, challengeScopes?, clerkClient? })`
 
-Middleware that verifies OAuth access tokens with Clerk, including that their audience is `resourceUrl`, and otherwise behaves like `mcpAuth`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandlerClerk({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
+Middleware that verifies OAuth access tokens with Clerk, including that their audience is `resourceUrl`, and otherwise behaves like `mcpAuth`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 
 - `options.clerkClient` (optional): the Clerk client that verifies tokens. Defaults to the client `clerkMiddleware()` sets, so without this option `clerkMiddleware()` must be mounted first. `clerkMiddleware()` also verifies the token, so on the MCP route each token is verified twice. To avoid that, pass a client from `createClerkClient` in `@clerk/backend`, created with both `secretKey` and `publishableKey`, and keep `clerkMiddleware()` off the MCP route. That client must come from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
 
@@ -142,11 +142,11 @@ A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque a
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
-### `protectedResourceHandlerClerk(properties?)`
+### `protectedResourceHandler(properties?)`
 
 Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. Derives the resource URL from the current request path. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server` in your own route.
 
-### `authServerMetadataHandlerClerk`
+### `authServerMetadataHandler()`
 
 Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`.
 
