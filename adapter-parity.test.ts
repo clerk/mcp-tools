@@ -351,7 +351,7 @@ describe.each([
     ['a resource', { resource: 'https://mcp.example.com/mcp' }],
     ['additional metadata beside resourceUrl', { resourceUrl: origin, resource_name: 'MCP' }],
   ])('throws at setup when given %s in place of options', (_case, options) => {
-    // @ts-expect-error the handler takes `resourceUrl` and `properties` only
+    // @ts-expect-error metadata fields belong under `properties`, not beside the options
     expect(() => protectedResourceMetadataHandler(options)).toThrow(
       'Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties',
     );
