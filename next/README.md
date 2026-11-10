@@ -54,7 +54,8 @@ const handler = createMcpHandler((server) => {
     async (ctx) => {
       // withMcpAuth only calls the handler with a verified token
       const userId = ctx.http!.authInfo!.extra!.userId as string;
-      const userData = await (await clerkClient()).users.getUser(userId);
+      const clerk = await clerkClient();
+      const userData = await clerk.users.getUser(userId);
 
       return {
         content: [{ type: 'text', text: JSON.stringify(userData) }],
