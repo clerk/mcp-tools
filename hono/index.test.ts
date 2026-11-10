@@ -753,26 +753,52 @@ describe('mcpAuth with Clerk', () => {
     expect(clerk.authenticateRequest).not.toHaveBeenCalled();
   });
 
-  test('fails with a Clerk error when there is no clerkClient and clerkMiddleware has not run', async () => {
+  // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives
+  test.each([
+    ['with a token', { authorization: 'Bearer token' }],
+    ['without a token', undefined],
+  ])(
+    'throws the Clerk error itself %s when there is no clerkClient and clerkMiddleware has not run',
+    async (_case, headers) => {
+      const app = new Hono();
+      let error: unknown;
+      app.onError((err, c) => {
+        error = err;
+        return c.text('error', 500);
+      });
+      app.post('/mcp', mcpAuth({ resourceUrl }), (c) => c.json({ ok: true }));
+
+      const res = await app.request(resourceUrl, { method: 'POST', headers });
+
+      expect(res.status).toBe(500);
+      expect(error).not.toBeInstanceOf(McpAuthError);
+      expect((error as Error).message).toBe(
+        'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
+      );
+    },
+  );
+
+  test('needs no Clerk client with verifyToken', async () => {
     const app = new Hono();
-    let error: unknown;
-    app.onError((err, c) => {
-      error = err;
-      return c.text('error', 500);
+    app.post('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
+
+    const res = await app.request(resourceUrl, {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
     });
-    app.post('/mcp', mcpAuth({ resourceUrl }), (c) => c.json({ ok: true }));
 
-    const res = await post(app);
-
-    expect(res.status).toBe(500);
-    expect(error).toBeInstanceOf(McpAuthError);
-    expect(String((error as McpAuthError).cause)).toContain(
-      'Clerk error: mcpAuth needs a clerkClient option',
-    );
+    expect(res.status).toBe(401);
   });
 });
 
 describe('streamableHttpHandler', () => {
+  test('throws at setup when given a server object instead of a factory', () => {
+    // @ts-expect-error a shared server object is not accepted
+    expect(() => streamableHttpHandler(createMcpServer(), Transport)).toThrow(
+      'Clerk error: streamableHttpHandler needs a function that returns a new MCP server as its first argument, so each request gets its own server. Call streamableHttpHandler(() => new McpServer(...), WebStandardStreamableHTTPServerTransport) instead of passing a server object',
+    );
+  });
+
   test('throws at setup without the transport class', () => {
     // @ts-expect-error the transport class is required
     expect(() => streamableHttpHandler(createMcpServer)).toThrow(

@@ -7,6 +7,7 @@ import {
   type ProtectedResourceMetadataOptions,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
+  assertServerFactory,
   assertTransportClass,
   authenticateBearer,
   clerkProtectedResourceMetadata,
@@ -138,24 +139,24 @@ export function authorizationServerMetadataHandler() {
  */
 export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   assertMiddlewareAuthOptions(options);
+  const clerkClientFor = (c: Context) => {
+    const client =
+      options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
+    if (!client) {
+      throw new Error(
+        'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
+      );
+    }
+    return client;
+  };
   const verifyToken =
-    options.verifyToken ??
-    clerkTokenVerifier(
-      options,
-      (c: Context) => {
-        const client =
-          options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
-        if (!client) {
-          throw new Error(
-            'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
-          );
-        }
-        return client;
-      },
-      (c) => c.req.url,
-    );
+    options.verifyToken ?? clerkTokenVerifier(options, clerkClientFor, (c: Context) => c.req.url);
 
   return async (c: Context, next: Next) => {
+    // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
+    // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
+    if (!options.verifyToken) clerkClientFor(c);
+
     const result = await authenticateBearer({
       authorization: c.req.header('authorization'),
       requestUrl: c.req.url,
@@ -184,7 +185,8 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
 /**
  * A Hono handler that serves MCP requests over the streamable HTTP transport, creating a fresh server and transport
  * for each request so that concurrent requests don't share state. It passes on the auth info that `mcpAuth` set.
- * @param createServer - A factory that returns a new MCP server, such as `McpServer` from the MCP SDK
+ * @param createServer - A factory that returns a new MCP server, such as `McpServer` from the MCP SDK, on every
+ * call. Passing a server object instead throws when the handler is created.
  * @param Transport - The SDK's web-standard transport class, `WebStandardStreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`. It is taken as an argument so that this package
  * never imports the SDK, which only apps serving MCP with this handler need to install.
@@ -207,6 +209,7 @@ export function streamableHttpHandler<
   Transport extends WebStandardStreamableHttpTransport,
   Server extends McpServerLike<Transport>,
 >(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
+  assertServerFactory(createServer, 'WebStandardStreamableHTTPServerTransport');
   assertTransportClass(
     Transport,
     'WebStandardStreamableHTTPServerTransport',
