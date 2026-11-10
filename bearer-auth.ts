@@ -2,7 +2,7 @@
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
-import { type ClerkOAuthAuthObject, matchResourceUrl, verifyClerkToken } from './server';
+import { type ClerkOAuthAuthObject, matchResourceUrl, toClerkAuthInfo } from './server';
 
 /**
  * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuthClerk` uses to verify OAuth access
@@ -443,7 +443,7 @@ export async function verifyClerkOAuthToken(
     throw error;
   }
 
-  const authInfo = verifyClerkToken(requestState.toAuth(), token);
+  const authInfo = toClerkAuthInfo(requestState.toAuth(), token);
   if (!authInfo) {
     throw new McpTokenVerificationError(
       'token-claims-missing',

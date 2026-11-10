@@ -1,7 +1,7 @@
 import type { AuthInfo } from './mcp-types';
 
 /**
- * The fields `verifyClerkToken` reads from Clerk's auth object for an OAuth access token, the result of
+ * The fields `toClerkAuthInfo` reads from Clerk's auth object for an OAuth access token, the result of
  * `auth({ acceptsToken: 'oauth_token' })` or of a request state's `toAuth()`. Declared here so that this package's
  * types do not need `@clerk/backend`, which an app using `@clerk/express`, `@clerk/hono`, or `@clerk/nextjs` may not
  * list itself.
@@ -15,65 +15,72 @@ export type ClerkOAuthAuthObject = {
 };
 
 /**
- * Generates RFC 9728 protected resource metadata for the given auth server url and
- * resource url. It holds only parameters RFC 9728 section 2 defines: `resource`,
- * `authorization_servers`, and `bearer_methods_supported`, since the adapters
- * read the token from the `Authorization` header alone. Pass others, such as
- * `resource_name` or `resource_documentation`, in `properties`.
- *
- * @see https://datatracker.ietf.org/doc/html/rfc9728#section-2
- * @param authServerUrl - Issuer identifier of the authorization server
- * @param resourceUrl - Resource identifier of the protected resource
- * @param properties - Additional properties to include in the metadata
- * @returns Protected resource metadata, serializable to JSON
+ * Input to `generateProtectedResourceMetadata`: a Clerk publishable key, or the issuer identifier of any other
+ * authorization server, never both.
  */
-export function generateProtectedResourceMetadata({
-  authServerUrl,
-  resourceUrl,
-  properties,
-}: {
-  authServerUrl: string;
-  resourceUrl: string;
-  properties?: Record<string, unknown>;
-}) {
-  return Object.assign(
-    {
-      resource: resourceUrl,
-      authorization_servers: [authServerUrl],
-      bearer_methods_supported: ['header'],
-    },
-    properties,
-  );
-}
+type GenerateProtectedResourceMetadataOptions =
+  | {
+      /**
+       * Clerk publishable key. The authorization server is the instance's Frontend API, and Clerk's documentation is
+       * added as `resource_documentation`.
+       */
+      publishableKey: string;
+      authServerUrl?: never;
+      /**
+       * Resource identifier of the protected resource
+       */
+      resourceUrl: string;
+      /**
+       * Additional properties to include in the metadata. They override the generated ones.
+       */
+      properties?: Record<string, unknown>;
+    }
+  | {
+      /**
+       * Issuer identifier of the authorization server
+       */
+      authServerUrl: string;
+      publishableKey?: never;
+      /**
+       * Resource identifier of the protected resource
+       */
+      resourceUrl: string;
+      /**
+       * Additional properties to include in the metadata. They override the generated ones.
+       */
+      properties?: Record<string, unknown>;
+    };
 
 /**
- * Generates protected resource metadata for the given Clerk publishable key
- * and resource url, with Clerk's documentation as `resource_documentation`.
+ * Generates RFC 9728 protected resource metadata for the given resource url and either a Clerk publishable key or
+ * the issuer identifier of another authorization server. It holds only parameters RFC 9728 section 2 defines:
+ * `resource`, `authorization_servers`, and `bearer_methods_supported`, since the adapters read the token from the
+ * `Authorization` header alone, plus `resource_documentation` pointing at Clerk's documentation when given a
+ * publishable key. Pass others, such as `resource_name`, in `properties`.
  *
- * @see https://datatracker.ietf.org/doc/html/rfc9728
- * @param publishableKey - Clerk publishable key
- * @param resourceUrl - Resource identifier of the protected resource
+ * @see https://datatracker.ietf.org/doc/html/rfc9728#section-2
+ * @param options - `{ resourceUrl, publishableKey }` for Clerk, or `{ resourceUrl, authServerUrl }` for any other
+ * authorization server, each with optional `properties`
  * @returns Protected resource metadata, serializable to JSON
  */
-export function generateClerkProtectedResourceMetadata({
-  publishableKey,
-  resourceUrl,
-  properties,
-}: {
-  publishableKey: string;
-  resourceUrl: string;
-  properties?: Record<string, unknown>;
-}) {
-  const fapiUrl = deriveFapiUrl(publishableKey);
-
-  return generateProtectedResourceMetadata({
-    authServerUrl: fapiUrl,
-    resourceUrl,
-    properties: {
-      resource_documentation: 'https://clerk.com/docs',
-      ...properties,
-    },
+export function generateProtectedResourceMetadata(
+  options: GenerateProtectedResourceMetadataOptions,
+) {
+  const metadata = (authServerUrl: string) => ({
+    resource: options.resourceUrl,
+    authorization_servers: [authServerUrl],
+    bearer_methods_supported: ['header'],
   });
+
+  if (options.publishableKey === undefined) {
+    return Object.assign(metadata(options.authServerUrl), options.properties);
+  }
+
+  return Object.assign(
+    metadata(deriveFapiUrl(options.publishableKey)),
+    { resource_documentation: 'https://clerk.com/docs' },
+    options.properties,
+  );
 }
 
 function deriveFapiUrl(publishableKey: string) {
@@ -84,7 +91,15 @@ function deriveFapiUrl(publishableKey: string) {
   return `https://${decoded.replace(/\$/, '')}`;
 }
 
-export async function fetchClerkAuthorizationServerMetadata({
+/**
+ * Fetches RFC 8414 authorization server metadata for the Clerk instance a publishable key belongs to, from its
+ * Frontend API's `/.well-known/oauth-authorization-server`.
+ *
+ * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
+ * @param publishableKey - Clerk publishable key
+ * @returns The parsed metadata document
+ */
+export async function fetchAuthorizationServerMetadata({
   publishableKey,
 }: {
   publishableKey: string;
@@ -99,13 +114,14 @@ export async function fetchClerkAuthorizationServerMetadata({
 }
 
 /**
- * Verifies a Clerk token and returns data in the format expected to be passed
- * as `authData to the MCP SDK.
+ * Converts Clerk's auth object for an already-verified OAuth access token into the `AuthInfo` the MCP SDK expects.
+ * It verifies nothing itself: pass the result of `auth({ acceptsToken: 'oauth_token' })` or of a request state's
+ * `toAuth()`, which Clerk has already checked.
  * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
- * @param token - The token to verify
+ * @param token - The access token the auth object was produced from
  * @returns A `ClerkAuthInfo`, which is an `AuthInfo` (the MCP SDK auth info type), or `undefined`
  */
-export function verifyClerkToken(
+export function toClerkAuthInfo(
   auth: ClerkOAuthAuthObject,
   token: string | undefined,
 ): ClerkAuthInfo | undefined {
@@ -145,12 +161,12 @@ export function verifyClerkToken(
 }
 
 /**
- * Auth info produced by `verifyClerkToken`. `clientId` can be empty when the `AuthInfo` was built by hand.
+ * Auth info produced by `toClerkAuthInfo`. `clientId` can be empty when the `AuthInfo` was built by hand.
  */
 export type ClerkAuthInfo = AuthInfo & { extra: { userId: string; verifiedBy: 'clerk' } };
 
 /**
- * Whether `authInfo` came from `verifyClerkToken`, so its `clientId` and `extra.userId` are Clerk ids.
+ * Whether `authInfo` came from `toClerkAuthInfo`, so its `clientId` and `extra.userId` are Clerk ids.
  */
 export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is ClerkAuthInfo {
   const userId = authInfo?.extra?.userId;
@@ -182,7 +198,7 @@ export function matchResourceUrl(
 /**
  * CORS headers for OAuth metadata endpoints
  */
-export const corsHeaders = {
+export const metadataCorsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': '*',

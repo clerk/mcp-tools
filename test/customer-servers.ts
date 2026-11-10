@@ -28,7 +28,7 @@ export type CustomerServerKind = 'v1-route' | 'v2-registration' | 'v2-own-tool';
 
 type Listener = (req: IncomingMessage, res: ServerResponse) => void;
 
-// Stands in for `verifyClerkToken` after the customer's token check.
+// Stands in for `toClerkAuthInfo` after the customer's token check.
 function verify(token: string | undefined): AuthInfo | undefined {
   const match = Object.values(TOKENS).find((entry) => entry.token === token);
   if (!match) return undefined;

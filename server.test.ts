@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
-  generateClerkProtectedResourceMetadata,
-  generateProtectedResourceMetadata,
-  matchResourceUrl,
-} from './server';
+import { generateProtectedResourceMetadata, matchResourceUrl } from './server';
 
 // RFC 9728 section 2 parameters only: `jwks_uri` would name the protected resource's own keys, not the
 // authorization server's, and Clerk's documentation link is `resource_documentation`.
@@ -37,11 +33,12 @@ describe('generateProtectedResourceMetadata', () => {
   });
 });
 
-describe('generateClerkProtectedResourceMetadata', () => {
+describe('generateProtectedResourceMetadata with a publishable key', () => {
+  const publishableKey = `pk_test_${btoa('clerk.example.com$')}`;
+
   test('names the Frontend API as the authorization server and links the docs', () => {
-    const publishableKey = `pk_test_${btoa('clerk.example.com$')}`;
     expect(
-      generateClerkProtectedResourceMetadata({
+      generateProtectedResourceMetadata({
         publishableKey,
         resourceUrl: 'https://mcp.example.com/mcp',
       }),
@@ -50,6 +47,25 @@ describe('generateClerkProtectedResourceMetadata', () => {
       authorization_servers: ['https://clerk.example.com'],
       bearer_methods_supported: ['header'],
       resource_documentation: 'https://clerk.com/docs',
+    });
+  });
+
+  test('lets properties override the docs link', () => {
+    expect(
+      generateProtectedResourceMetadata({
+        publishableKey,
+        resourceUrl: 'https://mcp.example.com/mcp',
+        properties: {
+          resource_documentation: 'https://docs.example.com',
+          resource_name: 'Example',
+        },
+      }),
+    ).toStrictEqual({
+      resource: 'https://mcp.example.com/mcp',
+      authorization_servers: ['https://clerk.example.com'],
+      bearer_methods_supported: ['header'],
+      resource_documentation: 'https://docs.example.com',
+      resource_name: 'Example',
     });
   });
 });

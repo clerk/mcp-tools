@@ -14,11 +14,11 @@ import {
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
-  corsHeaders,
-  fetchClerkAuthorizationServerMetadata,
-  generateClerkProtectedResourceMetadata,
+  metadataCorsHeaders,
+  fetchAuthorizationServerMetadata,
+  generateProtectedResourceMetadata,
   requireAdditionalScopes,
-  verifyClerkToken,
+  toClerkAuthInfo,
 } from '../server';
 
 /**
@@ -35,7 +35,7 @@ export function protectedResourceHandler(
       throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
     }
 
-    const metadata = generateClerkProtectedResourceMetadata({
+    const metadata = generateProtectedResourceMetadata({
       publishableKey,
       resourceUrl: resourceFromMetadataUrl(req.url),
       properties,
@@ -47,7 +47,7 @@ export function protectedResourceHandler(
           'Cache-Control': 'max-age=3600',
           'Content-Type': 'application/json',
         },
-        corsHeaders,
+        metadataCorsHeaders,
       ),
     });
   };
@@ -64,7 +64,7 @@ export function authServerMetadataHandler(): () => Promise<Response> {
       throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
     }
 
-    const metadata = await fetchClerkAuthorizationServerMetadata({
+    const metadata = await fetchAuthorizationServerMetadata({
       publishableKey,
     });
 
@@ -74,7 +74,7 @@ export function authServerMetadataHandler(): () => Promise<Response> {
           'Cache-Control': 'max-age=3600',
           'Content-Type': 'application/json',
         },
-        corsHeaders,
+        metadataCorsHeaders,
       ),
     });
   };
@@ -88,7 +88,7 @@ export function metadataCorsOptionsRequestHandler(): () => Response {
   return (): Response => {
     return new Response(null, {
       status: 200,
-      headers: corsHeaders,
+      headers: metadataCorsHeaders,
     });
   };
 }
@@ -232,7 +232,7 @@ export function withMcpAuth(
   }, options)(handler);
 }
 
-// re-export the verifyClerkToken function for convenience
+// re-export toClerkAuthInfo for convenience
 export {
   type ClerkOAuthClient,
   McpAuthError,
@@ -242,5 +242,5 @@ export {
   type McpResourceUrl,
   McpTokenVerificationError,
   requireAdditionalScopes,
-  verifyClerkToken,
+  toClerkAuthInfo,
 };

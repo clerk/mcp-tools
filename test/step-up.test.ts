@@ -20,7 +20,7 @@ const TOKENS: Record<string, string[]> = {
   token_full: ['profile', ...TOOL_SCOPES],
 };
 
-// Stands in for `verifyClerkToken` after the customer's token check.
+// Stands in for `toClerkAuthInfo` after the customer's token check.
 function verify(req: Request): AuthInfo | undefined {
   const token = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
   if (!token) return undefined;

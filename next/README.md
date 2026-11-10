@@ -245,7 +245,7 @@ For custom authentication systems, verify tokens with `mcpAuth` and serve the me
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
 import { metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
-import { corsHeaders, generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
+import { generateProtectedResourceMetadata, metadataCorsHeaders } from '@clerk/mcp-tools/server';
 
 export function GET() {
   return Response.json(
@@ -253,7 +253,7 @@ export function GET() {
       authServerUrl: 'https://your-auth-server.com',
       resourceUrl: 'https://mcp.example.com/mcp',
     }),
-    { headers: corsHeaders },
+    { headers: metadataCorsHeaders },
   );
 }
 

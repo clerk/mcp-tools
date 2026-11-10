@@ -69,14 +69,13 @@ const PINNED: Record<string, Surface> = {
   },
   './server': {
     values: [
-      'corsHeaders',
-      'fetchClerkAuthorizationServerMetadata',
-      'generateClerkProtectedResourceMetadata',
+      'fetchAuthorizationServerMetadata',
       'generateProtectedResourceMetadata',
       'isClerkAuthInfo',
       'matchResourceUrl',
+      'metadataCorsHeaders',
       'requireAdditionalScopes',
-      'verifyClerkToken',
+      'toClerkAuthInfo',
     ],
     types: ['ClerkAuthInfo', 'ClerkOAuthAuthObject'],
   },
@@ -89,7 +88,7 @@ const PINNED: Record<string, Surface> = {
       'metadataCorsOptionsRequestHandler',
       'protectedResourceHandler',
       'requireAdditionalScopes',
-      'verifyClerkToken',
+      'toClerkAuthInfo',
       'withMcpAuth',
     ],
     types: [

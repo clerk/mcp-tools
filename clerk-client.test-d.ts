@@ -5,7 +5,7 @@ import { describe, test } from 'vitest';
 import { mcpAuthClerk as expressMcpAuthClerk } from './express';
 import { mcpAuthClerk as honoMcpAuthClerk } from './hono';
 import { withMcpAuth as nextWithMcpAuth } from './next';
-import { verifyClerkToken } from './server';
+import { toClerkAuthInfo } from './server';
 
 describe('the clerkClient option', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
@@ -27,8 +27,8 @@ describe('the clerkClient option', () => {
     nextWithMcpAuth(handler, { resourceUrl });
   });
 
-  test("verifyClerkToken accepts Clerk's own OAuth auth object", async () => {
-    verifyClerkToken(await auth({ acceptsToken: 'oauth_token' }), 'token');
+  test("toClerkAuthInfo accepts Clerk's own OAuth auth object", async () => {
+    toClerkAuthInfo(await auth({ acceptsToken: 'oauth_token' }), 'token');
   });
 
   test('rejects a value without authenticateRequest', () => {
