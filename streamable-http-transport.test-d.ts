@@ -14,6 +14,12 @@ describe('the streamableHttpHandler transport argument', () => {
   test('accepts the SDK McpServer and transport classes without annotations', () => {
     honoStreamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport);
     expressStreamableHttpHandler(createServer, StreamableHTTPServerTransport);
+  });
+
+  test('rejects a server object in place of the factory', () => {
+    // @ts-expect-error each request needs its own server, so a shared server object is not accepted
+    honoStreamableHttpHandler(createServer(), WebStandardStreamableHTTPServerTransport);
+    // @ts-expect-error each request needs its own server, so a shared server object is not accepted
     expressStreamableHttpHandler(createServer(), StreamableHTTPServerTransport);
   });
 
