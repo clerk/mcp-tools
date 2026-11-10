@@ -26,7 +26,7 @@ import {
  * @see https://datatracker.ietf.org/doc/html/rfc9728
  *
  */
-export function protectedResourceHandlerClerk(
+export function protectedResourceHandler(
   properties?: Record<string, unknown>,
 ): (req: Request) => Response {
   return (req: Request): Response => {
@@ -57,7 +57,7 @@ export function protectedResourceHandlerClerk(
  * OAuth 2.0 Authorization Server Metadata endpoint based on RFC 8414
  * @see https://datatracker.ietf.org/doc/html/rfc8414
  */
-export function authServerMetadataHandlerClerk(): () => Promise<Response> {
+export function authServerMetadataHandler(): () => Promise<Response> {
   return async (): Promise<Response> => {
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {

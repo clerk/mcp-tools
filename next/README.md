@@ -28,10 +28,10 @@ Here's the basic structure you'll need:
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
+import { protectedResourceHandler } from '@clerk/mcp-tools/next';
 
 // The same values as the MCP endpoint's `resourceUrl` and `requiredScopes` below
-const handler = protectedResourceHandlerClerk({
+const handler = protectedResourceHandler({
   resource: 'https://mcp.example.com/mcp',
   scopes_supported: ['profile', 'email'],
 });
@@ -110,7 +110,7 @@ The MCP client functionality uses the core `@clerk/mcp-tools/client` utilities. 
 
 Key Next.js-specific patterns include:
 
-### `protectedResourceHandlerClerk`
+### `protectedResourceHandler`
 
 Next.js route handler that returns OAuth protected resource metadata for Clerk integration, as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, see [With Custom Authentication](#with-custom-authentication).
 
@@ -118,18 +118,18 @@ Next.js route handler that returns OAuth protected resource metadata for Clerk i
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceHandlerClerk } from '@clerk/mcp-tools/next';
+import { protectedResourceHandler } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk({ resource: 'https://mcp.example.com/mcp' });
+const handler = protectedResourceHandler({ resource: 'https://mcp.example.com/mcp' });
 
 export { handler as GET };
 ```
 
 This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
 
-The metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to. If clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceHandlerClerk({ resource: 'https://app.example.com/mcp' })`.
+The metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to. If clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceHandler({ resource: 'https://app.example.com/mcp' })`.
 
-### `authServerMetadataHandlerClerk`
+### `authServerMetadataHandler`
 
 Next.js route handler for OAuth 2.0 Authorization Server Metadata endpoint based on [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
 
@@ -137,9 +137,9 @@ Next.js route handler for OAuth 2.0 Authorization Server Metadata endpoint based
 
 ```ts
 // app/.well-known/oauth-authorization-server/route.ts
-import { authServerMetadataHandlerClerk } from '@clerk/mcp-tools/next';
+import { authServerMetadataHandler } from '@clerk/mcp-tools/next';
 
-const handler = authServerMetadataHandlerClerk();
+const handler = authServerMetadataHandler();
 
 export { handler as GET };
 ```
@@ -152,12 +152,9 @@ CORS options request handler for OAuth metadata endpoints. Necessary for MCP cli
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import {
-  protectedResourceHandlerClerk,
-  metadataCorsOptionsRequestHandler,
-} from '@clerk/mcp-tools/next';
+import { protectedResourceHandler, metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandlerClerk({ resource: 'https://mcp.example.com/mcp' });
+const handler = protectedResourceHandler({ resource: 'https://mcp.example.com/mcp' });
 const corsHandler = metadataCorsOptionsRequestHandler();
 
 export { handler as GET, corsHandler as OPTIONS };

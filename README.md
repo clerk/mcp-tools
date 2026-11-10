@@ -177,13 +177,10 @@ First, serve the protected resource metadata at the path form of the MCP endpoin
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import {
-  metadataCorsOptionsRequestHandler,
-  protectedResourceHandlerClerk,
-} from '@clerk/mcp-tools/next';
+import { metadataCorsOptionsRequestHandler, protectedResourceHandler } from '@clerk/mcp-tools/next';
 
 // List every scope the server's tools need, here the `requiredScopes` of the tool below.
-const handler = protectedResourceHandlerClerk({
+const handler = protectedResourceHandler({
   resource: 'https://app.example.com/mcp',
   scopes_supported: ['browser_session'],
 });

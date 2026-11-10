@@ -63,7 +63,7 @@ const metadataRoutes: [string, Send][] = [
     'express',
     (path) => {
       const app = express();
-      app.use(WELL_KNOWN, expressAdapter.protectedResourceHandlerClerk());
+      app.use(WELL_KNOWN, expressAdapter.protectedResourceHandler());
       return sendExpress(app, path);
     },
   ],
@@ -71,18 +71,18 @@ const metadataRoutes: [string, Send][] = [
     'hono',
     async (path) => {
       const app = new Hono();
-      app.get('*', honoAdapter.protectedResourceHandlerClerk());
+      app.get('*', honoAdapter.protectedResourceHandler());
       return answer(await app.request(`${origin}${path}`), origin);
     },
   ],
   [
     'next',
     async (path) =>
-      answer(nextAdapter.protectedResourceHandlerClerk()(new Request(`${origin}${path}`)), origin),
+      answer(nextAdapter.protectedResourceHandler()(new Request(`${origin}${path}`)), origin),
   ],
 ];
 
-describe.each(metadataRoutes)('%s protectedResourceHandlerClerk', (_name, send) => {
+describe.each(metadataRoutes)('%s protectedResourceHandler', (_name, send) => {
   beforeEach(() => {
     process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
