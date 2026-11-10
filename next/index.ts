@@ -21,7 +21,8 @@ import {
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withMcpAuth`, all optional, plus
- * `properties`, so one object, such as one exported from `lib/mcp.ts`, can be passed to both. It ignores
+ * `properties`, so one object, such as one exported from `lib/mcp.ts`, can be passed to both. The handler reads
+ * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and ignores the other `McpAuthOptions` keys:
  * `clerkClient`, `verifyToken`, and `onAuthFailure`.
  */
 export type ProtectedResourceMetadataOptions =
