@@ -15,7 +15,7 @@ import {
 /**
  * The options every auth entry point takes, with `resourceUrl` optional as it is for a custom verifier.
  */
-export type VerifierAuthOptions = {
+export type BaseAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
@@ -44,7 +44,7 @@ export type VerifierAuthOptions = {
 /**
  * The options for verifying tokens with Clerk, which needs `resourceUrl` as the audience.
  */
-export type ClerkAuthOptions = VerifierAuthOptions & {
+export type ClerkAuthOptions = BaseAuthOptions & {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. Clerk rejects a token whose `aud` claim does not include the URL for the
@@ -59,7 +59,7 @@ export type ClerkAuthOptions = VerifierAuthOptions & {
  * The branch of every adapter's options union that verifies tokens with the caller's function, for the framework's
  * request type `Req`. `resourceUrl` is optional, and `clerkClient` is not allowed.
  */
-export type CustomVerifierAuthOptions<Req> = VerifierAuthOptions & {
+export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
   /**
    * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
    * `McpTokenVerificationError` to reject it with a reason.
@@ -105,7 +105,7 @@ type BearerResult =
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param options - The entry point's options
  */
-export function assertMcpAuthOptions(caller: string, options: VerifierAuthOptions | undefined) {
+export function assertMcpAuthOptions(caller: string, options: BaseAuthOptions | undefined) {
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
   if (options?.resourceUrl !== undefined) assertResourceUrls(caller, options.resourceUrl);
@@ -171,16 +171,58 @@ export function assertMiddlewareAuthOptions(options: unknown) {
       `Clerk error: mcpAuth takes an options object, not a verifier function. Call it as mcpAuth({ verifyToken }) to verify tokens with your own function, or as mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }) to verify them with Clerk`,
     );
   }
+  assertVerifierOrResourceUrl(
+    options,
+    `Clerk error: mcpAuth needs a resourceUrl to verify tokens with Clerk. Call it as mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }), or as mcpAuth({ verifyToken }) with your own verifier, instead of passing mcpAuth to the route directly`,
+  );
+  assertMcpAuthOptions('mcpAuth', options as BaseAuthOptions);
+}
+
+/**
+ * Throws `message` unless `options` has either a `verifyToken` or a `resourceUrl`, the audience Clerk verifies tokens
+ * against. Each entry point names its own call forms in `message`.
+ * @param options - The entry point's options, unchecked
+ * @param message - The error message, starting with `Clerk error:`
+ */
+export function assertVerifierOrResourceUrl(options: unknown, message: string) {
   const { verifyToken, resourceUrl } = (options ?? {}) as {
     verifyToken?: unknown;
     resourceUrl?: unknown;
   };
   if (verifyToken === undefined && typeof resourceUrl !== 'string' && !Array.isArray(resourceUrl)) {
-    throw new Error(
-      `Clerk error: mcpAuth needs a resourceUrl to verify tokens with Clerk. Call it as mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }), or as mcpAuth({ verifyToken }) with your own verifier, instead of passing mcpAuth to the route directly`,
-    );
+    throw new Error(message);
   }
-  assertMcpAuthOptions('mcpAuth', options as VerifierAuthOptions);
+}
+
+/**
+ * The verifier for the Clerk branch of an entry point's options. Each token is verified with the client `clientFor`
+ * returns for the request, with the listed `resourceUrl` for the request's origin as the audience.
+ * @param options - The Clerk branch of the options, which always has `resourceUrl`
+ * @param clientFor - Returns the Clerk client for a request
+ * @param requestUrlOf - Returns the URL a request was made to
+ * @returns A verifier that takes the token and the framework's request
+ */
+export function clerkTokenVerifier<Req>(
+  { resourceUrl }: ClerkAuthOptions,
+  clientFor: (request: Req) => ClerkOAuthClient | Promise<ClerkOAuthClient>,
+  requestUrlOf: (request: Req) => string,
+): (token: string, request: Req) => Promise<AuthInfo> {
+  return async (token, request) => {
+    const client = await clientFor(request);
+    return verifyClerkOAuthToken(client, token, audienceFor(resourceUrl, requestUrlOf(request)));
+  };
+}
+
+/**
+ * The `CLERK_PUBLISHABLE_KEY` the Express and Hono metadata handlers read, or an error when it is not set.
+ * @param publishableKey - The value of `CLERK_PUBLISHABLE_KEY` in the app's environment
+ * @returns The publishable key
+ */
+export function requirePublishableKey(publishableKey: string | undefined): string {
+  if (!publishableKey) {
+    throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
+  }
+  return publishableKey;
 }
 
 /**
