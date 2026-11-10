@@ -680,16 +680,10 @@ describe('streamableHttpHandler', () => {
     });
   });
 
-  test('handles sequential requests with a shared server instance', async () => {
-    await withApp(streamableHttpHandler(createMcpServer(), Transport), async (baseUrl) => {
-      const res1 = await postInitialize(baseUrl);
-      await res1.text();
-      // let the transport's close-on-response-end release the shared server
-      await vi.waitFor(async () => {
-        const res2 = await postInitialize(baseUrl);
-        expect(res2.status).toBe(200);
-        await res2.text();
-      });
-    });
+  test('throws at setup when given a server object instead of a factory', () => {
+    // @ts-expect-error a shared server object is not accepted
+    expect(() => streamableHttpHandler(createMcpServer(), Transport)).toThrow(
+      'Clerk error: streamableHttpHandler needs a function that returns a new MCP server as its first argument, so each request gets its own server. Call streamableHttpHandler(() => new McpServer(...), StreamableHTTPServerTransport) instead of passing a server object',
+    );
   });
 });
