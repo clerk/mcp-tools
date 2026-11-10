@@ -1,6 +1,6 @@
 // Rules the Express, Hono, and Next.js adapters must apply the same way, run against all three.
 import express from 'express';
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -506,6 +506,90 @@ describe('metadata handler headers', () => {
     expect('metadataCorsHandler' in honoAdapter).toBe(false);
   });
 });
+
+// 0.9.0's `authServerMetadataHandlerClerk` was passed to the route without being called, so code that only renames it
+// passes `authorizationServerMetadataHandler` itself, and the framework calls it with the request. Each case mounts it
+// that way and returns the error the app reported.
+const uncalledAuthorizationServerRoutes: [string, () => Promise<string>][] = [
+  [
+    'express',
+    async () => {
+      const app = express();
+      let error: unknown;
+      app.get(
+        AUTH_SERVER_PATH,
+        expressAdapter.authorizationServerMetadataHandler as unknown as express.RequestHandler,
+      );
+      app.use(
+        (
+          err: unknown,
+          _req: express.Request,
+          res: express.Response,
+          _next: express.NextFunction,
+        ) => {
+          error = err;
+          res.status(500).json({ error: 'server_error' });
+        },
+      );
+      const res = await sendExpress(app, AUTH_SERVER_PATH);
+      expect(res.status).toBe(500);
+      return String(error);
+    },
+  ],
+  [
+    'hono',
+    async () => {
+      const app = new Hono();
+      let error: unknown;
+      app.onError((err, c) => {
+        error = err;
+        return c.json({ error: 'server_error' }, 500);
+      });
+      app.get(
+        AUTH_SERVER_PATH,
+        honoAdapter.authorizationServerMetadataHandler as unknown as MiddlewareHandler,
+      );
+      const res = await app.request(`${origin}${AUTH_SERVER_PATH}`);
+      expect(res.status).toBe(500);
+      return String(error);
+    },
+  ],
+  [
+    'next',
+    async () => {
+      const GET = nextAdapter.authorizationServerMetadataHandler as unknown as (
+        req: Request,
+      ) => Promise<Response>;
+      try {
+        await GET(new Request(`${origin}${AUTH_SERVER_PATH}`));
+      } catch (error) {
+        return String(error);
+      }
+      return 'no error';
+    },
+  ],
+];
+
+describe.each(uncalledAuthorizationServerRoutes)(
+  '%s authorizationServerMetadataHandler passed without being called',
+  (_name, sendUncalled) => {
+    beforeEach(() => {
+      process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    });
+
+    afterEach(() => {
+      delete process.env.CLERK_PUBLISHABLE_KEY;
+      delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+    });
+
+    test('throws a Clerk error naming the fix instead of hanging', async () => {
+      expect(await sendUncalled()).toContain(
+        'Clerk error: call authorizationServerMetadataHandler() and pass its result',
+      );
+    });
+  },
+);
 
 const expired = (): AuthInfo => ({
   token: 't',
