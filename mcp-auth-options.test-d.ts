@@ -36,6 +36,13 @@ describe('the mcpAuth options', () => {
     nextWithMcpAuth(handler, { verifyToken: async (_token: string, _req: Request) => undefined });
   });
 
+  test('accept a verifyToken that returns without a promise', () => {
+    const authInfo = { token: 'token', clientId: 'client', scopes: [] };
+    expressMcpAuth({ verifyToken: (token) => (token ? authInfo : undefined) });
+    honoMcpAuth({ verifyToken: (token) => (token ? authInfo : undefined) });
+    nextWithMcpAuth(handler, { verifyToken: (token) => (token ? authInfo : undefined) });
+  });
+
   test('accept onAuthFailure in Next.js with either verifier', () => {
     const onAuthFailure = () => {};
     nextWithMcpAuth(handler, { resourceUrl, clerkClient, onAuthFailure });
