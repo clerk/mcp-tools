@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
-// The exact public surface of every subpath in the `exports` map. A change to any entry point's exports must change
-// this list in the same commit, so the surface only ever changes on purpose. `null` pins a subpath that has no entry
-// module to export from.
-type Surface = { values: string[]; types: string[] } | null;
+// The exact public surface of every module subpath in the `exports` map. A change to any entry point's exports must
+// change this list in the same commit, so the surface only ever changes on purpose.
+type Surface = { values: string[]; types: string[] };
 
 const PINNED: Record<string, Surface> = {
   './client': {
@@ -148,27 +148,32 @@ const PINNED: Record<string, Surface> = {
 
 const root = dirname(fileURLToPath(import.meta.url));
 
-type ExportTarget = string | { import: string; types: string };
+type ExportTarget = string | Record<string, string>;
 
-const exportsMap: Record<string, ExportTarget> = JSON.parse(
-  readFileSync(join(root, 'package.json'), 'utf8'),
-).exports;
+const packageJson: { name: string; main?: unknown; exports: Record<string, ExportTarget> } =
+  JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+const exportsMap = packageJson.exports;
 
-// `./dist/next/index.mjs` is built from `next/index.ts`. A target that is not a built module, such as a bare
-// directory, has no entry module.
-function entrySource(target: ExportTarget) {
+// The one subpath that is not a module: it exposes the manifest so tools can read the package version.
+const MANIFEST_SUBPATH = './package.json';
+
+// Subpaths earlier releases exported that must stay gone.
+const REMOVED_SUBPATHS = ['./feedback', './create-browser-session', './stores', '.'];
+
+// `./dist/next/index.mjs` is built from `next/index.ts`. Every module subpath must point at a built module.
+function entrySource(subpath: string, target: ExportTarget) {
   const built = typeof target === 'string' ? target : target.import;
-  const match = /^\.\/dist\/(.+)\.mjs$/.exec(built);
-  return match ? join(root, `${match[1]}.ts`) : undefined;
+  const match = built ? /^\.\/dist\/(.+)\.mjs$/.exec(built) : null;
+  if (!match) throw new Error(`${subpath} does not point at a built module`);
+  return join(root, `${match[1]}.ts`);
 }
 
-const entries = Object.entries(exportsMap).map(([subpath, target]) => ({
-  subpath,
-  source: entrySource(target),
-}));
+const entries = Object.entries(exportsMap)
+  .filter(([subpath]) => subpath !== MANIFEST_SUBPATH)
+  .map(([subpath, target]) => ({ subpath, source: entrySource(subpath, target) }));
 
 const program = ts.createProgram(
-  entries.flatMap(({ source }) => (source ? [source] : [])),
+  entries.map(({ source }) => source),
   {
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
@@ -203,8 +208,7 @@ function isValueExport(symbol: ts.Symbol): boolean {
   return (current.flags & ts.SymbolFlags.Value) !== 0;
 }
 
-function surfaceOf(source: string | undefined): Surface {
-  if (!source) return null;
+function surfaceOf(source: string): Surface {
   const file = program.getSourceFile(source);
   if (!file) throw new Error(`${source} is not part of the program`);
   const moduleSymbol = checker.getSymbolAtLocation(file);
@@ -232,9 +236,7 @@ describe('export surface', () => {
       const surfaceAt = (subpath: string) => {
         const target = exportsMap[subpath];
         if (!target) throw new Error(`${subpath} is not in the exports map`);
-        const surface = surfaceOf(entrySource(target));
-        if (!surface) throw new Error(`${subpath} has no entry module`);
-        return surface;
+        return surfaceOf(entrySource(subpath, target));
       };
       const core = surfaceAt('./server');
       const surface = surfaceAt(adapter);
@@ -251,5 +253,27 @@ describe('export surface', () => {
 
   test('every pinned subpath is in the exports map', () => {
     expect(Object.keys(PINNED).filter((subpath) => !(subpath in exportsMap))).toEqual([]);
+  });
+
+  test.each(REMOVED_SUBPATHS)('%s is not exported', (subpath) => {
+    expect(exportsMap).not.toHaveProperty([subpath]);
+  });
+
+  // TypeScript picks the first condition that matches, so `types` must come before `import` for every module
+  // resolution mode to find the declarations.
+  test.each(entries.map(({ subpath }) => subpath))(
+    '%s lists the types condition first',
+    (subpath) => {
+      expect(Object.keys(exportsMap[subpath] ?? {})).toEqual(['types', 'import']);
+    },
+  );
+
+  test('has no main field, since the package has no root entry point', () => {
+    expect(packageJson).not.toHaveProperty('main');
+  });
+
+  test('@clerk/mcp-tools/package.json resolves to the manifest', () => {
+    const resolved = createRequire(import.meta.url).resolve(`${packageJson.name}/package.json`);
+    expect(resolved).toBe(join(root, 'package.json'));
   });
 });
