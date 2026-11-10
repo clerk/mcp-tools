@@ -8,6 +8,7 @@ import {
   type McpAuthClerkOptions,
   type McpAuthFailure,
   type McpAuthOptions,
+  type McpResourceUrl,
   McpAuthError,
   McpTokenVerificationError,
   assertMcpAuthClerkOptions,
@@ -31,12 +32,19 @@ declare global {
   }
 }
 
-export { McpAuthError, type McpAuthFailure, McpTokenVerificationError };
+export {
+  McpAuthError,
+  type McpAuthClerkOptions,
+  type McpAuthFailure,
+  type McpAuthOptions,
+  type McpResourceUrl,
+  McpTokenVerificationError,
+};
 
 /**
  * Express middleware that enforces authentication for MCP requests.
- * @param verifyToken - A function that verifies a token and returns either the
- * auth data or false
+ * @param verifyToken - A function that verifies a token and returns the auth
+ * data, or `undefined` to reject it
  * @param options - The public `resourceUrl` of this endpoint and the
  * `requiredScopes` every request needs
  * @returns The middleware. A missing or rejected token gets a 401 challenge,
@@ -69,9 +77,16 @@ export function mcpAuth(
   assertMcpAuthOptions('mcpAuth', options);
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // A `Host` header that does not parse would otherwise throw below and reach the app as a server error
+    const requestUrl = getRequestUrl(req);
+    if (!URL.canParse(requestUrl)) {
+      res.status(400).json({ error: 'invalid_request' });
+      return;
+    }
+
     const result = await authenticateBearer({
       authorization: req.headers.authorization,
-      requestUrl: getRequestUrl(req),
+      requestUrl,
       resourceUrl: options?.resourceUrl,
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
@@ -102,7 +117,8 @@ export function mcpAuth(
  * secret key does not come from `CLERK_SECRET_KEY`; it defaults to
  * `clerkClient` from `@clerk/express`. Create the client with both
  * `secretKey` and `publishableKey`: without a publishable key, every request
- * fails.
+ * fails. A client from `@clerk/backend` must be version 3.19.0 or later, the
+ * first with a reliable audience check.
  * @returns The middleware. A missing or rejected token gets a 401 challenge,
  * and a token without `requiredScopes` gets a 403 challenge.
  * @example

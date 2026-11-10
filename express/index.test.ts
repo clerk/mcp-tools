@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express from 'express';
-import type { AddressInfo } from 'node:net';
+import { type AddressInfo, connect } from 'node:net';
 import type { Server } from 'node:http';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -337,6 +337,57 @@ describe('mcpAuth', () => {
 
     expect(res.status).toBe(503);
   });
+
+  test.each([401, 429])(
+    "answers 500 when the verifier error's status is %i, which is not the client's to act on",
+    async (status) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const app = express();
+      app.post(
+        '/mcp',
+        mcpAuth(async () => {
+          throw Object.assign(new Error('introspection failed'), { status });
+        }),
+      );
+
+      const res = await withListening(app, (baseUrl) =>
+        fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
+      );
+      consoleError.mockRestore();
+
+      expect(res.status).toBe(500);
+      expect(res.headers.get('WWW-Authenticate')).toBeNull();
+    },
+  );
+
+  test.each([undefined, ['https://mcp.example.com/mcp']])(
+    'answers a Host header that does not parse with a 400 (resourceUrl: %j)',
+    async (listed) => {
+      const verifyToken = vi.fn();
+      const app = express();
+      app.post('/mcp', mcpAuth(verifyToken, { resourceUrl: listed }), (_req, res) => {
+        res.json({});
+      });
+
+      const status = await withListening(app, (baseUrl) => {
+        const { port } = new URL(baseUrl);
+        return new Promise<string>((resolve, reject) => {
+          const socket = connect(Number(port), '127.0.0.1', () => {
+            socket.write(
+              'POST /mcp HTTP/1.1\r\nHost: [\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+            );
+          });
+          let response = '';
+          socket.on('data', (chunk) => (response += chunk.toString()));
+          socket.on('end', () => resolve(response.split('\r\n')[0] ?? ''));
+          socket.on('error', reject);
+        });
+      });
+
+      expect(status).toBe('HTTP/1.1 400 Bad Request');
+      expect(verifyToken).not.toHaveBeenCalled();
+    },
+  );
 });
 
 async function withListening<T>(app: express.Express, fn: (baseUrl: string) => Promise<T>) {

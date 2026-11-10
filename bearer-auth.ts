@@ -7,8 +7,9 @@ import { matchResourceUrl, verifyClerkToken } from './server';
 
 /**
  * Why `mcpAuth` answered a request with a 401 or 403 challenge, or with a 421 for a request to an origin that no
- * listed `resourceUrl` has. The adapters record it on the request context, such as Express `res.locals.mcpAuthFailure`
- * or Hono `c.get('mcpAuthFailure')`, for example for logging.
+ * listed `resourceUrl` has. The Express and Hono adapters record it on the request context, as
+ * `res.locals.mcpAuthFailure` and `c.get('mcpAuthFailure')`, and the Next.js adapter passes it to `onAuthFailure`, for
+ * example for logging.
  */
 export type McpAuthFailure = {
   reason:
@@ -53,14 +54,18 @@ export class McpTokenVerificationError extends Error {
  */
 export class McpAuthError extends Error {
   readonly reason = 'verification_failed';
-  /** The `cause`'s numeric `status`, if any, so Express's default error handler still answers with it. */
+  /**
+   * The `cause`'s `status` when it is a 5xx, so Express's default error handler still answers with it. Any other
+   * status would become the answer to the client's own request, such as a 401 without the challenge a 401 must carry
+   * (RFC 9110 section 15.5.2).
+   */
   readonly status: number | undefined;
 
   constructor(cause: unknown) {
     super('Clerk error: MCP access token verification failed', { cause });
     this.name = 'McpAuthError';
     const status = (cause as { status?: unknown } | null)?.status;
-    this.status = typeof status === 'number' ? status : undefined;
+    this.status = typeof status === 'number' && status >= 500 && status <= 599 ? status : undefined;
   }
 }
 
@@ -138,7 +143,7 @@ function assertResourceUrls(caller: string, resourceUrl: unknown) {
   for (const url of urls) {
     if (typeof url !== 'string' || !isResourceUrl(url)) {
       throw new Error(
-        `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials`,
+        `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials or a fragment`,
       );
     }
     // The request's origin picks the URL, so two URLs with one origin would leave the choice ambiguous
@@ -166,10 +171,10 @@ export function audienceFor(resourceUrl: McpResourceUrl, requestUrl: string): st
   return audience;
 }
 
-// A URL with another scheme, such as `mailto:`, has no origin for the challenge, and `new Request` throws on a URL with
-// credentials.
+// A URL with another scheme, such as `mailto:`, has no origin for the challenge, `new Request` throws on a URL with
+// credentials, and a resource identifier must not have a fragment (RFC 8707 section 2).
 function isResourceUrl(value: string): boolean {
-  if (!URL.canParse(value)) return false;
+  if (!URL.canParse(value) || value.includes('#')) return false;
   const url = new URL(value);
   return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password;
 }
@@ -188,10 +193,13 @@ export function assertMcpAuthClerkOptions(options: McpAuthClerkOptions) {
   assertMcpAuthOptions('mcpAuthClerk', options);
 }
 
-/** The RFC 9728 metadata URL for a resource: the well-known path goes between the host and the resource's path. */
+/**
+ * The RFC 9728 section 3 metadata URL for a resource: the well-known path goes between the host and the resource's
+ * path and query.
+ */
 export function resourceMetadataUrlFor(resourceUrl: string): string {
-  const { origin, pathname } = new URL(resourceUrl);
-  return `${origin}/.well-known/oauth-protected-resource${pathname === '/' ? '' : pathname}`;
+  const { origin, pathname, search } = new URL(resourceUrl);
+  return `${origin}/.well-known/oauth-protected-resource${pathname === '/' ? '' : pathname}${search}`;
 }
 
 // An RFC 9110 `auth-param` value here is a `quoted-string`: a URL's `:` and `/` are not allowed in a bare token.
@@ -216,7 +224,9 @@ function bearerChallenge({
 
 type ParsedAuthorization = { token: string } | { reason: 'missing_token' | 'malformed_token' };
 
-// The token from a well-formed `Bearer <token>` header. The scheme is case-insensitive.
+// The token from a well-formed `Bearer <token>` header. The scheme is case-insensitive. Malformed Bearer credentials
+// are challenged like a missing header, not answered with the 400 `invalid_request` that RFC 6750 section 3.1
+// suggests, so that a client sending an empty token can still start authorization.
 function parseAuthorization(header: string | undefined): ParsedAuthorization {
   if (!header?.trim()) return { reason: 'missing_token' };
   const [scheme, token, ...rest] = header.trim().split(/\s+/);
@@ -226,10 +236,11 @@ function parseAuthorization(header: string | undefined): ParsedAuthorization {
   return { token };
 }
 
-// The RFC 9728 metadata URL for the request's own path, used when `resourceUrl` is not set. The query is left out.
+// The RFC 9728 metadata URL for the request's own path, used when `resourceUrl` is not set. The request's query is
+// left out: it belongs to the request, not to the resource.
 function requestResourceMetadataUrl(requestUrl: string): string {
   const { origin, pathname } = new URL(requestUrl);
-  return `${origin}/.well-known/oauth-protected-resource${pathname}`;
+  return resourceMetadataUrlFor(`${origin}${pathname}`);
 }
 
 /**
@@ -352,9 +363,15 @@ export async function verifyClerkOAuthToken(
   token: string,
   audience: string,
 ) {
+  // Clerk compares the audience exactly, and a client can send the resource in normalized form, such as
+  // `https://mcp.example.com/` for `https://mcp.example.com`, so both forms of the same URL are accepted
+  const normalized = new URL(audience).href;
   const requestState = await client.authenticateRequest(
     new Request(audience, { headers: { authorization: `Bearer ${token}` } }),
-    { acceptsToken: 'oauth_token', audience },
+    {
+      acceptsToken: 'oauth_token',
+      audience: normalized === audience ? audience : [audience, normalized],
+    },
   );
   if (!requestState.isAuthenticated) {
     const { reason, message } = requestState;
@@ -366,5 +383,13 @@ export async function verifyClerkOAuthToken(
     if (verificationUnavailable.has(reason)) throw new McpAuthError(error);
     throw error;
   }
-  return verifyClerkToken(requestState.toAuth(), token);
+
+  const authInfo = verifyClerkToken(requestState.toAuth(), token);
+  if (!authInfo) {
+    throw new McpTokenVerificationError(
+      'token-claims-missing',
+      'Clerk verified the token, but it has no user ID, client ID, or scopes',
+    );
+  }
+  return authInfo;
 }

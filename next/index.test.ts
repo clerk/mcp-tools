@@ -9,6 +9,7 @@ vi.mock('@clerk/nextjs/server', () => ({
 
 import {
   McpAuthError,
+  type McpAuthFailure,
   McpTokenVerificationError,
   type McpRouteHandler,
   mcpAuth,
@@ -234,13 +235,42 @@ describe('mcpAuthClerk', () => {
   test('answers a rejected token with the invalid_token challenge', async () => {
     defaultAuthenticateRequest.mockResolvedValue({
       isAuthenticated: false,
-      reason: 'token-invalid-audience',
+      reason: 'token-verification-failed',
+      message: 'OAuth audience mismatch. (code=token-verification-failed, status=n/a)',
     });
+    const failures: McpAuthFailure[] = [];
 
-    const res = await mcpAuthClerk({ resourceUrl })(echoAuth)(request('Bearer token-1'));
+    const res = await mcpAuthClerk({
+      resourceUrl,
+      onAuthFailure: (failure) => failures.push(failure),
+    })(echoAuth)(request('Bearer token-1'));
 
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, error="invalid_token"`);
+    expect(await res.text()).not.toContain('audience');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.reason).toBe('invalid_token');
+    expect(failures[0]?.cause).toBeInstanceOf(McpTokenVerificationError);
+    expect(failures[0]?.cause).toMatchObject({ code: 'token-verification-failed' });
+  });
+
+  test('passes each failure and its request to onAuthFailure, and nothing for a verified token', async () => {
+    const calls: [McpAuthFailure, Request][] = [];
+    const wrapped = mcpAuth(async (token) => (token === 'good' ? authInfo([]) : undefined), {
+      resourceUrl: [resourceUrl],
+      onAuthFailure: (failure, req) => calls.push([failure, req]),
+    })(echoAuth);
+    const missing = request();
+    const misdirected = new Request('https://other.example.com/mcp', { method: 'POST' });
+
+    await wrapped(missing);
+    await wrapped(misdirected);
+    await wrapped(request('Bearer good'));
+
+    expect(calls).toEqual([
+      [{ reason: 'missing_token' }, missing],
+      [{ reason: 'misdirected_request' }, misdirected],
+    ]);
   });
 
   test('throws when Clerk could not verify the token, instead of answering with a challenge', async () => {
