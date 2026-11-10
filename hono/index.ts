@@ -3,10 +3,8 @@ import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../m
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
-  type McpAuthClerkOptions,
-  type McpAuthOptions,
-  assertMcpAuthClerkOptions,
-  assertMcpAuthOptions,
+  type MiddlewareAuthOptions,
+  assertMiddlewareAuthOptions,
   assertTransportClass,
   audienceFor,
   authenticateBearer,
@@ -14,7 +12,6 @@ import {
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
-  type ClerkOAuthClient,
   type McpAuthFailure,
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
@@ -31,7 +28,12 @@ declare module 'hono' {
 // Everything in the core subpath, so a Hono app imports from this subpath alone
 export * from '../server';
 
-export type { McpAuthClerkOptions, McpAuthOptions };
+/**
+ * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
+ * its audience, and `clerkClient` defaults to the client that `clerkMiddleware()` sets. With `verifyToken`, that
+ * function verifies each token with the Hono context, `resourceUrl` is optional, and `clerkClient` is not allowed.
+ */
+export type McpAuthOptions = MiddlewareAuthOptions<Context>;
 
 /**
  * The part of a web-standard streamable HTTP server transport, such as `WebStandardStreamableHTTPServerTransport` from
@@ -83,25 +85,58 @@ export function authorizationServerMetadataHandler() {
 }
 
 /**
- * Hono middleware that enforces authentication for MCP requests.
- * @param verifyToken - Verifies a token and returns the auth data, or `undefined` to reject it
- * @param options - The public `resourceUrl` of this endpoint and the `requiredScopes` every request needs
- * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
- * a 403 challenge.
+ * Hono middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
+ * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
+ * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
+ * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
+ * `verifyToken` function. Without `clerkClient`, it uses the client that `clerkMiddleware()` sets, so
+ * `clerkMiddleware()` must run first. Pass a client created with both `secretKey` and `publishableKey` to keep
+ * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from
+ * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called
+ * with the token and the Hono context, and returns the auth data, or `undefined` to reject it.
+ * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
+ * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded in the
+ * `mcpAuthFailure` context variable.
+ * @example
+ * ```ts
+ * app.post(
+ *   '/mcp',
+ *   mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp', requiredScopes: ['profile', 'email'] }),
+ *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+ * );
+ * ```
+ * @example
+ * ```ts
+ * app.post(
+ *   '/mcp',
+ *   mcpAuth({ verifyToken: (token, c) => verifyMyToken(token), resourceUrl: 'https://mcp.example.com/mcp' }),
+ *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+ * );
+ * ```
  */
-export function mcpAuth(
-  verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions,
-): MiddlewareHandler {
-  assertMcpAuthOptions('mcpAuth', options);
+export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
+  assertMiddlewareAuthOptions(options);
+  const verifyToken =
+    options.verifyToken ??
+    ((token: string, c: Context) => {
+      const client =
+        options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
+      if (!client) {
+        throw new Error(
+          'Clerk error: mcpAuth needs a clerkClient option or clerkMiddleware() to run first',
+        );
+      }
+      // `resourceUrl` is set whenever `verifyToken` is not
+      return verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl!, c.req.url));
+    });
 
   return async (c: Context, next: Next) => {
     const result = await authenticateBearer({
       authorization: c.req.header('authorization'),
       requestUrl: c.req.url,
-      resourceUrl: options?.resourceUrl,
-      requiredScopes: options?.requiredScopes,
-      challengeScopes: options?.challengeScopes,
+      resourceUrl: options.resourceUrl,
+      requiredScopes: options.requiredScopes,
+      challengeScopes: options.challengeScopes,
       verifyToken: (token) => verifyToken(token, c),
     });
 
@@ -122,39 +157,8 @@ export function mcpAuth(
 }
 
 /**
- * Hono middleware that enforces authentication for MCP requests and verifies the OAuth access token with Clerk,
- * including that its audience is this endpoint.
- * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, and the `clerkClient` that verifies tokens. Without `clerkClient`, it uses the client that
- * `clerkMiddleware()` sets, so `clerkMiddleware()` must run first. Pass a client created with both `secretKey` and
- * `publishableKey` to keep `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A
- * client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
- * @returns The middleware. A missing or rejected token gets a 401 challenge, and a token without `requiredScopes` gets
- * a 403 challenge.
- */
-export function mcpAuthClerk(
-  options: McpAuthClerkOptions & {
-    clerkClient?: ClerkOAuthClient | undefined;
-  },
-): MiddlewareHandler {
-  assertMcpAuthClerkOptions(options);
-
-  return mcpAuth((token, c) => {
-    const client =
-      options.clerkClient ?? (c as Context<{ Variables: ClerkHonoVariables }>).get('clerk');
-    if (!client) {
-      throw new Error(
-        'Clerk error: mcpAuthClerk needs a clerkClient option or clerkMiddleware() to run first',
-      );
-    }
-    return verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, c.req.url));
-  }, options);
-}
-
-/**
  * A Hono handler that serves MCP requests over the streamable HTTP transport, creating a fresh server and transport
- * for each request so that concurrent requests don't share state. It passes on the auth info that `mcpAuth` or
- * `mcpAuthClerk` set.
+ * for each request so that concurrent requests don't share state. It passes on the auth info that `mcpAuth` set.
  * @param createServer - A factory that returns a new MCP server, such as `McpServer` from the MCP SDK
  * @param Transport - The SDK's web-standard transport class, `WebStandardStreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`. It is taken as an argument so that this package
@@ -166,7 +170,7 @@ export function mcpAuthClerk(
  *
  * app.post(
  *   '/mcp',
- *   mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }),
+ *   mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }),
  *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
  * );
  * ```

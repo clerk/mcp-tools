@@ -77,7 +77,7 @@ export { authHandler as GET, authHandler as POST };
 
 ### `withMcpAuth`
 
-Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including that its `aud` claim includes `resourceUrl`. It takes the same options as `mcpAuthClerk` in the Express and Hono adapters, except that `clerkClient` is required.
+Wraps a Next.js MCP route handler so that every request needs an OAuth access token that Clerk verifies, including that its `aud` claim includes `resourceUrl`. It takes the same options as `mcpAuth` without `verifyToken` in the Express and Hono adapters, except that `clerkClient` is required.
 
 **Options:**
 

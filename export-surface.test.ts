@@ -105,7 +105,6 @@ const PINNED: Record<string, Surface> = {
       'isClerkAuthInfo',
       'matchResourceUrl',
       'mcpAuth',
-      'mcpAuthClerk',
       'metadataCorsHeaders',
       'protectedResourceMetadataHandler',
       'requireAdditionalScopes',
@@ -115,7 +114,6 @@ const PINNED: Record<string, Surface> = {
     types: [
       'ClerkAuthInfo',
       'ClerkOAuthClient',
-      'McpAuthClerkOptions',
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
@@ -131,7 +129,6 @@ const PINNED: Record<string, Surface> = {
       'isClerkAuthInfo',
       'matchResourceUrl',
       'mcpAuth',
-      'mcpAuthClerk',
       'metadataCorsHeaders',
       'protectedResourceMetadataHandler',
       'requireAdditionalScopes',
@@ -141,7 +138,6 @@ const PINNED: Record<string, Surface> = {
     types: [
       'ClerkAuthInfo',
       'ClerkOAuthClient',
-      'McpAuthClerkOptions',
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',

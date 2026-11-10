@@ -2,8 +2,8 @@ import { createClerkClient } from '@clerk/backend';
 import { auth, clerkClient as nextClerkClient } from '@clerk/nextjs/server';
 import { describe, test } from 'vitest';
 
-import { mcpAuthClerk as expressMcpAuthClerk } from './express';
-import { mcpAuthClerk as honoMcpAuthClerk } from './hono';
+import { mcpAuth as expressMcpAuth } from './express';
+import { mcpAuth as honoMcpAuth } from './hono';
 import { withMcpAuth as nextWithMcpAuth } from './next';
 import { toClerkAuthInfo } from './server';
 
@@ -13,8 +13,8 @@ describe('the clerkClient option', () => {
   const handler = () => new Response();
 
   test("accepts the app's own client from createClerkClient in every adapter", () => {
-    expressMcpAuthClerk({ resourceUrl, clerkClient });
-    honoMcpAuthClerk({ resourceUrl, clerkClient });
+    expressMcpAuth({ resourceUrl, clerkClient });
+    honoMcpAuth({ resourceUrl, clerkClient });
     nextWithMcpAuth(handler, { resourceUrl, clerkClient });
   });
 
@@ -33,6 +33,6 @@ describe('the clerkClient option', () => {
 
   test('rejects a value without authenticateRequest', () => {
     // @ts-expect-error not a Clerk client
-    honoMcpAuthClerk({ resourceUrl, clerkClient: {} });
+    honoMcpAuth({ resourceUrl, clerkClient: {} });
   });
 });

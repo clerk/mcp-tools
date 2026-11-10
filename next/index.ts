@@ -1,7 +1,7 @@
 import type { AuthInfo } from '../mcp-types';
 import {
-  type McpAuthClerkOptions,
-  type McpAuthOptions,
+  type ClerkAuthOptions as McpAuthClerkOptions,
+  type VerifierAuthOptions as McpAuthOptions,
   assertMcpAuthOptions,
   audienceFor,
   authenticateBearer,

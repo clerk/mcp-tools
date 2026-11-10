@@ -15,7 +15,7 @@ type ClerkOAuthAuthObject = {
 };
 
 /**
- * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuthClerk` uses to verify OAuth access
+ * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuth` and `withMcpAuth` use to verify OAuth access
  * tokens. Declared here so that this package's types do not need `@clerk/backend`. Create the client with both
  * `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
  */
@@ -43,21 +43,21 @@ export type McpAuthFailure = {
     | 'insufficient_scope'
     | 'misdirected_request';
   /**
-   * What the verifier reported for the token behind an `invalid_token`, when it reported anything. `mcpAuthClerk`
+   * What the verifier reported for the token behind an `invalid_token`, when it reported anything. Clerk verification
    * sets it for a token Clerk rejected.
    */
   cause?: McpTokenVerificationError | undefined;
 };
 
 /**
- * What a verifier reported for a token it did not accept. `mcpAuthClerk` creates one from the `reason` and `message`
+ * What a verifier reported for a token it did not accept. Clerk verification creates one from the `reason` and `message`
  * of Clerk's request state. It is the `cause` of an `invalid_token` failure when Clerk rejected the token, and the
  * `cause` of the `McpAuthError` when Clerk answered but could not verify the token. A verifier passed to `mcpAuth`
- * can throw one to reject a token with a code of its own. It is never sent to the client.
+ * as `verifyToken` can throw one to reject a token with a code of its own. It is never sent to the client.
  */
 export class McpTokenVerificationError extends Error {
   /**
-   * A machine-readable code for the failure. From `mcpAuthClerk` it is the `reason` of Clerk's request state, such as
+   * A machine-readable code for the failure. From Clerk verification it is the `reason` of Clerk's request state, such as
    * `token-invalid` or `token-verification-failed`. Clerk gives every failed check on a JWT access token
    * `token-verification-failed`, so the `message` is what says which check failed.
    */
@@ -71,7 +71,7 @@ export class McpTokenVerificationError extends Error {
 }
 
 /**
- * Thrown by `mcpAuth` and `mcpAuthClerk` when the token could not be verified at all, such as when the verifier
+ * Thrown by `mcpAuth` and `withMcpAuth` when the token could not be verified at all, such as when the verifier
  * throws or Clerk is unreachable, so the request reaches the framework's error handler instead of a challenge that
  * would make the client discard a valid token. The verifier's error is the `cause`: an `McpTokenVerificationError`
  * when Clerk answered but could not verify the token.
@@ -264,7 +264,7 @@ export { requireAdditionalScopes } from './scope-challenge';
 /**
  * The URL from `resourceUrl` that a request to `requestUrl` is for: `resourceUrl` itself when it is one URL, or the
  * listed URL with the request's origin. `undefined` when no listed URL has that origin. This is the rule `mcpAuth` and
- * `mcpAuthClerk` apply to their `resourceUrl`, so use it in the protected resource metadata route to keep its
+ * `withMcpAuth` apply to their `resourceUrl`, so use it in the protected resource metadata route to keep its
  * `resource` identical to the URL they check, and answer `421` when it returns `undefined`.
  * @example
  * ```ts

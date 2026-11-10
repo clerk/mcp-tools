@@ -68,7 +68,7 @@ describe('server entry points', () => {
   });
 
   // `@clerk/nextjs` is an optional peer too, and webpack fails the build of an app without it on any reference to it,
-  // so `mcpAuthClerk` takes `clerkClient` from the app instead of importing it
+  // so `withMcpAuth` takes `clerkClient` from the app instead of importing it
   test('next/index.ts does not import @clerk/nextjs', () => {
     expect(
       [...reachableSpecifiers('next/index.ts').keys()].filter((s) => s.startsWith('@clerk/nextjs')),
