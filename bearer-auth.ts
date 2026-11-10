@@ -32,16 +32,22 @@ export class McpAuthError extends Error {
 }
 
 /**
+ * The exact URL clients use for an MCP endpoint, or a function that returns it for a request, such as for a server that
+ * answers on several hostnames. A function is called for every request.
+ */
+export type McpResourceUrl<Req> = string | ((request: Req) => string);
+
+/**
  * Options for the `mcpAuth` middleware.
  */
-export type McpAuthOptions = {
+export type McpAuthOptions<Req = never> = {
   /**
-   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`. The challenge's
-   * `resource_metadata` is derived from it. When omitted, it is derived from the incoming request, which can differ
-   * from the public URL behind a proxy. Set the protected resource metadata route's `resource` to the same URL, since
-   * that route also derives it from the request.
+   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a function that returns
+   * it for the request. The challenge's `resource_metadata` is derived from it. When omitted, it is derived from the
+   * incoming request, which can differ from the public URL behind a proxy. Set the protected resource metadata route's
+   * `resource` to the same URL, since that route also derives it from the request.
    */
-  resourceUrl?: string | undefined;
+  resourceUrl?: McpResourceUrl<Req> | undefined;
   /**
    * The scopes every request needs. A token without them gets a 403 `insufficient_scope` challenge, and the 401
    * challenge lists them in its `scope`.
@@ -58,13 +64,14 @@ export type McpAuthOptions = {
 /**
  * Options for the `mcpAuthClerk` middleware.
  */
-export type McpAuthClerkOptions = McpAuthOptions & {
+export type McpAuthClerkOptions<Req = never> = McpAuthOptions<Req> & {
   /**
-   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`. Clerk rejects a token
-   * whose `aud` claim does not include it, and the challenge's `resource_metadata` is derived from it. Set the
-   * protected resource metadata route's `resource` to the same URL, since that route derives it from the request.
+   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a function that returns
+   * it for the request. Clerk rejects a token whose `aud` claim does not include it, and the challenge's
+   * `resource_metadata` is derived from it. Set the protected resource metadata route's `resource` to the same URL,
+   * since that route derives it from the request.
    */
-  resourceUrl: string;
+  resourceUrl: McpResourceUrl<Req>;
 };
 
 type BearerResult =
@@ -75,11 +82,42 @@ type BearerResult =
 export function assertMcpAuthOptions(caller: string, options: McpAuthOptions | undefined) {
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
-  if (options?.resourceUrl !== undefined && !isResourceUrl(options.resourceUrl)) {
+  const resourceUrl = options?.resourceUrl;
+  if (resourceUrl === undefined || typeof resourceUrl === 'function') return;
+  assertResourceUrl(caller, resourceUrl);
+}
+
+function assertResourceUrl(caller: string, resourceUrl: unknown): asserts resourceUrl is string {
+  if (typeof resourceUrl !== 'string' || !isResourceUrl(resourceUrl)) {
     throw new Error(
       `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials`,
     );
   }
+}
+
+/**
+ * The `resourceUrl` for one request, or `undefined` when it is not set. Throws a `Clerk error:` message when a
+ * `resourceUrl` function returns an invalid URL.
+ */
+export function resolveResourceUrl<Req>(
+  caller: string,
+  resourceUrl: McpResourceUrl<Req>,
+  request: Req,
+): string;
+export function resolveResourceUrl<Req>(
+  caller: string,
+  resourceUrl: McpResourceUrl<Req> | undefined,
+  request: Req,
+): string | undefined;
+export function resolveResourceUrl<Req>(
+  caller: string,
+  resourceUrl: McpResourceUrl<Req> | undefined,
+  request: Req,
+): string | undefined {
+  if (typeof resourceUrl !== 'function') return resourceUrl;
+  const url = resourceUrl(request);
+  assertResourceUrl(caller, url);
+  return url;
 }
 
 // A URL with another scheme, such as `mailto:`, has no origin for the challenge, and `new Request` throws on a URL with
@@ -96,7 +134,8 @@ function isResourceUrl(value: string): boolean {
  * the options belong. Without this check that call would quietly return a middleware and the request would hang.
  */
 export function assertMcpAuthClerkOptions(options: McpAuthClerkOptions) {
-  if (typeof options?.resourceUrl !== 'string') {
+  const resourceUrlType = typeof options?.resourceUrl;
+  if (resourceUrlType !== 'string' && resourceUrlType !== 'function') {
     throw new Error(
       "Clerk error: mcpAuthClerk needs a resourceUrl. Call it as mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }) instead of passing mcpAuthClerk to the route directly",
     );

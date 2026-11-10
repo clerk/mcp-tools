@@ -12,6 +12,7 @@ import {
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
+  resolveResourceUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
@@ -85,16 +86,15 @@ export async function authServerMetadataHandlerClerk(c: Context) {
  */
 export function mcpAuth(
   verifyToken: (token: string, c: Context) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions,
+  options?: McpAuthOptions<Context>,
 ): MiddlewareHandler {
   assertMcpAuthOptions('mcpAuth', options);
 
   return async (c: Context, next: Next) => {
+    const resourceUrl = resolveResourceUrl('mcpAuth', options?.resourceUrl, c);
     const result = await authenticateBearer({
       authorization: c.req.header('authorization'),
-      resourceMetadataUrl: options?.resourceUrl
-        ? resourceMetadataUrlFor(options.resourceUrl)
-        : getPRMUrl(c),
+      resourceMetadataUrl: resourceUrl ? resourceMetadataUrlFor(resourceUrl) : getPRMUrl(c),
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, c),
@@ -124,7 +124,7 @@ export function mcpAuth(
  * a 403 challenge.
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions & {
+  options: McpAuthClerkOptions<Context> & {
     clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
   },
 ): MiddlewareHandler {
@@ -138,7 +138,11 @@ export function mcpAuthClerk(
         'Clerk error: mcpAuthClerk needs a clerkClient option or clerkMiddleware() to run first',
       );
     }
-    return verifyClerkOAuthToken(client, token, options.resourceUrl);
+    return verifyClerkOAuthToken(
+      client,
+      token,
+      resolveResourceUrl('mcpAuthClerk', options.resourceUrl, c),
+    );
   }, options);
 }
 
