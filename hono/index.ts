@@ -1,7 +1,6 @@
 import type { ClerkClient } from '@clerk/backend';
 import type { ClerkHonoVariables } from '@clerk/hono/types';
-import type { AuthInfo } from '../mcp-types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
@@ -13,6 +12,7 @@ import {
   McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
+  assertTransportClass,
   audienceFor,
   authenticateBearer,
   verifyClerkOAuthToken,
@@ -37,8 +37,29 @@ export {
   type McpAuthFailure,
   type McpAuthOptions,
   type McpResourceUrl,
+  type McpServerLike,
   McpTokenVerificationError,
+  type StreamableHttpTransportClass,
 };
+
+/**
+ * The part of a web-standard streamable HTTP server transport, such as `WebStandardStreamableHTTPServerTransport` from
+ * `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`, that `streamableHttpHandler` uses.
+ */
+export interface WebStandardStreamableHttpTransport {
+  /**
+   * Handles one MCP request.
+   * @param request - The incoming request
+   * @param options - The auth info of the request's verified token, if any
+   * @returns The response to send
+   */
+  handleRequest(request: Request, options: { authInfo: AuthInfo | undefined }): Promise<Response>;
+  /**
+   * Closes the transport.
+   * @returns A promise that resolves once the transport is closed
+   */
+  close(): Promise<void>;
+}
 
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
@@ -154,14 +175,41 @@ export function mcpAuthClerk(
   }, options);
 }
 
-export function streamableHttpHandler(createServer: () => McpServer) {
+/**
+ * A Hono handler that serves MCP requests over the streamable HTTP transport, creating a fresh server and transport
+ * for each request so that concurrent requests don't share state. It passes on the auth info that `mcpAuth` or
+ * `mcpAuthClerk` set.
+ * @param createServer - A factory that returns a new MCP server, such as `McpServer` from the MCP SDK
+ * @param Transport - The SDK's web-standard transport class, `WebStandardStreamableHTTPServerTransport` from
+ * `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`. It is taken as an argument so that this package
+ * never imports the SDK, which only apps serving MCP with this handler need to install.
+ * @returns The handler
+ * @example
+ * ```ts
+ * import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+ *
+ * app.post(
+ *   '/mcp',
+ *   mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }),
+ *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+ * );
+ * ```
+ * @typeParam Transport - The transport the class creates, inferred from the class alone
+ * @typeParam Server - The server `createServer` returns. It is a separate type parameter so that `Transport` is not
+ * inferred from the SDK's general `Transport` interface, which `McpServer.connect` takes.
+ */
+export function streamableHttpHandler<
+  Transport extends WebStandardStreamableHttpTransport,
+  Server extends McpServerLike<Transport>,
+>(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
+  assertTransportClass(
+    Transport,
+    'WebStandardStreamableHTTPServerTransport',
+    'webStandardStreamableHttp.js',
+  );
+
   return async (c: Context) => {
-    // Imported lazily so that apps using only the auth middleware don't bundle the SDK's message schemas and zod
-    const { WebStandardStreamableHTTPServerTransport } =
-      await import('@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js');
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+    const transport = new Transport({ sessionIdGenerator: undefined });
 
     try {
       const server = createServer();

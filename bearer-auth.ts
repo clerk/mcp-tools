@@ -194,6 +194,19 @@ export function assertMcpAuthClerkOptions(options: McpAuthClerkOptions) {
 }
 
 /**
+ * Throws a `Clerk error:` message unless `Transport` is a class. Code written before `streamableHttpHandler` took the
+ * SDK transport as an argument calls it with the server factory alone, which would otherwise fail on every request
+ * instead of at startup.
+ */
+export function assertTransportClass(Transport: unknown, className: string, sdkModule: string) {
+  if (typeof Transport !== 'function') {
+    throw new Error(
+      `Clerk error: streamableHttpHandler needs the MCP SDK transport class as its second argument. Import ${className} from '@modelcontextprotocol/sdk/server/${sdkModule}' and call streamableHttpHandler(createServer, ${className})`,
+    );
+  }
+}
+
+/**
  * The RFC 9728 section 3 metadata URL for a resource: the well-known path goes between the host and the resource's
  * path and query.
  */
