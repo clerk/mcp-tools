@@ -44,7 +44,8 @@ export type McpAuthOptions = MiddlewareAuthOptions<Context>;
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`, so one object
- * can be passed to both. It ignores `clerkClient` and `verifyToken`.
+ * can be passed to both. The handler reads `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and
+ * ignores the other `McpAuthOptions` keys: `clerkClient` and `verifyToken`.
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;

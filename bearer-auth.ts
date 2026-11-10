@@ -95,8 +95,8 @@ export type MiddlewareAuthOptions<Req> =
 /**
  * The options of every adapter's `protectedResourceMetadataHandler`: the adapter's `McpAuthOptions`, all optional,
  * plus `properties`, so one object can be passed to both. The handler reads `resourceUrl`, `requiredScopes`,
- * `challengeScopes`, and `properties`, and ignores the keys that only verify tokens, such as `clerkClient` and
- * `verifyToken`.
+ * `challengeScopes`, and `properties`, and ignores the adapter's other `McpAuthOptions` keys: `clerkClient` and
+ * `verifyToken` in every adapter, and `onAuthFailure` in Next.js.
  */
 export type ProtectedResourceMetadataOptions<
   AuthOptions extends BaseAuthOptions = BaseAuthOptions,
