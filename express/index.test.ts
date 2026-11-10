@@ -124,6 +124,16 @@ describe('mcpAuth', () => {
     expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}"`);
   });
 
+  test('derives resource_metadata from a resourceUrl function for each request', async () => {
+    const res = await request(
+      mcpAuth(reject, { resourceUrl: (req) => `https://${req.get('host')}/mcp` }),
+    );
+
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${res.origin.replace('http:', 'https:')}/.well-known/oauth-protected-resource/mcp"`,
+    );
+  });
+
   test.each(['Bearer', 'Basic abc', 'Bearer a b'])(
     'answers the malformed header %j with a 401 challenge and does not verify it',
     async (authorization) => {

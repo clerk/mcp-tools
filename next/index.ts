@@ -8,6 +8,7 @@ import {
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
+  resolveResourceUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
@@ -187,16 +188,15 @@ export type McpRouteHandler = (req: Request) => Response | Promise<Response>;
  */
 export function mcpAuth(
   verifyToken: (token: string, req: Request) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions,
+  options?: McpAuthOptions<Request>,
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
   assertMcpAuthOptions('mcpAuth', options);
 
   return (handler) => async (req) => {
+    const resourceUrl = resolveResourceUrl('mcpAuth', options?.resourceUrl, req);
     const result = await authenticateBearer({
       authorization: req.headers.get('authorization') ?? undefined,
-      resourceMetadataUrl: options?.resourceUrl
-        ? resourceMetadataUrlFor(options.resourceUrl)
-        : getPRMUrl(req),
+      resourceMetadataUrl: resourceUrl ? resourceMetadataUrlFor(resourceUrl) : getPRMUrl(req),
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
@@ -235,17 +235,21 @@ export function mcpAuth(
  * ```
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions & {
+  options: McpAuthClerkOptions<Request> & {
     clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
   },
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
   assertMcpAuthClerkOptions(options);
 
-  return mcpAuth(async (token) => {
+  return mcpAuth(async (token, req) => {
     // Imported lazily so that the rest of this entry point works without `@clerk/nextjs`
     const client =
       options.clerkClient ?? (await (await import('@clerk/nextjs/server')).clerkClient());
-    return verifyClerkOAuthToken(client, token, options.resourceUrl);
+    return verifyClerkOAuthToken(
+      client,
+      token,
+      resolveResourceUrl('mcpAuthClerk', options.resourceUrl, req),
+    );
   }, options);
 }
 

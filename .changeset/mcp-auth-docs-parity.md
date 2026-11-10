@@ -10,6 +10,8 @@ In both adapters, `mcpAuthClerk` takes an optional `clerkClient`, created with b
 
 In every adapter, the `401` challenge from `mcpAuth` and `mcpAuthClerk` now lists `requiredScopes` in its `scope`, and the new `challengeScopes` option adds more, such as the scopes tools step up to, without requiring them of a token. MCP clients request those scopes when they first authorize. A request answered with a challenge records why in `res.locals.mcpAuthFailure` in Express and `c.get('mcpAuthFailure')` in Hono, with a `reason` of `missing_token`, `malformed_token`, `invalid_token`, or `insufficient_scope`, for logging.
 
+In every adapter, `resourceUrl` for `mcpAuth` and `mcpAuthClerk` can also be a function of the request that returns the URL, for a server that answers on several hostnames. It is called for every request, and `mcpAuthClerk` uses its result for both the audience check and the challenge's `resource_metadata`.
+
 **Breaking:** in every adapter, when the verifier throws, `mcpAuth` and `mcpAuthClerk` now throw an `McpAuthError`, exported from each adapter, with `reason: 'verification_failed'` and the thrown error as its `cause`, instead of the thrown error itself. An error handler that checks `err instanceof MyError` or reads the error's fields, including Hono's `HTTPException` handling, must read `err.cause` instead. The wrapper copies a numeric `status` from the thrown error, so Express's default error handler answers with the same status as before.
 
 The Hono `streamableHttpHandler` now imports the MCP SDK transport when it handles a request, so an app that uses only the Hono auth middleware no longer bundles or loads the SDK's message schemas and zod.

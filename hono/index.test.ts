@@ -551,6 +551,54 @@ describe('mcpAuthClerk', () => {
     expect(await res.json()).toMatchObject({ clientId: 'client-1', token: 'token-1' });
   });
 
+  test('checks the audience and challenge against a resourceUrl function for each request', async () => {
+    clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
+    const app = new Hono();
+    app.post(
+      '/mcp',
+      mcpAuthClerk({
+        resourceUrl: (c) => `${new URL(c.req.url).origin}/mcp`,
+        clerkClient: clerk as never,
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    for (const origin of ['https://a.example.com', 'https://b.example.com']) {
+      clerk.authenticateRequest.mockClear();
+      const res = await app.request(`${origin}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-1' },
+      });
+
+      expect(clerk.authenticateRequest.mock.calls[0]![1]).toMatchObject({
+        audience: `${origin}/mcp`,
+      });
+      expect(res.headers.get('WWW-Authenticate')).toBe(
+        `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`,
+      );
+    }
+  });
+
+  test('fails with a Clerk error when a resourceUrl function returns an invalid URL', async () => {
+    const app = new Hono();
+    let error: unknown;
+    app.onError((err, c) => {
+      error = err;
+      return c.text('error', 500);
+    });
+    app.post(
+      '/mcp',
+      mcpAuthClerk({ resourceUrl: () => '/mcp', clerkClient: clerk as never }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await post(app);
+
+    expect(res.status).toBe(500);
+    expect(String(error)).toContain('Clerk error: mcpAuth resourceUrl must be an absolute');
+    expect(clerk.authenticateRequest).not.toHaveBeenCalled();
+  });
+
   test('answers a rejected token with the invalid_token challenge', async () => {
     clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
 

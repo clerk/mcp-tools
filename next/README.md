@@ -79,7 +79,7 @@ Wraps a Next.js MCP route handler so that every request needs an OAuth access to
 
 **Options:**
 
-- `resourceUrl: string` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`. Set the protected resource metadata route's `resource` to the same URL.
+- `resourceUrl: string | ((req: Request) => string)` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a function of the request that returns it, called for every request, such as for a server that answers on several hostnames. Set the protected resource metadata route's `resource` to the same URL.
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient()` from `@clerk/nextjs/server`. Create another client with both `secretKey` and `publishableKey`.

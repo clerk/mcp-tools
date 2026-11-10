@@ -100,6 +100,16 @@ describe('mcpAuth', () => {
     );
   });
 
+  test('derives resource_metadata from a resourceUrl function for each request', async () => {
+    const res = await mcpAuth(vi.fn(), {
+      resourceUrl: (req) => `${new URL(req.url).origin}/mcp`,
+    })(echoAuth)(request(undefined, 'https://other.example.com/mcp'));
+
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://other.example.com/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
   test('adds invalid_token to the challenge when the token is rejected', async () => {
     const res = await mcpAuth(async () => undefined)(echoAuth)(request('Bearer token-1'));
 

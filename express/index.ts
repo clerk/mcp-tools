@@ -12,6 +12,7 @@ import {
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
+  resolveResourceUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
@@ -63,16 +64,15 @@ export { McpAuthError, type McpAuthFailure };
  */
 export function mcpAuth(
   verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions,
+  options?: McpAuthOptions<express.Request>,
 ) {
   assertMcpAuthOptions('mcpAuth', options);
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const resourceUrl = resolveResourceUrl('mcpAuth', options?.resourceUrl, req);
     const result = await authenticateBearer({
       authorization: req.headers.authorization,
-      resourceMetadataUrl: options?.resourceUrl
-        ? resourceMetadataUrlFor(options.resourceUrl)
-        : getPRMUrl(req),
+      resourceMetadataUrl: resourceUrl ? resourceMetadataUrlFor(resourceUrl) : getPRMUrl(req),
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
@@ -119,13 +119,21 @@ export function mcpAuth(
  * ```
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions & {
+  options: McpAuthClerkOptions<express.Request> & {
     clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
   },
 ) {
   assertMcpAuthClerkOptions(options);
   const client = options.clerkClient ?? clerkClient;
-  return mcpAuth((token) => verifyClerkOAuthToken(client, token, options.resourceUrl), options);
+  return mcpAuth(
+    (token, req) =>
+      verifyClerkOAuthToken(
+        client,
+        token,
+        resolveResourceUrl('mcpAuthClerk', options.resourceUrl, req),
+      ),
+    options,
+  );
 }
 
 /**
