@@ -49,6 +49,10 @@
       "import": "./dist/next/index.mjs",
       "types": "./dist/next/index.d.mts"
     },
+    "./next/client": {
+      "import": "./dist/next/client.mjs",
+      "types": "./dist/next/client.d.mts"
+    },
     "./express": {
       "import": "./dist/express/index.mjs",
       "types": "./dist/express/index.d.mts"
@@ -144,6 +148,9 @@
       "optional": true
     },
     "@clerk/nextjs": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
       "optional": true
     },
     "express": {

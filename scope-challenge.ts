@@ -1,6 +1,6 @@
 // Scope helpers for the MCP step-up scope challenge. Only `requireAdditionalScopes` is public, re-exported from
 // `@clerk/mcp-tools/server`. This module is not a package entry point.
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from './mcp-types';
 
 // Assignable to the SDK 2.1+ `ScopeChallengeHandler`, which this package cannot import: SDK 2.x is not a dependency.
 type ScopeChallengeHandler = (context: {

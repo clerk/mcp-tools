@@ -1,6 +1,6 @@
 import type { ClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from '../mcp-types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type express from 'express';

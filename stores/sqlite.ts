@@ -1,6 +1,6 @@
 // @ts-ignore - better-sqlite3 is an optional peer dependency
 import Database from 'better-sqlite3';
-import type { JsonSerializable } from '../client.js';
+import type { JsonSerializable } from '../client-store.js';
 import path from 'node:path';
 import os from 'node:os';
 

@@ -184,7 +184,11 @@ export { handler as GET, corsHandler as OPTIONS };
 
 ### `completeOAuthHandler`
 
-A request handler for OAuth callback endpoints that completes the OAuth flow by exchanging authorization codes for tokens.
+A request handler for OAuth callback endpoints that completes the OAuth flow by exchanging authorization codes for tokens. It is exported from `@clerk/mcp-tools/next/client`, which, like `@clerk/mcp-tools/client`, needs `@modelcontextprotocol/sdk` 1.x installed:
+
+```bash
+npm install @modelcontextprotocol/sdk
+```
 
 **Parameters:**
 
@@ -195,7 +199,7 @@ A request handler for OAuth callback endpoints that completes the OAuth flow by 
 
 ```ts
 // app/oauth_callback/route.ts
-import { completeOAuthHandler } from '@clerk/mcp-tools/next';
+import { completeOAuthHandler } from '@clerk/mcp-tools/next/client';
 import fsStore from '@clerk/mcp-tools/stores/fs';
 import { redirect } from 'next/navigation';
 
