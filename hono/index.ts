@@ -2,12 +2,13 @@ import type { ClerkClient } from '@clerk/backend';
 import type { ClerkHonoVariables } from '@clerk/hono/types';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
   type McpAuthClerkOptions,
+  type McpAuthFailure,
   type McpAuthOptions,
+  McpAuthError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
@@ -23,8 +24,12 @@ import {
 declare module 'hono' {
   interface ContextVariableMap {
     mcpAuth: AuthInfo;
+    /** Why `mcpAuth` answered this request with a 401 or 403 challenge, when it did. */
+    mcpAuthFailure: McpAuthFailure;
   }
 }
+
+export { McpAuthError, type McpAuthFailure };
 
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
@@ -91,10 +96,12 @@ export function mcpAuth(
         ? resourceMetadataUrlFor(options.resourceUrl)
         : getPRMUrl(c),
       requiredScopes: options?.requiredScopes,
+      challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, c),
     });
 
     if (!result.ok) {
+      c.set('mcpAuthFailure', result.failure);
       return c.json(
         { error: result.error },
         { status: result.status, headers: { 'WWW-Authenticate': result.challenge } },
@@ -137,6 +144,9 @@ export function mcpAuthClerk(
 
 export function streamableHttpHandler(createServer: () => McpServer) {
   return async (c: Context) => {
+    // Imported lazily so that apps using only the auth middleware don't bundle the SDK's message schemas and zod
+    const { WebStandardStreamableHTTPServerTransport } =
+      await import('@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js');
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

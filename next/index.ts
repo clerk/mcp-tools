@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 import {
   type McpAuthClerkOptions,
   type McpAuthOptions,
+  McpAuthError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   authenticateBearer,
@@ -197,6 +198,7 @@ export function mcpAuth(
         ? resourceMetadataUrlFor(options.resourceUrl)
         : getPRMUrl(req),
       requiredScopes: options?.requiredScopes,
+      challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
     });
 
@@ -262,4 +264,4 @@ function getResourceUrl(req: Request): string {
 }
 
 // re-export the verifyClerkToken function for convenience
-export { requireAdditionalScopes, verifyClerkToken };
+export { McpAuthError, requireAdditionalScopes, verifyClerkToken };

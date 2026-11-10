@@ -80,10 +80,11 @@ Wraps a Next.js MCP route handler so that every request needs an OAuth access to
 **Options:**
 
 - `resourceUrl: string` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`. Set the protected resource metadata route's `resource` to the same URL.
-- `requiredScopes?: string[]` - The scopes every request needs
+- `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
+- `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient()` from `@clerk/nextjs/server`. Create another client with both `secretKey` and `publishableKey`.
 
-A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws and Next.js answers with a `500`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws an `McpAuthError`, exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`. Next.js answers with a `500`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/nextjs` 7.9.5 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 

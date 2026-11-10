@@ -8,6 +8,12 @@ In both adapters, `mcpAuthClerk` takes an optional `clerkClient`, created with b
 
 `mcpAuth` in both adapters takes new optional `resourceUrl` and `requiredScopes` options. A token without `requiredScopes` gets a `403` with an `insufficient_scope` challenge, and `resourceUrl` sets the challenge's `resource_metadata` instead of deriving it from the request. The auth info both adapters pass on now carries `resourceMetadataUrl`, which MCP SDK 2 needs for the challenges its `scopeChallenge` tools send.
 
+In every adapter, the `401` challenge from `mcpAuth` and `mcpAuthClerk` now lists `requiredScopes` in its `scope`, and the new `challengeScopes` option adds more, such as the scopes tools step up to, without requiring them of a token. MCP clients request those scopes when they first authorize. A request answered with a challenge records why in `res.locals.mcpAuthFailure` in Express and `c.get('mcpAuthFailure')` in Hono, with a `reason` of `missing_token`, `malformed_token`, `invalid_token`, or `insufficient_scope`, for logging.
+
+**Breaking:** in every adapter, when the verifier throws, `mcpAuth` and `mcpAuthClerk` now throw an `McpAuthError`, exported from each adapter, with `reason: 'verification_failed'` and the thrown error as its `cause`, instead of the thrown error itself. An error handler that checks `err instanceof MyError` or reads the error's fields, including Hono's `HTTPException` handling, must read `err.cause` instead. The wrapper copies a numeric `status` from the thrown error, so Express's default error handler answers with the same status as before.
+
+The Hono `streamableHttpHandler` now imports the MCP SDK transport when it handles a request, so an app that uses only the Hono auth middleware no longer bundles or loads the SDK's message schemas and zod.
+
 The `WWW-Authenticate` challenge from both adapters now quotes `resource_metadata`, which was invalid unquoted, and a rejected token now gets the challenge with `error="invalid_token"` instead of no header.
 
 In the Express adapter, `mcpAuth` is now synchronous, so it works with or without `await`. A malformed `Authorization` header now gets a `401` challenge: before, a bare `Bearer` header returned a `500`, or hung the request with an unhandled rejection under `mcpAuthClerk`, and any other scheme was treated as a bearer token. `resource_metadata` no longer includes the request's query string.

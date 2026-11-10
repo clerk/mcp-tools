@@ -8,6 +8,7 @@ vi.mock('@clerk/nextjs/server', () => ({
 }));
 
 import {
+  McpAuthError,
   type McpRouteHandler,
   mcpAuth,
   mcpAuthClerk,
@@ -141,6 +142,28 @@ describe('mcpAuth', () => {
   test('throws at setup for an invalid resourceUrl or scope', () => {
     expect(() => mcpAuth(vi.fn(), { resourceUrl: 'not a url' })).toThrow('Clerk error:');
     expect(() => mcpAuth(vi.fn(), { requiredScopes: ['two words'] })).toThrow('Clerk error:');
+    expect(() => mcpAuth(vi.fn(), { challengeScopes: ['two words'] })).toThrow('Clerk error:');
+  });
+
+  test('lists requiredScopes then challengeScopes in the 401 challenge', async () => {
+    const res = await mcpAuth(vi.fn(), {
+      requiredScopes: ['profile'],
+      challengeScopes: ['email'],
+    })(echoAuth)(request());
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, scope="profile email"`);
+  });
+
+  test('throws an McpAuthError with the verifier error as its cause', async () => {
+    const cause = new Error('network down');
+
+    const error = await mcpAuth(() => Promise.reject(cause))(echoAuth)(
+      request('Bearer token-1'),
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(McpAuthError);
+    expect(error).toMatchObject({ reason: 'verification_failed', cause });
   });
 });
 
@@ -205,7 +228,7 @@ describe('mcpAuthClerk', () => {
 
     await expect(
       mcpAuthClerk({ resourceUrl })(echoAuth)(request('Bearer token-1')),
-    ).rejects.toThrow('Clerk error: MCP access token verification failed');
+    ).rejects.toThrow(McpAuthError);
   });
 
   test('verifies with the clerkClient option instead of the default client', async () => {

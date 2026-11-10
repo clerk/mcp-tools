@@ -9,7 +9,7 @@ vi.mock('@clerk/express', () => ({
 }));
 
 import { clerkClient } from '@clerk/express';
-import { mcpAuth, mcpAuthClerk, streamableHttpHandler } from './index';
+import { McpAuthError, mcpAuth, mcpAuthClerk, streamableHttpHandler } from './index';
 
 const mcpHeaders = {
   'Content-Type': 'application/json',
@@ -201,8 +201,108 @@ describe('mcpAuth', () => {
     expect(() => mcpAuth(reject, { requiredScopes: ['a b'] })).toThrow(
       'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
     );
+    expect(() => mcpAuth(reject, { challengeScopes: [''] })).toThrow(
+      'Clerk error: mcpAuth challengeScopes must contain only scope tokens',
+    );
+  });
+
+  test('lists requiredScopes then challengeScopes in the 401 challenge', async () => {
+    const res = await request(
+      mcpAuth(reject, { resourceUrl, requiredScopes: ['profile'], challengeScopes: ['email'] }),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", scope="profile email"`);
+  });
+
+  test.each([
+    ['missing_token', undefined, undefined],
+    ['malformed_token', 'Basic abc', undefined],
+    ['invalid_token', 'Bearer bad', undefined],
+    ['insufficient_scope', 'Bearer t', { token: 't', scopes: [], clientId: 'c' }],
+  ])('records %s on res.locals.mcpAuthFailure', async (reason, authorization, authInfo) => {
+    const failures: unknown[] = [];
+    const app = express();
+    app.use((_req, res, next) => {
+      res.on('finish', () => failures.push(res.locals.mcpAuthFailure));
+      next();
+    });
+    app.post(
+      '/mcp',
+      mcpAuth(async () => authInfo, { requiredScopes: ['profile'] }),
+      (_req, res) => {
+        res.json({});
+      },
+    );
+
+    await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: authorization === undefined ? {} : { Authorization: authorization },
+      }),
+    );
+
+    expect(failures).toEqual([{ reason }]);
+  });
+
+  test('passes an McpAuthError with the verifier error as its cause to the error handler', async () => {
+    const cause = new Error('network down');
+    const errors: unknown[] = [];
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth(async () => {
+        throw cause;
+      }),
+    );
+    app.use(
+      (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+        errors.push(err);
+        res.status(500).end();
+      },
+    );
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
+    );
+
+    expect(res.status).toBe(500);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(McpAuthError);
+    expect(errors[0]).toMatchObject({ reason: 'verification_failed', cause });
+  });
+
+  test("keeps the verifier error's status for Express's default error handler", async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth(async () => {
+        throw Object.assign(new Error('unavailable'), { status: 503 });
+      }),
+    );
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
+    );
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(503);
   });
 });
+
+async function withListening<T>(app: express.Express, fn: (baseUrl: string) => Promise<T>) {
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const { port } = server.address() as AddressInfo;
+  try {
+    return await fn(`http://127.0.0.1:${port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
 
 describe('mcpAuthClerk', () => {
   const authenticateRequest = vi.mocked(clerkClient.authenticateRequest);
