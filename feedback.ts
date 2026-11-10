@@ -281,7 +281,7 @@ function source(
 }
 
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
-// identity that verifyClerkToken produced.
+// identity that toClerkAuthInfo produced.
 function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
   return isClerkAuthInfo(authInfo)
     ? { user_id: authInfo.extra.userId, client_id: authInfo.clientId || undefined }
@@ -308,8 +308,8 @@ function feedbackToolError(text: string) {
 /**
  * Builds a `submit_feedback` tool that agents call when they hit friction. Register it with
  * `server.registerTool(...submitFeedbackTool({ secretKey }))`. Feedback is stored on the Clerk instance that
- * owns `secretKey` and is visible in the Clerk Dashboard. When the request was authenticated with
- * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
+ * owns `secretKey` and is visible in the Clerk Dashboard. When the request's auth info came from
+ * `toClerkAuthInfo`, the user and OAuth client ids are attached automatically.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
   const client = createBackendApiClient('submitFeedbackTool', options);

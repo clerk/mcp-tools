@@ -335,7 +335,7 @@ describe('submitFeedbackTool', () => {
     });
   });
 
-  test('attaches the Clerk user and OAuth client from verifyClerkToken auth', async () => {
+  test('attaches the Clerk user and OAuth client from toClerkAuthInfo auth info', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
     const client = await connect(fetchImpl, {
       authInfo: {

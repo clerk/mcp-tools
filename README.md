@@ -59,12 +59,12 @@ const result = generateProtectedResourceMetadata({
 
 You will want to set up a route at `.well-known/oauth-protected-resource` and make sure to return this result from that route on your server.
 
-If you are using [Clerk](https://clerk.com) for authentication in your app, we have a helper that makes this easier:
+If you are using [Clerk](https://clerk.com) for authentication in your app, pass your publishable key instead of `authServerUrl`. The authorization server is derived from the key, and Clerk's documentation is added as `resource_documentation`:
 
 ```ts
-import { generateClerkProtectedResourceMetadata } from '@clerk/mcp-tools/server';
+import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 
-const result = generateClerkProtectedResourceMetadata({
+const result = generateProtectedResourceMetadata({
   publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
   resourceUrl: 'https://myapp.com/current-route',
 });
@@ -85,10 +85,10 @@ An [older version of the MCP spec](https://modelcontextprotocol.io/specification
 If you use [Clerk](https://clerk.com) for authentication, fetch the metadata from your Clerk Frontend API and return it from your authorization server metadata endpoint.
 
 ```ts
-import { fetchClerkAuthorizationServerMetadata } from '@clerk/mcp-tools/server';
+import { fetchAuthorizationServerMetadata } from '@clerk/mcp-tools/server';
 
 // Return this result from <your-app>/.well-known/oauth-authorization-server
-const result = await fetchClerkAuthorizationServerMetadata({
+const result = await fetchAuthorizationServerMetadata({
   publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
 });
 ```
@@ -160,7 +160,7 @@ The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/s
 - Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong.
 - Each report names your server as its source: the request's host by default, or pass `server: { name, version }` to label it yourself.
 - Each report names the agent from the client info its MCP client sends with the request, or otherwise from the HTTP `User-Agent` header. Generic HTTP libraries and browsers (such as `node` or `Mozilla`) aren't used as names, and clients that identify themselves only when they connect (common over stdio) appear without a name.
-- When the request was authenticated with `verifyClerkToken` (for example through `mcpAuthClerk`, or `withMcpAuth` from `@clerk/mcp-tools/next`), the signed-in user's ID and the OAuth client ID are attached to each report. `verifyClerkToken` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
+- When the request's auth info came from `toClerkAuthInfo` (for example through `mcpAuthClerk`, or `withMcpAuth` from `@clerk/mcp-tools/next`), the signed-in user's ID and the OAuth client ID are attached to each report. `toClerkAuthInfo` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
 - Agents file reports without asking the user first. A report contains the agent's summary of what the user asked for, the tool calls it made, and any errors, and is linked to the user's ID when one is attached. Cover this in the privacy information you give your users.
 - Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.
 - On a public MCP endpoint without authentication, anyone can call this tool, submit misleading reports, and exhaust the instance's 100-report-per-hour limit. Protect it with authentication or other access controls where possible.
@@ -193,7 +193,7 @@ Then the MCP route, here on `@modelcontextprotocol/server` 2.1 or later. `create
 
 ```ts
 // app/mcp/route.ts
-import { verifyClerkToken } from '@clerk/mcp-tools/next';
+import { toClerkAuthInfo } from '@clerk/mcp-tools/next';
 import {
   browserSessionInstructions,
   createBrowserSessionTool,
@@ -234,7 +234,7 @@ async function handler(req: Request) {
     acceptsToken: 'oauth_token',
     audience: MCP_RESOURCE_URL,
   });
-  const authInfo = verifyClerkToken(requestState.toAuth(), token);
+  const authInfo = toClerkAuthInfo(requestState.toAuth(), token);
   if (!authInfo) {
     return new Response('Unauthorized', {
       status: 401,
@@ -244,7 +244,7 @@ async function handler(req: Request) {
     });
   }
 
-  // The SDK takes the challenge's `resource_metadata` from `resourceMetadataUrl`, which `verifyClerkToken` does not set.
+  // The SDK takes the challenge's `resource_metadata` from `resourceMetadataUrl`, which `toClerkAuthInfo` does not set.
   return mcpHandler.fetch(req, {
     authInfo: { ...authInfo, resourceMetadataUrl: RESOURCE_METADATA_URL },
   });
@@ -255,7 +255,7 @@ export { handler as GET, handler as POST, handler as DELETE };
 
 - Pass `browserSessionInstructions(destinationUrl)` as the server `instructions`. Some MCP clients, such as Codex, show agents only the server instructions until the agent searches for a tool, so without them an agent may open your app in a browser and stop at the sign-in page.
 - Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. Require `@clerk/backend` 3.19.0 (`@clerk/nextjs` 7.9.5, `@clerk/express` 2.1.70, `@clerk/hono` 0.1.80) or later (see [clerk/javascript#9724](https://github.com/clerk/javascript/pull/9724)). Before those versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the `audience` check, and only a JWT with a different `aud` is rejected. The `mcpAuthClerk` helpers and the Next.js `withMcpAuth` check the audience against their `resourceUrl` option. To confirm that the check works, send a token that was issued to another OAuth application of the same instance, or for another resource: the MCP route must answer `401`.
-- Authenticate requests with `verifyClerkToken`, and set `requiredScopes` to the OAuth scopes the access token must carry. `requiredScopes` is required. `[]` is accepted, but then every token that passes the audience check can create a link.
+- Authenticate requests with `authenticateRequest`, convert the result with `toClerkAuthInfo`, and set `requiredScopes` to the OAuth scopes the access token must carry. `requiredScopes` is required. `[]` is accepted, but then every token that passes the audience check can create a link.
 - Require a dedicated scope for this tool, such as a custom scope named `browser_session`, not a scope that nearly every client gets, such as `profile` or `email`. The link signs a browser in to your app as the user, so the scope is how the user approves that for a given MCP client. With a common scope, every MCP client the user connects can open your app as them. `restricted` does not narrow this for your own backend: only Clerk's Frontend API enforces it, and your backend sees an ordinary signed-in session unless it checks for an agent session itself. Create the scope as a custom OAuth scope on your Clerk instance, enable it for the OAuth applications that may use the tool, and keep it out of the scopes that clients get by default, so a client gets it only when the user approves it, for example through the step-up challenge.
 - Step-up authorization (a `403` challenge that makes the MCP client ask the user to approve more scopes) needs `@modelcontextprotocol/server` 2.1 or later. The tool sets the SDK's `scopeChallenge` registration option, and you must pass `resourceMetadataUrl` on `authInfo`, as above; without it the challenge has no `resource_metadata`. The challenge asks for the token's granted scopes plus the missing ones, so the new grant does not drop access that other tools need. The SDK's own `requireScopes` helper challenges for the listed scopes only.
 - On `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` versions before 2.1 the tool still registers and works, but there is no step-up. On `@modelcontextprotocol/server` versions before 2.1 the tool also logs a one-time `Clerk warning:`. A token without the required scopes gets the tool's own error, which tells the agent to ask the user to reconnect the MCP server and approve those scopes. The tool refuses before it calls Clerk. `createBrowserSessionTool` also throws a `Clerk error:` message when a scope is not a valid OAuth scope token or looks like a Clerk key (`sk_...`, `pk_...`).
@@ -695,24 +695,40 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 #### Scope: `@clerk/mcp-tools/server`
 
 - `generateProtectedResourceMetadata`
-  - **Description:** Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). This metadata helps OAuth clients understand how to authenticate with your resource server.
+  - **Description:** Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). This metadata helps OAuth clients understand how to authenticate with your resource server. Pass either your Clerk publishable key, from which the authorization server URL is derived, or the URL of any other authorization server. Passing both, or neither, is a type error.
   - **Arguments:**
 
     ```ts
-    interface GenerateProtectedResourceMetadataParams {
-      /**
-       * URL of the OAuth authorization server
-       */
-      authServerUrl: string;
-      /**
-       * URL of the resource server that the metadata applies to
-       */
-      resourceUrl: string;
-      /**
-       * Additional properties to include in the metadata
-       */
-      properties?: Record<string, any>;
-    }
+    type GenerateProtectedResourceMetadataOptions =
+      | {
+          /**
+           * Your Clerk publishable key (e.g., pk_test_... or pk_live_...).
+           * Also adds Clerk's documentation as `resource_documentation`.
+           */
+          publishableKey: string;
+          /**
+           * URL of the resource server that the metadata applies to
+           */
+          resourceUrl: string;
+          /**
+           * Additional properties to include in the metadata
+           */
+          properties?: Record<string, any>;
+        }
+      | {
+          /**
+           * URL of the OAuth authorization server
+           */
+          authServerUrl: string;
+          /**
+           * URL of the resource server that the metadata applies to
+           */
+          resourceUrl: string;
+          /**
+           * Additional properties to include in the metadata
+           */
+          properties?: Record<string, any>;
+        };
     ```
 
   - **Return Type:**
@@ -722,35 +738,17 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       resource: string;
       authorization_servers: string[];
       bearer_methods_supported: ['header'];
+      resource_documentation?: string; // 'https://clerk.com/docs' with a publishable key
       [key: string]: any; // Additional properties if provided, such as resource_name
     }
     ```
 
-- `generateClerkProtectedResourceMetadata`
-  - **Description:** Generates OAuth 2.0 Protected Resource Metadata specifically configured for Clerk authentication. This is a convenience wrapper around `generateProtectedResourceMetadata` that automatically derives the auth server URL from your Clerk publishable key.
-  - **Arguments:**
-
-    ```ts
-    interface GenerateClerkProtectedResourceMetadataParams {
-      /**
-       * Your Clerk publishable key (e.g., pk_test_... or pk_live_...)
-       */
-      publishableKey: string;
-      /**
-       * URL of the resource server that the metadata applies to
-       */
-      resourceUrl: string;
-    }
-    ```
-
-  - **Return Type:** Same as `generateProtectedResourceMetadata`
-
-- `fetchClerkAuthorizationServerMetadata`
+- `fetchAuthorizationServerMetadata`
   - **Description:** Fetches OAuth 2.0 Authorization Server Metadata from Clerk's servers based on your publishable key. This returns the actual metadata from Clerk's authorization server rather than generating it locally.
   - **Arguments:**
 
     ```ts
-    interface FetchClerkAuthorizationServerMetadataParams {
+    interface FetchAuthorizationServerMetadataParams {
       /**
        * Your Clerk publishable key (e.g., pk_test_... or pk_live_...)
        */
@@ -782,7 +780,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `isClerkAuthInfo`
-  - **Description:** Returns `true` when an `AuthInfo` object came from `verifyClerkToken`, which marks its result with `extra.verifiedBy: 'clerk'` and a non-empty `extra.userId`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier. It is a type guard: after the check, TypeScript knows `authInfo.extra.userId` is a string.
+  - **Description:** Returns `true` when an `AuthInfo` object came from `toClerkAuthInfo`, which marks its result with `extra.verifiedBy: 'clerk'` and a non-empty `extra.userId`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier. It is a type guard: after the check, TypeScript knows `authInfo.extra.userId` is a string.
   - **Params:** `authInfo: AuthInfo | undefined`
   - **Returns:** `authInfo is ClerkAuthInfo` (`ClerkAuthInfo` is also exported)
 
@@ -791,7 +789,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Params:** `...requiredScopes: string[]`, one or more scopes as separate arguments
   - **Returns:** the function to pass as the `scopeChallenge` option, `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`
 
-- `corsHeaders`
+- `metadataCorsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
   - **Value:**
 

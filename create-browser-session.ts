@@ -51,7 +51,7 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
 };
 
 export type CreateBrowserSessionRequest = {
-  /** Auth info produced by `verifyClerkToken`. The signed-in user is taken from here only. */
+  /** Auth info produced by `toClerkAuthInfo`. The signed-in user is taken from here only. */
   authInfo: AuthInfo | undefined;
   /** Path (with optional query and hash) on the destination origin to land on. */
   path?: string;
@@ -344,7 +344,7 @@ async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): P
 
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
- * The user comes from `authInfo` (set by `verifyClerkToken`), never from tool input.
+ * The user comes from `authInfo` (set by `toClerkAuthInfo`), never from tool input.
  */
 export async function createBrowserSession(
   request: CreateBrowserSessionRequest,

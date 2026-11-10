@@ -17,10 +17,7 @@ import {
   resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
-import {
-  fetchClerkAuthorizationServerMetadata,
-  generateClerkProtectedResourceMetadata,
-} from '../server';
+import { fetchAuthorizationServerMetadata, generateProtectedResourceMetadata } from '../server';
 
 declare global {
   namespace Express {
@@ -182,7 +179,7 @@ export function authServerMetadataHandler() {
       throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
     }
 
-    const metadata = await fetchClerkAuthorizationServerMetadata({
+    const metadata = await fetchAuthorizationServerMetadata({
       publishableKey,
     });
 
@@ -214,7 +211,7 @@ export function protectedResourceHandler(properties?: Record<string, unknown>) {
       return;
     }
 
-    const metadata = generateClerkProtectedResourceMetadata({
+    const metadata = generateProtectedResourceMetadata({
       publishableKey,
       resourceUrl: resourceFromMetadataUrl(requestUrl),
       properties,

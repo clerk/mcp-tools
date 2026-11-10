@@ -5,7 +5,7 @@ vi.mock('../server', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server')>();
   return {
     ...actual,
-    fetchClerkAuthorizationServerMetadata: vi.fn().mockResolvedValue({
+    fetchAuthorizationServerMetadata: vi.fn().mockResolvedValue({
       issuer: 'https://clerk.example.com',
       authorization_endpoint: 'https://clerk.example.com/authorize',
     }),
@@ -21,7 +21,7 @@ import { env } from 'hono/adapter';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { generateClerkProtectedResourceMetadata } from '../server';
+import { generateProtectedResourceMetadata } from '../server';
 
 import {
   McpAuthError,
@@ -93,7 +93,7 @@ describe('protectedResourceHandler', () => {
     const metadata = (() => {
       vi.stubGlobal('Buffer', undefined);
       try {
-        return generateClerkProtectedResourceMetadata({
+        return generateProtectedResourceMetadata({
           publishableKey: FAKE_PK,
           resourceUrl: 'https://mcp.example.com',
         });

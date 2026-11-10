@@ -18,10 +18,7 @@ import {
   resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
-import {
-  fetchClerkAuthorizationServerMetadata,
-  generateClerkProtectedResourceMetadata,
-} from '../server';
+import { fetchAuthorizationServerMetadata, generateProtectedResourceMetadata } from '../server';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -72,7 +69,7 @@ export function protectedResourceHandler(properties?: Record<string, unknown>) {
     if (!publishableKey) {
       throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
     }
-    const metadata = generateClerkProtectedResourceMetadata({
+    const metadata = generateProtectedResourceMetadata({
       publishableKey,
       resourceUrl: resourceFromMetadataUrl(c.req.url),
       properties,
@@ -87,7 +84,7 @@ export function authServerMetadataHandler() {
     if (!publishableKey) {
       throw new Error('CLERK_PUBLISHABLE_KEY environment variable is required');
     }
-    const metadata = await fetchClerkAuthorizationServerMetadata({ publishableKey });
+    const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
     return c.json(metadata);
   };
 }
