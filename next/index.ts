@@ -9,6 +9,7 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  requirePublishableKey,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
@@ -44,10 +45,10 @@ export function protectedResourceMetadataHandler(
   assertProtectedResourceMetadataOptions(options);
 
   return (req: Request): Response => {
-    const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
-    }
+    const publishableKey = requirePublishableKey(
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+      'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+    );
 
     const metadata = clerkProtectedResourceMetadata(options, req.url, publishableKey);
     if (!metadata) {
@@ -75,10 +76,10 @@ export function protectedResourceMetadataHandler(
  */
 export function authorizationServerMetadataHandler(): () => Promise<Response> {
   return async (): Promise<Response> => {
-    const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      throw new Error('Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable');
-    }
+    const publishableKey = requirePublishableKey(
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+      'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+    );
 
     const metadata = await fetchAuthorizationServerMetadata({
       publishableKey,
