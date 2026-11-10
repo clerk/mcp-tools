@@ -62,12 +62,16 @@ export type ClerkAuthOptions = BaseAuthOptions & {
 export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
   /**
    * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
-   * `McpTokenVerificationError` to reject it with a reason.
+   * `McpTokenVerificationError` to reject it with a reason. The token comes first and the request second, the reverse
+   * of the verifier `withMcpAuth` from `mcp-handler` takes.
    * @param token - The bearer token from the request
    * @param request - The framework's request or context
-   * @returns The token's auth info, or `undefined` to reject it
+   * @returns The token's auth info, or `undefined` to reject it, or a promise of either
    */
-  verifyToken: (token: string, request: Req) => Promise<AuthInfo | undefined>;
+  verifyToken: (
+    token: string,
+    request: Req,
+  ) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
   clerkClient?: never;
 };
 
@@ -404,7 +408,7 @@ export async function authenticateBearer({
   resourceUrl: McpResourceUrl | undefined;
   requiredScopes: readonly string[] | undefined;
   challengeScopes: readonly string[] | undefined;
-  verifyToken: (token: string) => Promise<AuthInfo | undefined>;
+  verifyToken: (token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
 }): Promise<BearerResult> {
   let resourceMetadataUrl: string;
   if (resourceUrl === undefined) {

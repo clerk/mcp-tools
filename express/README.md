@@ -184,7 +184,7 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 - `requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
-- `verifyToken` (optional) - `(token: string, req: express.Request) => Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
+- `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
 
 **Example:**
 
