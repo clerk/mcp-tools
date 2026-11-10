@@ -4,6 +4,7 @@ import type express from 'express';
 import {
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
+  assertAuthorizationServerMetadataHandlerCalled,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertServerFactory,
@@ -149,7 +150,8 @@ export function mcpAuth(options: McpAuthOptions) {
  * An Express handler that serves the RFC 8414 authorization server metadata of the Clerk instance named by
  * `CLERK_PUBLISHABLE_KEY`, fetched from its Frontend API on each request.
  * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
- * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set.
+ * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set. Passing
+ * `authorizationServerMetadataHandler` to the route without calling it throws a `Clerk error:` on the first request.
  * @example
  * ```ts
  * app.get(
@@ -159,6 +161,8 @@ export function mcpAuth(options: McpAuthOptions) {
  * ```
  */
 export function authorizationServerMetadataHandler() {
+  // `arguments`, not a rest parameter, so the declared signature still takes no arguments
+  assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (_: express.Request, res: express.Response) => {
     const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 

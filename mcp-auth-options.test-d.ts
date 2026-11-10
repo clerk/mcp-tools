@@ -162,3 +162,19 @@ describe('the mcpAuth options', () => {
     nextWithMcpAuth(handler, next);
   });
 });
+
+describe('authorizationServerMetadataHandler', () => {
+  type Factories = [
+    (typeof import('./express'))['authorizationServerMetadataHandler'],
+    (typeof import('./hono'))['authorizationServerMetadataHandler'],
+    (typeof import('./next'))['authorizationServerMetadataHandler'],
+  ];
+
+  test('still takes no arguments in every adapter', () => {
+    const takesNoArguments: Parameters<Factories[number]>['length'] = 0;
+    // @ts-expect-error the factory takes no arguments
+    const takesAnArgument: Parameters<Factories[number]>['length'] = 1;
+    void takesNoArguments;
+    void takesAnArgument;
+  });
+});
