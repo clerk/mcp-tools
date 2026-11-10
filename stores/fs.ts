@@ -22,7 +22,7 @@ export interface FsStoreConfig {
  * ```typescript
  * import { createFsStore } from "@clerk/mcp-tools/stores/fs";
  *
- * const fsStore = createFsStore({
+ * const store = createFsStore({
  *   filePath: "./data/mcp-sessions.json"
  * });
  * ```
