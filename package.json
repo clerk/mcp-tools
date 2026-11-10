@@ -27,52 +27,52 @@
     "LICENSE"
   ],
   "type": "module",
-  "main": "dist/",
   "exports": {
     "./client": {
-      "import": "./dist/client.mjs",
-      "types": "./dist/client.d.mts"
+      "types": "./dist/client.d.mts",
+      "import": "./dist/client.mjs"
     },
     "./tools": {
-      "import": "./dist/tools.mjs",
-      "types": "./dist/tools.d.mts"
+      "types": "./dist/tools.d.mts",
+      "import": "./dist/tools.mjs"
     },
     "./server": {
-      "import": "./dist/server.mjs",
-      "types": "./dist/server.d.mts"
+      "types": "./dist/server.d.mts",
+      "import": "./dist/server.mjs"
     },
     "./next": {
-      "import": "./dist/next/index.mjs",
-      "types": "./dist/next/index.d.mts"
+      "types": "./dist/next/index.d.mts",
+      "import": "./dist/next/index.mjs"
     },
     "./next/client": {
-      "import": "./dist/next/client.mjs",
-      "types": "./dist/next/client.d.mts"
+      "types": "./dist/next/client.d.mts",
+      "import": "./dist/next/client.mjs"
     },
     "./express": {
-      "import": "./dist/express/index.mjs",
-      "types": "./dist/express/index.d.mts"
+      "types": "./dist/express/index.d.mts",
+      "import": "./dist/express/index.mjs"
     },
     "./hono": {
-      "import": "./dist/hono/index.mjs",
-      "types": "./dist/hono/index.d.mts"
+      "types": "./dist/hono/index.d.mts",
+      "import": "./dist/hono/index.mjs"
     },
     "./stores/fs": {
-      "import": "./dist/stores/fs.mjs",
-      "types": "./dist/stores/fs.d.mts"
+      "types": "./dist/stores/fs.d.mts",
+      "import": "./dist/stores/fs.mjs"
     },
     "./stores/redis": {
-      "import": "./dist/stores/redis.mjs",
-      "types": "./dist/stores/redis.d.mts"
+      "types": "./dist/stores/redis.d.mts",
+      "import": "./dist/stores/redis.mjs"
     },
     "./stores/postgres": {
-      "import": "./dist/stores/postgres.mjs",
-      "types": "./dist/stores/postgres.d.mts"
+      "types": "./dist/stores/postgres.d.mts",
+      "import": "./dist/stores/postgres.mjs"
     },
     "./stores/sqlite": {
-      "import": "./dist/stores/sqlite.mjs",
-      "types": "./dist/stores/sqlite.d.mts"
-    }
+      "types": "./dist/stores/sqlite.d.mts",
+      "import": "./dist/stores/sqlite.mjs"
+    },
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
