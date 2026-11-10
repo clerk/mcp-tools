@@ -80,9 +80,15 @@ const submitFeedbackOutputSchema = {
   received: z.boolean(),
 };
 
+/**
+ * Where a feedback report came from or who sent it: the kind of reporter, such as `mcp`, with its name and version
+ * when known.
+ */
 export type FeedbackOrigin = { type: string; name?: string; version?: string };
 
-/** One feedback report, shared by every kind of reporter (MCP servers, apps, CLIs). */
+/**
+ * One feedback report, shared by every kind of reporter (MCP servers, apps, CLIs).
+ */
 export type FeedbackReport = {
   /** Known values: missing, broken, confusing, idea. Other lowercase slugs are stored as-is. */
   kind: string;
@@ -101,17 +107,33 @@ export type FeedbackReport = {
   metadata?: Record<string, unknown>;
 };
 
-/** `secretKey` is the secret key of the Clerk instance the feedback belongs to. */
+/**
+ * Options for `submitFeedback`. `secretKey` is the secret key of the Clerk instance the feedback belongs to.
+ */
 export type SubmitFeedbackOptions = BackendApiOptions;
 
+/**
+ * Options for `submitFeedbackTool`: those of `submitFeedback`, plus the MCP server the reports are attributed to.
+ */
 export type SubmitFeedbackToolOptions = SubmitFeedbackOptions & {
   /** Name and version of your MCP server, shown with each report. The name defaults to the request's host. */
   server?: { name?: string; version?: string };
 };
 
+/**
+ * The feedback record Clerk stored, as `submitFeedback` returns it: its ID and when it was created.
+ */
 export type SubmittedFeedback = { id: string; created_at: string };
 
+/**
+ * The error `submitFeedback` throws when Clerk rejects the report or answers with something other than the stored
+ * record.
+ */
 export class FeedbackSubmissionError extends Error {
+  /**
+   * @param status - The HTTP status of Clerk's response
+   * @param body - The parsed response body, or `undefined` when it was not JSON
+   */
   constructor(
     readonly status: number,
     readonly body: unknown,

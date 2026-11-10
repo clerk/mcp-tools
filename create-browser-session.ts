@@ -24,6 +24,11 @@ export const CREATE_BROWSER_SESSION_TOOL_NAME = 'create_browser_session';
 
 const DEFAULT_TASK_DESCRIPTION = 'Signed-in browser session requested through MCP';
 
+/**
+ * Options for `createBrowserSession` and `createBrowserSessionTool`: the Clerk Backend API credentials, the app the
+ * link opens, and the limits on the session it starts. Both check them when called and throw a `Clerk error:` message
+ * when they cannot work.
+ */
 export type CreateBrowserSessionOptions = BackendApiOptions & {
   /** Default landing page for the link. HTTPS, or HTTP on loopback. */
   destinationUrl: string;
@@ -50,6 +55,10 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
   restricted?: boolean;
 };
 
+/**
+ * One request to `createBrowserSession`: the auth info of the MCP request, which names the user, and where the link
+ * should land.
+ */
 export type CreateBrowserSessionRequest = {
   /** Auth info produced by `toClerkAuthInfo`. The signed-in user is taken from here only. */
   authInfo: AuthInfo | undefined;
@@ -64,14 +73,27 @@ export type CreateBrowserSessionRequest = {
   organizationId?: string;
 };
 
+/**
+ * The one-time link `createBrowserSession` returns, with the Clerk agent task that backs it.
+ */
 export type BrowserSession = {
   /** One-time link. Treat it as a credential: never log it. */
   url: string;
+  /**
+   * ID of the Clerk agent task the link belongs to.
+   */
   agentTaskId: string;
   /** Where the browser lands after sign-in. */
   redirectUrl: string;
 };
 
+/**
+ * Why `createBrowserSession` refused or failed to create a link, set as `BrowserSessionError.code`.
+ * `not_authenticated`, `invalid_path`, and `insufficient_scope` are refused before any API call. `rejected`,
+ * `destination_rejected`, `unauthorized`, `rate_limited`, and `organization_rejected` come from Clerk's response, and
+ * `unavailable` means Clerk could not be reached or its response could not be read. `restricted_not_applied` means
+ * Clerk's response did not confirm the restriction or organization the request asked for.
+ */
 export type BrowserSessionErrorCode =
   | 'not_authenticated'
   | 'invalid_path'
@@ -84,7 +106,17 @@ export type BrowserSessionErrorCode =
   | 'organization_rejected'
   | 'restricted_not_applied';
 
+/**
+ * The error `createBrowserSession` throws when it cannot create a link. Its message and `detail` never include the link
+ * or the secret key.
+ */
 export class BrowserSessionError extends Error {
+  /**
+   * @param code - Why the link was not created
+   * @param message - The error's message
+   * @param missingScopes - The scopes the token lacks, for `insufficient_scope`
+   * @param detail - Safe-to-log detail, such as a status or an error name
+   */
   constructor(
     readonly code: BrowserSessionErrorCode,
     message: string,

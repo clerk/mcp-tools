@@ -20,7 +20,9 @@ import {
 declare global {
   namespace Express {
     interface Locals {
-      /** Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did. */
+      /**
+       * Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did.
+       */
       mcpAuthFailure?: McpAuthFailure;
     }
   }
@@ -140,6 +142,19 @@ export function mcpAuth(options: McpAuthOptions) {
   };
 }
 
+/**
+ * An Express handler that serves the RFC 8414 authorization server metadata of the Clerk instance named by
+ * `CLERK_PUBLISHABLE_KEY`, fetched from its Frontend API on each request.
+ * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
+ * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set.
+ * @example
+ * ```ts
+ * app.get(
+ *   "/.well-known/oauth-authorization-server",
+ *   authorizationServerMetadataHandler()
+ * );
+ * ```
+ */
 export function authorizationServerMetadataHandler() {
   return async (_: express.Request, res: express.Response) => {
     const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;

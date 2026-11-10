@@ -20,7 +20,9 @@ import {
 declare module 'hono' {
   interface ContextVariableMap {
     mcpAuth: AuthInfo;
-    /** Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did. */
+    /**
+     * Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did.
+     */
     mcpAuthFailure: McpAuthFailure | undefined;
   }
 }
@@ -58,6 +60,18 @@ type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
 };
 
+/**
+ * A Hono handler that serves RFC 9728 protected resource metadata for a Clerk instance, using the publishable key in
+ * the `CLERK_PUBLISHABLE_KEY` environment variable. The `resource` is the URL the metadata route was requested at,
+ * without the well-known path, so mount it at the path `mcpAuth`'s challenge points to.
+ * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
+ * @param properties - Additional metadata, such as `resource_name`. It overrides the generated metadata.
+ * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set.
+ * @example
+ * ```ts
+ * app.get('/.well-known/oauth-protected-resource/mcp', protectedResourceMetadataHandler());
+ * ```
+ */
 export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
   return (c: Context) => {
     const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
@@ -73,6 +87,16 @@ export function protectedResourceMetadataHandler(properties?: Record<string, unk
   };
 }
 
+/**
+ * A Hono handler that serves the RFC 8414 authorization server metadata of the Clerk instance named by
+ * `CLERK_PUBLISHABLE_KEY`, fetched from its Frontend API on each request.
+ * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
+ * @returns The handler. It throws when `CLERK_PUBLISHABLE_KEY` is not set.
+ * @example
+ * ```ts
+ * app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
+ * ```
+ */
 export function authorizationServerMetadataHandler() {
   return async (c: Context) => {
     const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
