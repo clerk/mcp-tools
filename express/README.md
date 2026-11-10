@@ -300,7 +300,7 @@ Express handler that processes MCP requests using the streamable HTTP transport 
 
 **Parameters:**
 
-- `createServer: () => McpServer` - A factory that returns a new MCP server instance. Passing a plain `McpServer` instance is also supported for backwards compatibility, but a shared server can only handle one request at a time, so a factory is strongly recommended.
+- `createServer: () => McpServer` - A factory that returns a new MCP server instance on every call, so concurrent and abandoned requests remain isolated. Passing an `McpServer` instance instead is a type error, and throws when the handler is created.
 - `Transport` - `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js`. This package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class.
 
 **Example:**

@@ -1,7 +1,7 @@
 // MCP client helpers for Next.js. Kept out of `@clerk/mcp-tools/next` because they load `@modelcontextprotocol/sdk`,
 // which servers on MCP SDK 2.x (`@modelcontextprotocol/server`, as `mcp-handler` 2.x uses) do not install.
 import type { NextRequest } from 'next/server';
-import { type McpClientStore, completeAuthWithCode } from '../client';
+import { type McpClientStore, completeOAuth } from '../client';
 
 /**
  * A request handler intended to be run at the OAuth callback endpoint.
@@ -15,7 +15,7 @@ export function completeOAuthHandler({
   callback,
 }: {
   store: McpClientStore;
-  callback: (params: Awaited<ReturnType<typeof completeAuthWithCode>>) => void;
+  callback: (params: Awaited<ReturnType<typeof completeOAuth>>) => void;
 }): (req: NextRequest) => Promise<Response | ReturnType<typeof callback>> {
   return async (req: NextRequest): Promise<Response | ReturnType<typeof callback>> => {
     const qs = req.nextUrl.searchParams;
@@ -31,7 +31,7 @@ export function completeOAuthHandler({
     }
 
     // this function will run the state param check internally
-    const res = await completeAuthWithCode({ state, code, store });
+    const res = await completeOAuth({ state, code, store });
 
     return callback(res);
   };

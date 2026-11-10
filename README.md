@@ -140,10 +140,10 @@ server.registerTool(
 
 #### Collecting feedback from agents
 
-Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `@clerk/mcp-tools/feedback` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
+Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `submitFeedbackTool` from `@clerk/mcp-tools/tools` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
 
 ```ts
-import { submitFeedbackTool } from '@clerk/mcp-tools/feedback';
+import { submitFeedbackTool } from '@clerk/mcp-tools/tools';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 function createServer() {
@@ -169,7 +169,7 @@ The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/s
 
 #### Signed-in browser links for agents
 
-When an agent drives a browser for your user and lands on your app's sign-in page, `@clerk/mcp-tools/create-browser-session` lets it get a one-time link that opens your app already signed in as that user. The `create_browser_session` tool takes the user from the verified MCP access token, never from tool input.
+When an agent drives a browser for your user and lands on your app's sign-in page, `createBrowserSessionTool` from `@clerk/mcp-tools/tools` lets it get a one-time link that opens your app already signed in as that user. The `create_browser_session` tool takes the user from the verified MCP access token, never from tool input.
 
 The link starts a session as the user, so the access token check in front of this tool must be strict. Verify the token with `authenticateRequest` and an `audience` equal to your MCP server's resource URL. Here is a Next.js setup on `@modelcontextprotocol/server` 2.1 or later, so that the SDK can send the step-up challenge. It calls `createMcpHandler` from the SDK directly, in place of the `mcp-handler` route from the [Next.js guide](./next/README.md#building-an-mcp-server). The tool also works behind the guide's `withMcpAuth` route, which checks the audience and sets `resourceMetadataUrl`.
 
@@ -194,10 +194,7 @@ Then the MCP route, here on `@modelcontextprotocol/server` 2.1 or later. `create
 ```ts
 // app/mcp/route.ts
 import { toClerkAuthInfo } from '@clerk/mcp-tools/next';
-import {
-  browserSessionInstructions,
-  createBrowserSessionTool,
-} from '@clerk/mcp-tools/create-browser-session';
+import { browserSessionInstructions, createBrowserSessionTool } from '@clerk/mcp-tools/tools';
 import { clerkClient } from '@clerk/nextjs/server';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 
@@ -264,7 +261,7 @@ export { handler as GET, handler as POST, handler as DELETE };
 - The link is a bearer credential: anyone who has it before it is used or expires can sign in as the user. The tool never puts it in error messages, but its text result contains the link so that the agent can open it. Never log it, and treat MCP client and gateway logs of tool results as credentials.
 - `restricted` (default `true`) limits the session the link starts. Clerk's Frontend API refuses these writes from that session: touch, switching the active session or organization, sign-out, writes to the user's own profile and organizations, reverification, and OAuth consent and approval. The one exception is refreshing its own session token. Clerk enforces this restriction, not your app's own backend: your backend sees an ordinary signed-in session unless it checks for an agent session itself. Pass `restricted: false` for an ordinary session. When Clerk does not confirm the restriction in its response, for example on a Clerk Backend API that does not support it yet, the tool revokes the new session link on a best-effort basis, refuses to return it, and fails with the error code `restricted_not_applied`. The log line names the `agent_task_id` when it is a well-formed ID. A malformed ID is never logged. It is still revoked when it can safely go in the revoke request's path; otherwise the log line says `revoke_skipped`, and the unused link expires on its own.
 - Optional settings: `sessionMaxDurationInSeconds` sets the maximum length, in seconds, of the session the link starts. Clerk's default is 30 minutes, and a larger value makes the session longer. `agentName`, `apiUrl`, and `fetch` are also available. Requests to Clerk time out after 10 seconds.
-- To create a link outside of an MCP tool, use `createBrowserSession({ authInfo, path, taskDescription, organizationId }, options)` from the same module. It resolves to `{ url, agentTaskId, redirectUrl }`. `organizationId` is optional and sets the organization the session starts in. With `restricted`, it is also the only organization the session can use. Without it, Clerk uses the user's last active organization. When you pass it, the link is refused with `restricted_not_applied` unless Clerk confirms that organization, and it fails with `organization_rejected` when the user does not belong to the organization, or when the instance requires one and none applies. Use `validateBrowserSessionOptions(options)` to check the options at startup. When it throws a `BrowserSessionError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`, or `restricted_not_applied`), and `browserSessionErrorMessage(error)` returns the message the tool gives the agent.
+- To create a link outside of an MCP tool, use `createBrowserSession({ authInfo, path, taskDescription, organizationId }, options)` from `@clerk/mcp-tools/tools`. It resolves to `{ url, agentTaskId, redirectUrl }`. `organizationId` is optional and sets the organization the session starts in. With `restricted`, it is also the only organization the session can use. Without it, Clerk uses the user's last active organization. When you pass it, the link is refused with `restricted_not_applied` unless Clerk confirms that organization, and it fails with `organization_rejected` when the user does not belong to the organization, or when the instance requires one and none applies. It rejects with a `Clerk error:` message when the options cannot work. When it rejects with a `BrowserSessionError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`, or `restricted_not_applied`).
 - The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs; with SDK 2.x, install `zod` 4.
 
 ### Guide: building a client
@@ -315,10 +312,10 @@ export async function initializeMCPConnection(mcpEndpoint: string) {
 After the user completes the OAuth flow, you'll need to handle the callback:
 
 ```ts
-import { completeAuthWithCode } from '@clerk/mcp-tools/client';
+import { completeOAuth } from '@clerk/mcp-tools/client';
 
 export async function handleOAuthCallback(code: string, state: string) {
-  const result = await completeAuthWithCode({
+  const result = await completeOAuth({
     state,
     code,
     store,
@@ -334,10 +331,10 @@ export async function handleOAuthCallback(code: string, state: string) {
 Once authentication is complete, you can call MCP tools:
 
 ```ts
-import { getClientBySessionId } from '@clerk/mcp-tools/client';
+import { getMcpClientBySessionId } from '@clerk/mcp-tools/client';
 
 export async function callMCPTool(sessionId: string, toolName: string, args: any) {
-  const { client, connect } = getClientBySessionId({
+  const { client, connect } = getMcpClientBySessionId({
     sessionId,
     store,
   });
@@ -370,7 +367,9 @@ As such, each of the client functions require that you pass in a store adapter. 
 #### File System Store (Development)
 
 ```ts
-import fsStore from '@clerk/mcp-tools/stores/fs';
+import { createFsStore } from '@clerk/mcp-tools/stores/fs';
+
+const store = createFsStore();
 ```
 
 This uses a temporary file and is fast, easy, and adequate for local development and testing. However, it's not suitable for production since the file could be deleted at any time.
@@ -441,7 +440,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Arguments**:
 
     ```ts
-    interface CreateKnownCredentialsMcpClientParams {
+    interface CreateKnownCredentialsMcpClientOptions {
       /**
        * OAuth client id, expected to be collected via user input
        */
@@ -488,7 +487,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface McpClientReturnType {
+    interface McpClientConnection {
       /**
        * Represents a session associated with the connected MCP service endpoint.
        */
@@ -520,7 +519,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Arguments**:
 
     ```ts
-    interface CreateDynamicallyRegisteredMcpClientParams {
+    interface CreateDynamicallyRegisteredMcpClientOptions {
       /**
        * The endpoint of the MCP service, expected to be collected via user input
        */
@@ -572,7 +571,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface McpClientReturnType {
+    interface McpClientConnection {
       /**
        * Represents a session associated with the connected MCP service endpoint.
        */
@@ -599,12 +598,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     }
     ```
 
-- `getClientBySessionId`
+- `getMcpClientBySessionId`
   - **Description:** Given an existing session id, constructs a MCP client that matches the information used to create the client/session initially. Intended to be used in OAuth callback routes and any subsequent MCP calls once the service has been initialized.
   - **Arguments**:
 
   ```ts
-  interface GetClientBySessionIdParams {
+  interface GetMcpClientBySessionIdOptions {
     /**
      * The session id to retrieve the client details for
      */
@@ -625,7 +624,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface McpClientReturnType {
+    interface McpClientConnection {
       /**
        * Represents a session associated with the connected MCP service endpoint.
        */
@@ -652,12 +651,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     }
     ```
 
-- `completeAuthWithCode`
+- `completeOAuth`
   - **Description:** Designed to be used in the OAuth callback route. Passing in the code, state, and your store will finish the auth process
   - **Arguments:**
 
     ```ts
-    interface CompleteAuthWithCodeParams {
+    interface CompleteOAuthOptions {
       /**
        * The authorization code returned from the auth provider via querystring.
        * @see https://datatracker.ietf.org/doc/html/rfc6749#section-4.1
@@ -679,7 +678,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Return Type:**
 
     ```ts
-    interface CompleteAuthWithCodeReturnType {
+    interface CompleteOAuthResult {
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
