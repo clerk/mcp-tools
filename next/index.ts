@@ -7,9 +7,8 @@ import {
   McpAuthError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
+  audienceFor,
   authenticateBearer,
-  resolveResourceUrl,
-  resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import { type McpClientStore, completeAuthWithCode } from '../client';
@@ -188,15 +187,15 @@ export type McpRouteHandler = (req: Request) => Response | Promise<Response>;
  */
 export function mcpAuth(
   verifyToken: (token: string, req: Request) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions<Request>,
+  options?: McpAuthOptions,
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
   assertMcpAuthOptions('mcpAuth', options);
 
   return (handler) => async (req) => {
-    const resourceUrl = resolveResourceUrl('mcpAuth', options?.resourceUrl, req);
     const result = await authenticateBearer({
       authorization: req.headers.get('authorization') ?? undefined,
-      resourceMetadataUrl: resourceUrl ? resourceMetadataUrlFor(resourceUrl) : getPRMUrl(req),
+      requestUrl: req.url,
+      resourceUrl: options?.resourceUrl,
       requiredScopes: options?.requiredScopes,
       challengeScopes: options?.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
@@ -205,7 +204,10 @@ export function mcpAuth(
     if (!result.ok) {
       return Response.json(
         { error: result.error },
-        { status: result.status, headers: { 'WWW-Authenticate': result.challenge } },
+        {
+          status: result.status,
+          headers: result.challenge ? { 'WWW-Authenticate': result.challenge } : undefined,
+        },
       );
     }
 
@@ -235,7 +237,7 @@ export function mcpAuth(
  * ```
  */
 export function mcpAuthClerk(
-  options: McpAuthClerkOptions<Request> & {
+  options: McpAuthClerkOptions & {
     clerkClient?: Pick<ClerkClient, 'authenticateRequest'> | undefined;
   },
 ): (handler: McpRouteHandler) => (req: Request) => Promise<Response> {
@@ -245,18 +247,8 @@ export function mcpAuthClerk(
     // Imported lazily so that the rest of this entry point works without `@clerk/nextjs`
     const client =
       options.clerkClient ?? (await (await import('@clerk/nextjs/server')).clerkClient());
-    return verifyClerkOAuthToken(
-      client,
-      token,
-      resolveResourceUrl('mcpAuthClerk', options.resourceUrl, req),
-    );
+    return verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, req.url));
   }, options);
-}
-
-// The protected resource metadata URL for the request's own path, used when `resourceUrl` is not set.
-function getPRMUrl(req: Request): string {
-  const { origin, pathname } = new URL(req.url);
-  return `${origin}/.well-known/oauth-protected-resource${pathname}`;
 }
 
 // The resource a protected resource metadata route describes: `/mcp` for `/.well-known/oauth-protected-resource/mcp`,

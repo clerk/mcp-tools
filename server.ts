@@ -157,6 +157,26 @@ export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is Cle
 export { requireAdditionalScopes } from './scope-challenge';
 
 /**
+ * The URL from `resourceUrl` that a request to `requestUrl` is for: `resourceUrl` itself when it is one URL, or the
+ * listed URL with the request's origin. `undefined` when no listed URL has that origin. This is the rule `mcpAuth` and
+ * `mcpAuthClerk` apply to their `resourceUrl`, so use it in the protected resource metadata route to keep its
+ * `resource` identical to the URL they check, and answer `421` when it returns `undefined`.
+ * @example
+ * ```ts
+ * const resource = matchResourceUrl(['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'], request.url);
+ * if (!resource) return new Response(null, { status: 421 });
+ * ```
+ */
+export function matchResourceUrl(
+  resourceUrl: string | readonly string[],
+  requestUrl: string | URL,
+): string | undefined {
+  if (typeof resourceUrl === 'string') return resourceUrl;
+  const { origin } = new URL(requestUrl);
+  return resourceUrl.find((url) => URL.canParse(url) && new URL(url).origin === origin);
+}
+
+/**
  * CORS headers for OAuth metadata endpoints
  */
 export const corsHeaders = {

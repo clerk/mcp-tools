@@ -124,14 +124,32 @@ describe('mcpAuth', () => {
     expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}"`);
   });
 
-  test('derives resource_metadata from a resourceUrl function for each request', async () => {
-    const res = await request(
-      mcpAuth(reject, { resourceUrl: (req) => `https://${req.get('host')}/mcp` }),
+  test('derives resource_metadata from the listed resourceUrl with the request origin', async () => {
+    // The test server's port is only known once it listens, so the middleware is built per request
+    const res = await request((req, res, next) =>
+      mcpAuth(reject, {
+        resourceUrl: ['https://mcp.example.com/mcp', `http://${req.get('host')}/mcp`],
+      })(req, res, next),
     );
 
     expect(res.challenge).toBe(
-      `Bearer resource_metadata="${res.origin.replace('http:', 'https:')}/.well-known/oauth-protected-resource/mcp"`,
+      `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
     );
+  });
+
+  test('answers a request to an unlisted origin with a 421 and does not verify it', async () => {
+    const verifyToken = vi.fn(reject);
+    const res = await request(
+      mcpAuth(verifyToken, {
+        resourceUrl: ['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'],
+      }),
+      { authorization: 'Bearer token-1' },
+    );
+
+    expect(res.status).toBe(421);
+    expect(res.challenge).toBeNull();
+    expect(res.body).toEqual({ error: 'misdirected_request' });
+    expect(verifyToken).not.toHaveBeenCalled();
   });
 
   test.each(['Bearer', 'Basic abc', 'Bearer a b'])(
@@ -207,7 +225,20 @@ describe('mcpAuth', () => {
       expect(() => mcpAuth(reject, { resourceUrl })).toThrow(
         'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
       );
+      expect(() =>
+        mcpAuth(reject, { resourceUrl: ['https://mcp.example.com/mcp', resourceUrl] }),
+      ).toThrow(
+        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
+      );
     }
+    expect(() => mcpAuth(reject, { resourceUrl: [] })).toThrow(
+      'Clerk error: mcpAuth resourceUrl must be a URL or a non-empty list of URLs',
+    );
+    expect(() =>
+      mcpAuth(reject, { resourceUrl: ['https://mcp.example.com/a', 'https://mcp.example.com/b'] }),
+    ).toThrow(
+      'Clerk error: mcpAuth resourceUrl lists more than one URL for https://mcp.example.com',
+    );
     expect(() => mcpAuth(reject, { requiredScopes: ['a b'] })).toThrow(
       'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
     );

@@ -100,14 +100,26 @@ describe('mcpAuth', () => {
     );
   });
 
-  test('derives resource_metadata from a resourceUrl function for each request', async () => {
+  test('derives resource_metadata from the listed resourceUrl with the request origin', async () => {
     const res = await mcpAuth(vi.fn(), {
-      resourceUrl: (req) => `${new URL(req.url).origin}/mcp`,
+      resourceUrl: ['https://mcp.example.com/mcp', 'https://other.example.com/mcp'],
     })(echoAuth)(request(undefined, 'https://other.example.com/mcp'));
 
     expect(res.headers.get('WWW-Authenticate')).toBe(
       'Bearer resource_metadata="https://other.example.com/.well-known/oauth-protected-resource/mcp"',
     );
+  });
+
+  test('answers a request to an unlisted origin with a 421 and does not verify it', async () => {
+    const verifyToken = vi.fn();
+    const res = await mcpAuth(verifyToken, {
+      resourceUrl: ['https://mcp.example.com/mcp', 'https://other.example.com/mcp'],
+    })(echoAuth)(request('Bearer token-1', 'https://evil.example.com/mcp'));
+
+    expect(res.status).toBe(421);
+    expect(res.headers.get('WWW-Authenticate')).toBeNull();
+    expect(await res.json()).toEqual({ error: 'misdirected_request' });
+    expect(verifyToken).not.toHaveBeenCalled();
   });
 
   test('adds invalid_token to the challenge when the token is rejected', async () => {
@@ -151,6 +163,7 @@ describe('mcpAuth', () => {
 
   test('throws at setup for an invalid resourceUrl or scope', () => {
     expect(() => mcpAuth(vi.fn(), { resourceUrl: 'not a url' })).toThrow('Clerk error:');
+    expect(() => mcpAuth(vi.fn(), { resourceUrl: [] })).toThrow('Clerk error:');
     expect(() => mcpAuth(vi.fn(), { requiredScopes: ['two words'] })).toThrow('Clerk error:');
     expect(() => mcpAuth(vi.fn(), { challengeScopes: ['two words'] })).toThrow('Clerk error:');
   });
