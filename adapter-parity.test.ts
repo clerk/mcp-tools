@@ -3,7 +3,7 @@ import express from 'express';
 import { Hono } from 'hono';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 vi.mock('@clerk/express', () => ({ clerkClient: { authenticateRequest: vi.fn() } }));
 
@@ -14,7 +14,7 @@ import * as honoAdapter from './hono';
 import * as nextAdapter from './next';
 
 const WELL_KNOWN = '/.well-known/oauth-protected-resource';
-const authServerUrl = 'https://auth.example.com';
+const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 
 type Answer = { status: number; challenge: string | null; body: unknown };
 
@@ -63,7 +63,7 @@ const metadataRoutes: [string, Send][] = [
     'express',
     (path) => {
       const app = express();
-      app.use(WELL_KNOWN, expressAdapter.protectedResourceHandler({ authServerUrl }));
+      app.use(WELL_KNOWN, expressAdapter.protectedResourceHandlerClerk());
       return sendExpress(app, path);
     },
   ],
@@ -71,21 +71,28 @@ const metadataRoutes: [string, Send][] = [
     'hono',
     async (path) => {
       const app = new Hono();
-      app.get('*', honoAdapter.protectedResourceHandler({ authServerUrl }));
+      app.get('*', honoAdapter.protectedResourceHandlerClerk());
       return answer(await app.request(`${origin}${path}`), origin);
     },
   ],
   [
     'next',
     async (path) =>
-      answer(
-        nextAdapter.protectedResourceHandler({ authServerUrl })(new Request(`${origin}${path}`)),
-        origin,
-      ),
+      answer(nextAdapter.protectedResourceHandlerClerk()(new Request(`${origin}${path}`)), origin),
   ],
 ];
 
-describe.each(metadataRoutes)('%s protectedResourceHandler', (_name, send) => {
+describe.each(metadataRoutes)('%s protectedResourceHandlerClerk', (_name, send) => {
+  beforeEach(() => {
+    process.env.CLERK_PUBLISHABLE_KEY = FAKE_PK;
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
+  });
+
+  afterEach(() => {
+    delete process.env.CLERK_PUBLISHABLE_KEY;
+    delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+  });
+
   // RFC 9728 section 3.3: the `resource` must be identical to the URL the metadata URL was derived from, so each
   // suffix maps back to the resource whose `resourceMetadataUrlFor` it is
   test.each([

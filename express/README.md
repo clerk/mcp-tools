@@ -101,10 +101,12 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/express';
+import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 
 const app = express();
 app.use(express.json());
+const resourceUrl = 'https://mcp.example.com/mcp';
 
 // Custom token verification
 async function verifyToken(token: string, req: express.Request) {
@@ -149,16 +151,18 @@ function createServer() {
 }
 
 // Protected resource metadata for your custom auth system
-app.get(
-  '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandler({
-    authServerUrl: 'https://your-auth-server.com',
-  }),
-);
+app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
+  res.json(
+    generateProtectedResourceMetadata({
+      authServerUrl: 'https://your-auth-server.com',
+      resourceUrl,
+    }),
+  );
+});
 
 app.post(
   '/mcp',
-  mcpAuth(verifyToken),
+  mcpAuth(verifyToken, { resourceUrl }),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 
@@ -174,7 +178,7 @@ Generic authentication middleware that allows you to implement custom token veri
 **Parameters:**
 
 - `verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>` - Function that verifies the token and returns the auth data, or `undefined` to reject it
-- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ authServerUrl, properties: { resource: resourceUrl } })`: that route also derives it from the request when it is not set.
+- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Build the metadata route with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server`, passing the same URL as its `resourceUrl`.
 - `options.requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `options.challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 
@@ -256,35 +260,9 @@ Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 
 
 ## Protected Resource Metadata
 
-### `protectedResourceHandler`
-
-Generic express handler that returns OAuth protected resource metadata for any OAuth authorization server, as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728).
-
-**Parameters:**
-
-- `authServerUrl: string` - The URL of your OAuth authorization server
-- `properties?: Record<string, any>` - Optional additional properties to include in the metadata
-
-**Example:**
-
-```ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/express';
-
-app.get(
-  '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandler({
-    authServerUrl: 'https://auth.example.com',
-    properties: {
-      resource_documentation: 'https://example.com/docs',
-      custom_property: 'custom_value',
-    },
-  }),
-);
-```
-
 ### `protectedResourceHandlerClerk`
 
-Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728).
+Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server` in your own route.
 
 **Example:**
 

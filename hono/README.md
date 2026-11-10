@@ -73,32 +73,38 @@ export default app;
 import { Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { mcpAuth, protectedResourceHandler, streamableHttpHandler } from '@clerk/mcp-tools/hono';
+import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/hono';
+import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 const app = new Hono();
+const resourceUrl = 'https://mcp.example.com/mcp';
 
 function createServer() {
   return new McpServer({ name: 'my-server', version: '1.0.0' });
 }
 
-app.get(
-  '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandler({ authServerUrl: 'https://auth.example.com' }),
+app.get('/.well-known/oauth-protected-resource/mcp', (c) =>
+  c.json(
+    generateProtectedResourceMetadata({ authServerUrl: 'https://auth.example.com', resourceUrl }),
+  ),
 );
 
 app.post(
   '/mcp',
-  mcpAuth(async (token, c): Promise<AuthInfo | undefined> => {
-    const user = await verifyMyToken(token);
-    if (!user) return undefined;
-    return {
-      token,
-      scopes: user.scopes,
-      clientId: user.clientId,
-      extra: { userId: user.id },
-    };
-  }),
+  mcpAuth(
+    async (token, c): Promise<AuthInfo | undefined> => {
+      const user = await verifyMyToken(token);
+      if (!user) return undefined;
+      return {
+        token,
+        scopes: user.scopes,
+        clientId: user.clientId,
+        extra: { userId: user.id },
+      };
+    },
+    { resourceUrl },
+  ),
   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
 );
 
@@ -111,7 +117,7 @@ export default app;
 
 Middleware that enforces authentication for MCP requests. Extracts the bearer token from the `Authorization` header, calls `verifyToken`, and stores the result in Hono context for downstream handlers (`c.get('mcpAuth')`). Returns `401` with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, adding `error="invalid_token"` for a rejected token.
 
-- `options.resourceUrl`: the exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge, with `c.get('mcpAuthFailure')` set to `misdirected_request`. In `mcpAuthClerk` that URL is the audience, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/server`. The challenge's `resource_metadata` is derived from it. The request's origin comes from `c.req.url`, so behind a proxy that terminates TLS or rewrites `Host`, as with Node.js behind nginx, a listed URL can fail to match and every request gets a `421`: list the URLs the app itself sees, or rebuild the request URL from `X-Forwarded-*` headers you trust before this middleware. Without `resourceUrl`, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ authServerUrl, properties: { resource: resourceUrl } })`: that route also derives it from the request when it is not set.
+- `options.resourceUrl`: the exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge, with `c.get('mcpAuthFailure')` set to `misdirected_request`. In `mcpAuthClerk` that URL is the audience, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/server`. The challenge's `resource_metadata` is derived from it. The request's origin comes from `c.req.url`, so behind a proxy that terminates TLS or rewrites `Host`, as with Node.js behind nginx, a listed URL can fail to match and every request gets a `421`: list the URLs the app itself sees, or rebuild the request URL from `X-Forwarded-*` headers you trust before this middleware. Without `resourceUrl`, the URL comes from the request, which can differ from the public URL behind a proxy. Build the metadata route with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server`, passing the same URL as its `resourceUrl`.
 - `options.requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by the missing ones, so the new grant keeps the old access. The `401` challenge lists them in its `scope`.
 - `options.challengeScopes`: more scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 
@@ -136,13 +142,9 @@ A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque a
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/hono` 0.1.80 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
-### `protectedResourceHandler({ authServerUrl, properties? })`
-
-Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728). Derives the resource URL from the current request path.
-
 ### `protectedResourceHandlerClerk(properties?)`
 
-Same as `protectedResourceHandler`, but derives `authServerUrl` automatically from `CLERK_PUBLISHABLE_KEY`.
+Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. Derives the resource URL from the current request path. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server` in your own route.
 
 ### `authServerMetadataHandlerClerk`
 

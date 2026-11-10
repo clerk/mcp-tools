@@ -20,7 +20,6 @@ import {
 import {
   fetchClerkAuthorizationServerMetadata,
   generateClerkProtectedResourceMetadata,
-  generateProtectedResourceMetadata,
 } from '../server';
 
 declare global {
@@ -174,48 +173,6 @@ export function mcpAuthClerk(
       verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, getRequestUrl(req)!)),
     options,
   );
-}
-
-/**
- * An express handler that returns OAuth protected resource metadata.
- * @see https://datatracker.ietf.org/doc/html/rfc9728#section-4.1
- * @param authServerUrl - The URL of the authorization server
- * @param properties - Additional properties to include in the metadata
- * @example
- * ```ts
- * app.get(
- *   "/.well-known/oauth-protected-resource/mcp",
- *   protectedResourceHandler({
- *     authServerUrl: "https://auth.example.com",
- *     properties: {
- *       resource_documentation: "https://example.com/docs"
- *     }
- *   })
- * );
- * ```
- */
-export function protectedResourceHandler({
-  authServerUrl,
-  properties,
-}: {
-  authServerUrl: string;
-  properties?: Record<string, unknown>;
-}) {
-  return async (req: express.Request, res: express.Response) => {
-    const requestUrl = getRequestUrl(req);
-    if (!requestUrl) {
-      res.status(400).json({ error: 'invalid_request' });
-      return;
-    }
-
-    const metadata = generateProtectedResourceMetadata({
-      authServerUrl,
-      resourceUrl: resourceFromMetadataUrl(requestUrl),
-      properties,
-    });
-
-    res.json(metadata);
-  };
 }
 
 export async function authServerMetadataHandlerClerk(_: express.Request, res: express.Response) {

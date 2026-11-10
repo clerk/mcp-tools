@@ -12,7 +12,6 @@ import {
   McpTokenVerificationError,
   type McpRouteHandler,
   mcpAuth,
-  protectedResourceHandler,
   protectedResourceHandlerClerk,
   withMcpAuth,
 } from './index';
@@ -22,13 +21,7 @@ const resourceUrl = 'https://mcp.example.com/mcp';
 const RESOURCE_METADATA_URL = `${METADATA_ROOT}/mcp`;
 const BARE_CHALLENGE = `Bearer resource_metadata="${RESOURCE_METADATA_URL}"`;
 
-describe.each([
-  [
-    'protectedResourceHandler',
-    () => protectedResourceHandler({ authServerUrl: 'https://as.test' }),
-  ],
-  ['protectedResourceHandlerClerk', () => protectedResourceHandlerClerk()],
-])('%s', (name, createHandler) => {
+describe('protectedResourceHandlerClerk', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
   });
@@ -42,7 +35,7 @@ describe.each([
     ['/mcp/', 'https://mcp.example.com/mcp/'],
     ['', 'https://mcp.example.com'],
   ])('describes the resource for the metadata route suffix %j', async (suffix, resource) => {
-    const res = createHandler()(new Request(`${METADATA_ROOT}${suffix}`));
+    const res = protectedResourceHandlerClerk()(new Request(`${METADATA_ROOT}${suffix}`));
 
     expect((await res.json()).resource).toBe(resource);
   });
@@ -52,12 +45,9 @@ describe.each([
       resource: 'https://public.example.com/mcp',
       scopes_supported: ['profile'],
     };
-    const handler =
-      name === 'protectedResourceHandler'
-        ? protectedResourceHandler({ authServerUrl: 'https://as.test', properties })
-        : protectedResourceHandlerClerk(properties);
-
-    const metadata = await handler(new Request(`${METADATA_ROOT}/mcp`)).json();
+    const metadata = await protectedResourceHandlerClerk(properties)(
+      new Request(`${METADATA_ROOT}/mcp`),
+    ).json();
 
     expect(metadata).toMatchObject(properties);
   });
