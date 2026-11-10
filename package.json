@@ -33,13 +33,9 @@
       "import": "./dist/client.mjs",
       "types": "./dist/client.d.mts"
     },
-    "./feedback": {
-      "import": "./dist/feedback.mjs",
-      "types": "./dist/feedback.d.mts"
-    },
-    "./create-browser-session": {
-      "import": "./dist/create-browser-session.mjs",
-      "types": "./dist/create-browser-session.d.mts"
+    "./tools": {
+      "import": "./dist/tools.mjs",
+      "types": "./dist/tools.d.mts"
     },
     "./server": {
       "import": "./dist/server.mjs",

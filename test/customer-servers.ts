@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
-import { createBrowserSessionTool } from '../create-browser-session';
+import { createBrowserSessionTool } from '../tools';
 import { requireAdditionalScopes } from '../server';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;

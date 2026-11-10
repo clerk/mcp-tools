@@ -3,9 +3,8 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
   entry: [
     'client.ts',
-    'feedback.ts',
     'server.ts',
-    'create-browser-session.ts',
+    'tools.ts',
     'next/index.ts',
     'next/client.ts',
     'express/index.ts',
