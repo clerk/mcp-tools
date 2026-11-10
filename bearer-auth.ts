@@ -222,6 +222,19 @@ export function assertTransportClass(Transport: unknown, className: string, sdkM
 }
 
 /**
+ * Throws a `Clerk error:` message unless `createServer` is a function. Code written when the Express adapter also
+ * accepted a shared server object passes that object here; a shared server handles only one request at a time, so this
+ * fails at startup instead of on concurrent requests.
+ */
+export function assertServerFactory(createServer: unknown, transportClassName: string) {
+  if (typeof createServer !== 'function') {
+    throw new Error(
+      `Clerk error: streamableHttpHandler needs a function that returns a new MCP server as its first argument, so each request gets its own server. Call streamableHttpHandler(() => new McpServer(...), ${transportClassName}) instead of passing a server object`,
+    );
+  }
+}
+
+/**
  * The RFC 9728 section 3 metadata URL for a resource: the well-known path goes between the host and the resource's
  * path and query.
  */

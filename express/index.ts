@@ -11,6 +11,7 @@ import {
   McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
+  assertServerFactory,
   assertTransportClass,
   audienceFor,
   authenticateBearer,
@@ -236,10 +237,9 @@ function getRequestUrl(req: express.Request): string | undefined {
  * transport, given a factory that creates an MCP server object from the MCP
  * SDK. A fresh server and transport are created for each request so that
  * concurrent requests don't share state.
- * @param createServer - A factory that returns a new MCP server object. A
- * plain server object is also accepted for backwards compatibility, but a
- * shared server can only handle one request at a time, so passing a factory
- * is strongly recommended.
+ * @param createServer - A factory that returns a new MCP server, such as
+ * `McpServer` from the MCP SDK, on every call. Passing a server object
+ * instead throws when the handler is created.
  * @param Transport - The SDK's Node.js transport class,
  * `StreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/streamableHttp.js`. It is taken as an
@@ -273,11 +273,12 @@ function getRequestUrl(req: express.Request): string | undefined {
 export function streamableHttpHandler<
   Transport extends NodeStreamableHttpTransport,
   Server extends McpServerLike<Transport>,
->(createServer: Server | (() => Server), Transport: StreamableHttpTransportClass<Transport>) {
+>(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
+  assertServerFactory(createServer, 'StreamableHTTPServerTransport');
   assertTransportClass(Transport, 'StreamableHTTPServerTransport', 'streamableHttp.js');
 
   return async (req: express.Request, res: express.Response) => {
-    const server = typeof createServer === 'function' ? createServer() : createServer;
+    const server = createServer();
     const transport = new Transport({ sessionIdGenerator: undefined });
 
     // close() rejects if a consumer onclose hook throws; an unhandled rejection would kill the process
