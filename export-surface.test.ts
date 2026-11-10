@@ -52,6 +52,8 @@ const PINNED: Record<string, Surface> = {
   },
   './server': {
     values: [
+      'McpAuthError',
+      'McpTokenVerificationError',
       'fetchAuthorizationServerMetadata',
       'generateProtectedResourceMetadata',
       'isClerkAuthInfo',
@@ -60,27 +62,32 @@ const PINNED: Record<string, Surface> = {
       'requireAdditionalScopes',
       'toClerkAuthInfo',
     ],
-    types: ['ClerkAuthInfo', 'ClerkOAuthAuthObject'],
+    types: ['ClerkAuthInfo', 'ClerkOAuthClient', 'McpAuthFailure', 'McpResourceUrl'],
   },
   './next': {
     values: [
       'McpAuthError',
       'McpTokenVerificationError',
-      'authServerMetadataHandler',
+      'authorizationServerMetadataHandler',
+      'fetchAuthorizationServerMetadata',
+      'generateProtectedResourceMetadata',
+      'isClerkAuthInfo',
+      'matchResourceUrl',
       'mcpAuth',
-      'metadataCorsOptionsRequestHandler',
-      'protectedResourceHandler',
+      'metadataCorsHandler',
+      'metadataCorsHeaders',
+      'protectedResourceMetadataHandler',
       'requireAdditionalScopes',
       'toClerkAuthInfo',
       'withMcpAuth',
     ],
     types: [
+      'ClerkAuthInfo',
       'ClerkOAuthClient',
       'McpAuthClerkOptions',
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
-      'McpRouteHandler',
       'WithMcpAuthOptions',
     ],
   },
@@ -92,42 +99,52 @@ const PINNED: Record<string, Surface> = {
     values: [
       'McpAuthError',
       'McpTokenVerificationError',
-      'authServerMetadataHandler',
+      'authorizationServerMetadataHandler',
+      'fetchAuthorizationServerMetadata',
+      'generateProtectedResourceMetadata',
+      'isClerkAuthInfo',
+      'matchResourceUrl',
       'mcpAuth',
       'mcpAuthClerk',
-      'protectedResourceHandler',
+      'metadataCorsHeaders',
+      'protectedResourceMetadataHandler',
+      'requireAdditionalScopes',
       'streamableHttpHandler',
+      'toClerkAuthInfo',
     ],
     types: [
+      'ClerkAuthInfo',
       'ClerkOAuthClient',
       'McpAuthClerkOptions',
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
-      'McpServerLike',
-      'NodeStreamableHttpTransport',
-      'StreamableHttpTransportClass',
     ],
   },
   './hono': {
     values: [
       'McpAuthError',
       'McpTokenVerificationError',
-      'authServerMetadataHandler',
+      'authorizationServerMetadataHandler',
+      'fetchAuthorizationServerMetadata',
+      'generateProtectedResourceMetadata',
+      'isClerkAuthInfo',
+      'matchResourceUrl',
       'mcpAuth',
       'mcpAuthClerk',
-      'protectedResourceHandler',
+      'metadataCorsHeaders',
+      'protectedResourceMetadataHandler',
+      'requireAdditionalScopes',
       'streamableHttpHandler',
+      'toClerkAuthInfo',
     ],
     types: [
+      'ClerkAuthInfo',
       'ClerkOAuthClient',
       'McpAuthClerkOptions',
       'McpAuthFailure',
       'McpAuthOptions',
       'McpResourceUrl',
-      'McpServerLike',
-      'StreamableHttpTransportClass',
-      'WebStandardStreamableHttpTransport',
     ],
   },
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
@@ -213,6 +230,31 @@ describe('export surface', () => {
     expect(subpath in PINNED, `${subpath} has no pinned export list`).toBe(true);
     expect(surfaceOf(source), `${subpath} export surface`).toEqual(PINNED[subpath]);
   });
+
+  // An adapter user imports from exactly one subpath, so every adapter carries all of the core subpath. Read from the
+  // entry modules, not the pins, so the rule holds whatever the pins say.
+  test.each(['./next', './express', './hono'])(
+    '%s exports every name ./server exports',
+    (adapter) => {
+      const surfaceAt = (subpath: string) => {
+        const target = exportsMap[subpath];
+        if (!target) throw new Error(`${subpath} is not in the exports map`);
+        const surface = surfaceOf(entrySource(target));
+        if (!surface) throw new Error(`${subpath} has no entry module`);
+        return surface;
+      };
+      const core = surfaceAt('./server');
+      const surface = surfaceAt(adapter);
+      expect(
+        core.values.filter((name) => !surface.values.includes(name)),
+        'missing values',
+      ).toEqual([]);
+      expect(
+        core.types.filter((name) => !surface.types.includes(name)),
+        'missing types',
+      ).toEqual([]);
+    },
+  );
 
   test('every pinned subpath is in the exports map', () => {
     expect(Object.keys(PINNED).filter((subpath) => !(subpath in exportsMap))).toEqual([]);

@@ -32,8 +32,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createClerkClient } from '@clerk/express';
 import {
   mcpAuthClerk,
-  protectedResourceHandler,
-  authServerMetadataHandler,
+  protectedResourceMetadataHandler,
+  authorizationServerMetadataHandler,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/express';
 
@@ -76,12 +76,12 @@ function createServer() {
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandler({
+  protectedResourceMetadataHandler({
     resource: MCP_RESOURCE_URL,
     scopes_supported: REQUIRED_SCOPES,
   }),
 );
-app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
+app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 app.post(
   '/mcp',
   mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
@@ -101,8 +101,11 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
-import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
+import {
+  generateProtectedResourceMetadata,
+  mcpAuth,
+  streamableHttpHandler,
+} from '@clerk/mcp-tools/express';
 
 const app = express();
 app.use(express.json());
@@ -178,7 +181,7 @@ Generic authentication middleware that allows you to implement custom token veri
 **Parameters:**
 
 - `verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>` - Function that verifies the token and returns the auth data, or `undefined` to reject it
-- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Build the metadata route with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server`, passing the same URL as its `resourceUrl`.
+- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Build the metadata route with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express`, passing the same URL as its `resourceUrl`.
 - `options.requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `options.challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 
@@ -186,7 +189,11 @@ Generic authentication middleware that allows you to implement custom token veri
 
 ```ts
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+import {
+  generateProtectedResourceMetadata,
+  mcpAuth,
+  streamableHttpHandler,
+} from '@clerk/mcp-tools/express';
 
 async function verifyToken(token: string, req: express.Request) {
   // Your custom token verification logic
@@ -231,7 +238,7 @@ Authentication middleware that verifies OAuth access tokens with Clerk, includin
 
 **Parameters:**
 
-- `options.resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, as for `mcpAuth`. Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/server`. Set the metadata route's `resource` to the same URL, as in `protectedResourceHandler({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
+- `options.resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, as for `mcpAuth`. Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/express`. Set the metadata route's `resource` to the same URL, as in `protectedResourceMetadataHandler({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
 - `options.requiredScopes` (optional) - Scopes every request needs
 - `options.challengeScopes` (optional) - As for `mcpAuth`
 - `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
@@ -260,34 +267,34 @@ Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 
 
 ## Protected Resource Metadata
 
-### `protectedResourceHandler`
+### `protectedResourceMetadataHandler`
 
-Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/server` in your own route.
+Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express` in your own route.
 
 **Example:**
 
 ```ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/express';
+import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/express';
 
 app.get(
   '/.well-known/oauth-protected-resource/mcp',
-  protectedResourceHandler({ scopes_supported: ['email'] }),
+  protectedResourceMetadataHandler({ scopes_supported: ['email'] }),
 );
 ```
 
 ## Authorization Server Metadata
 
-### `authServerMetadataHandler`
+### `authorizationServerMetadataHandler`
 
 Express handler that returns OAuth authorization server metadata for Clerk integration, as defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). This endpoint provides clients with information about Clerk's OAuth authorization server capabilities and endpoints.
 
 **Example:**
 
 ```ts
-import { authServerMetadataHandler } from '@clerk/mcp-tools/express';
+import { authorizationServerMetadataHandler } from '@clerk/mcp-tools/express';
 
 // Serve authorization server metadata at the standard well-known location
-app.get('/.well-known/oauth-authorization-server', authServerMetadataHandler());
+app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 ```
 
 **Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata.

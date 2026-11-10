@@ -1,14 +1,13 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
-  McpAuthError,
-  McpTokenVerificationError,
   assertMcpAuthOptions,
   authenticateBearer,
   resourceFromMetadataUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from './bearer-auth';
+import { McpAuthError, McpTokenVerificationError } from './server';
 
 const authInfo = { token: 't', clientId: 'client-1', scopes: ['profile'] };
 

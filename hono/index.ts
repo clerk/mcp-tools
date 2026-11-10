@@ -3,13 +3,8 @@ import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../m
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
-  type ClerkOAuthClient,
   type McpAuthClerkOptions,
-  type McpAuthFailure,
   type McpAuthOptions,
-  type McpResourceUrl,
-  McpAuthError,
-  McpTokenVerificationError,
   assertMcpAuthClerkOptions,
   assertMcpAuthOptions,
   assertTransportClass,
@@ -18,7 +13,12 @@ import {
   resourceFromMetadataUrl,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
-import { fetchAuthorizationServerMetadata, generateProtectedResourceMetadata } from '../server';
+import {
+  type ClerkOAuthClient,
+  type McpAuthFailure,
+  fetchAuthorizationServerMetadata,
+  generateProtectedResourceMetadata,
+} from '../server';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -28,23 +28,16 @@ declare module 'hono' {
   }
 }
 
-export {
-  type ClerkOAuthClient,
-  McpAuthError,
-  type McpAuthClerkOptions,
-  type McpAuthFailure,
-  type McpAuthOptions,
-  type McpResourceUrl,
-  type McpServerLike,
-  McpTokenVerificationError,
-  type StreamableHttpTransportClass,
-};
+// Everything in the core subpath, so a Hono app imports from this subpath alone
+export * from '../server';
+
+export type { McpAuthClerkOptions, McpAuthOptions };
 
 /**
  * The part of a web-standard streamable HTTP server transport, such as `WebStandardStreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`, that `streamableHttpHandler` uses.
  */
-export interface WebStandardStreamableHttpTransport {
+interface WebStandardStreamableHttpTransport {
   /**
    * Handles one MCP request.
    * @param request - The incoming request
@@ -63,7 +56,7 @@ type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
 };
 
-export function protectedResourceHandler(properties?: Record<string, unknown>) {
+export function protectedResourceMetadataHandler(properties?: Record<string, unknown>) {
   return (c: Context) => {
     const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {
@@ -78,7 +71,7 @@ export function protectedResourceHandler(properties?: Record<string, unknown>) {
   };
 }
 
-export function authServerMetadataHandler() {
+export function authorizationServerMetadataHandler() {
   return async (c: Context) => {
     const publishableKey = env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY;
     if (!publishableKey) {

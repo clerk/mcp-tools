@@ -28,10 +28,10 @@ Here's the basic structure you'll need:
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/next';
+import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
 
 // The same values as the MCP endpoint's `resourceUrl` and `requiredScopes` below
-const handler = protectedResourceHandler({
+const handler = protectedResourceMetadataHandler({
   resource: 'https://mcp.example.com/mcp',
   scopes_supported: ['profile', 'email'],
 });
@@ -81,7 +81,7 @@ Wraps a Next.js MCP route handler so that every request needs an OAuth access to
 
 **Options:**
 
-- `resourceUrl: string | string[]` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. Set the protected resource metadata route's `resource` to the same URL, picked with `matchResourceUrl` from `@clerk/mcp-tools/server` for a list.
+- `resourceUrl: string | string[]` - The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. Set the protected resource metadata route's `resource` to the same URL, picked with `matchResourceUrl` from `@clerk/mcp-tools/next` for a list.
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `clerkClient` - The client that verifies tokens: `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. It is an option rather than an import of this package so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`: Next.js fails the build on any reference to a package that isn't installed.
@@ -110,7 +110,7 @@ The MCP client functionality uses the core `@clerk/mcp-tools/client` utilities. 
 
 Key Next.js-specific patterns include:
 
-### `protectedResourceHandler`
+### `protectedResourceMetadataHandler`
 
 Next.js route handler that returns OAuth protected resource metadata for Clerk integration, as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, see [With Custom Authentication](#with-custom-authentication).
 
@@ -118,18 +118,18 @@ Next.js route handler that returns OAuth protected resource metadata for Clerk i
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceHandler } from '@clerk/mcp-tools/next';
+import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandler({ resource: 'https://mcp.example.com/mcp' });
+const handler = protectedResourceMetadataHandler({ resource: 'https://mcp.example.com/mcp' });
 
 export { handler as GET };
 ```
 
 This handler automatically uses your `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` environment variable.
 
-The metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to. If clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceHandler({ resource: 'https://app.example.com/mcp' })`.
+The metadata's `resource` comes from the route path and query, so `/.well-known/oauth-protected-resource/mcp` describes `<origin>/mcp`, `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/`, and the root describes the bare origin, as RFC 9728 section 3 builds the metadata URL. MCP clients reject metadata whose `resource` differs from the URL they connect to. If clients reach the endpoint through another public URL, pass that exact URL: `protectedResourceMetadataHandler({ resource: 'https://app.example.com/mcp' })`.
 
-### `authServerMetadataHandler`
+### `authorizationServerMetadataHandler`
 
 Next.js route handler for OAuth 2.0 Authorization Server Metadata endpoint based on [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
 
@@ -137,14 +137,14 @@ Next.js route handler for OAuth 2.0 Authorization Server Metadata endpoint based
 
 ```ts
 // app/.well-known/oauth-authorization-server/route.ts
-import { authServerMetadataHandler } from '@clerk/mcp-tools/next';
+import { authorizationServerMetadataHandler } from '@clerk/mcp-tools/next';
 
-const handler = authServerMetadataHandler();
+const handler = authorizationServerMetadataHandler();
 
 export { handler as GET };
 ```
 
-### `metadataCorsOptionsRequestHandler`
+### `metadataCorsHandler`
 
 CORS options request handler for OAuth metadata endpoints. Necessary for MCP clients that operate in web browsers.
 
@@ -152,10 +152,10 @@ CORS options request handler for OAuth metadata endpoints. Necessary for MCP cli
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceHandler, metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
+import { protectedResourceMetadataHandler, metadataCorsHandler } from '@clerk/mcp-tools/next';
 
-const handler = protectedResourceHandler({ resource: 'https://mcp.example.com/mcp' });
-const corsHandler = metadataCorsOptionsRequestHandler();
+const handler = protectedResourceMetadataHandler({ resource: 'https://mcp.example.com/mcp' });
+const corsHandler = metadataCorsHandler();
 
 export { handler as GET, corsHandler as OPTIONS };
 ```
@@ -248,8 +248,11 @@ For custom authentication systems, verify tokens with `mcpAuth` and serve the me
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
-import { generateProtectedResourceMetadata, metadataCorsHeaders } from '@clerk/mcp-tools/server';
+import {
+  generateProtectedResourceMetadata,
+  metadataCorsHandler,
+  metadataCorsHeaders,
+} from '@clerk/mcp-tools/next';
 
 export function GET() {
   return Response.json(
@@ -261,7 +264,7 @@ export function GET() {
   );
 }
 
-export const OPTIONS = metadataCorsOptionsRequestHandler();
+export const OPTIONS = metadataCorsHandler();
 ```
 
 ## Session Management and Stores
