@@ -13,16 +13,19 @@ import {
 } from './server';
 
 /**
- * Options for the `mcpAuth` middleware.
+ * The options every auth entry point takes, with `resourceUrl` optional as it is for a custom verifier.
  */
-export type McpAuthOptions = {
+export type VerifierAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
    * origin gets a 421. The request's origin is the one the app sees, so behind a proxy that terminates TLS or rewrites
-   * `Host`, list those URLs or, in Express, set `trust proxy`. The challenge's `resource_metadata` is derived from it. When omitted, it is derived from the
-   * incoming request, which can differ from the public URL behind a proxy. Set the protected resource metadata route's
-   * `resource` to the same URL, as `matchResourceUrl` picks it, since that route also derives it from the request.
+   * `Host`, list those URLs or, in Express, set `trust proxy`. The challenge's `resource_metadata` is derived from it.
+   * With `verifyToken` it can be omitted, and it is then derived from the incoming request, which can differ from the
+   * public URL behind a proxy. Without `verifyToken` it is required: Clerk rejects a token whose `aud` claim does not
+   * include the URL for the request's origin, so a token issued for one listed URL does not pass on another. Set the
+   * protected resource metadata route's `resource` to the same URL, as `matchResourceUrl` picks it, since that route
+   * also derives it from the request.
    */
   resourceUrl?: McpResourceUrl | undefined;
   /**
@@ -39,9 +42,9 @@ export type McpAuthOptions = {
 };
 
 /**
- * Options for the `mcpAuthClerk` middleware.
+ * The options for verifying tokens with Clerk, which needs `resourceUrl` as the audience.
  */
-export type McpAuthClerkOptions = McpAuthOptions & {
+export type ClerkAuthOptions = VerifierAuthOptions & {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. Clerk rejects a token whose `aud` claim does not include the URL for the
@@ -51,6 +54,33 @@ export type McpAuthClerkOptions = McpAuthOptions & {
    */
   resourceUrl: McpResourceUrl;
 };
+
+/**
+ * The options of the Express and Hono `mcpAuth` middleware, for the framework's request type `Req`. Without
+ * `verifyToken`, Clerk verifies each token, and `resourceUrl` is required as its audience. With `verifyToken`, that
+ * function verifies each token instead, `resourceUrl` is optional, and `clerkClient` is not allowed.
+ */
+export type MiddlewareAuthOptions<Req> =
+  | (ClerkAuthOptions & {
+      /**
+       * The Clerk client that verifies tokens. Create it with both `secretKey` and `publishableKey`: without a
+       * publishable key, every request fails. A client from `@clerk/backend` must be version 3.19.0 or later, the
+       * first with a reliable audience check.
+       */
+      clerkClient?: ClerkOAuthClient | undefined;
+      verifyToken?: never;
+    })
+  | (VerifierAuthOptions & {
+      /**
+       * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
+       * `McpTokenVerificationError` to reject it with a reason.
+       * @param token - The bearer token from the request
+       * @param request - The framework's request or context
+       * @returns The token's auth info, or `undefined` to reject it
+       */
+      verifyToken: (token: string, request: Req) => Promise<AuthInfo | undefined>;
+      clerkClient?: never;
+    });
 
 type BearerResult =
   | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
@@ -63,7 +93,7 @@ type BearerResult =
     };
 
 /** Throws a `Clerk error:` message when the options cannot produce a valid challenge. */
-export function assertMcpAuthOptions(caller: string, options: McpAuthOptions | undefined) {
+export function assertMcpAuthOptions(caller: string, options: VerifierAuthOptions | undefined) {
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
   if (options?.resourceUrl !== undefined) assertResourceUrls(caller, options.resourceUrl);
@@ -117,17 +147,28 @@ function isResourceUrl(value: string): boolean {
 }
 
 /**
- * Throws a `Clerk error:` message unless `options` has a `resourceUrl`. Code written for the earlier `mcpAuthClerk`,
- * which was the middleware itself, passes it straight to a route, so the framework calls it with the request where
- * the options belong. Without this check that call would quietly return a middleware and the request would hang.
+ * Throws a `Clerk error:` message unless `options` is an options object that can verify tokens, then checks it as
+ * `assertMcpAuthOptions` does. `mcpAuth` took a verifier function first before it took options alone, so code written
+ * for that form fails at startup with a message naming the new form. Code that passes
+ * `mcpAuth` straight to a route has the framework call it with the request where the options belong, which has no
+ * `resourceUrl`, so that fails on the first request instead of hanging.
  */
-export function assertMcpAuthClerkOptions(options: McpAuthClerkOptions) {
-  if (typeof options?.resourceUrl !== 'string' && !Array.isArray(options?.resourceUrl)) {
+export function assertMiddlewareAuthOptions(options: unknown) {
+  if (typeof options === 'function') {
     throw new Error(
-      "Clerk error: mcpAuthClerk needs a resourceUrl. Call it as mcpAuthClerk({ resourceUrl: 'https://mcp.example.com/mcp' }) instead of passing mcpAuthClerk to the route directly",
+      `Clerk error: mcpAuth takes an options object, not a verifier function. Call it as mcpAuth({ verifyToken }) to verify tokens with your own function, or as mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }) to verify them with Clerk`,
     );
   }
-  assertMcpAuthOptions('mcpAuthClerk', options);
+  const { verifyToken, resourceUrl } = (options ?? {}) as {
+    verifyToken?: unknown;
+    resourceUrl?: unknown;
+  };
+  if (verifyToken === undefined && typeof resourceUrl !== 'string' && !Array.isArray(resourceUrl)) {
+    throw new Error(
+      `Clerk error: mcpAuth needs a resourceUrl to verify tokens with Clerk. Call it as mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }), or as mcpAuth({ verifyToken }) with your own verifier, instead of passing mcpAuth to the route directly`,
+    );
+  }
+  assertMcpAuthOptions('mcpAuth', options as VerifierAuthOptions);
 }
 
 /**

@@ -31,7 +31,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createClerkClient } from '@clerk/express';
 import {
-  mcpAuthClerk,
+  mcpAuth,
   protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
   streamableHttpHandler,
@@ -84,7 +84,7 @@ app.get(
 app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 app.post(
   '/mcp',
-  mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
+  mcpAuth({ resourceUrl: MCP_RESOURCE_URL, requiredScopes: REQUIRED_SCOPES }),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 
@@ -165,7 +165,7 @@ app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
 
 app.post(
   '/mcp',
-  mcpAuth(verifyToken, { resourceUrl }),
+  mcpAuth({ verifyToken, resourceUrl }),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 
@@ -174,26 +174,39 @@ app.listen(3000);
 
 ## Authentication Middleware
 
-### `mcpAuth`
+### `mcpAuth(options)`
 
-Generic authentication middleware that allows you to implement custom token verification logic.
+Authentication middleware for MCP requests. By default it verifies OAuth access tokens with Clerk, including that their audience is this endpoint. Pass `verifyToken` to verify tokens with your own function instead.
 
-**Parameters:**
+**Options:**
 
-- `verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>` - Function that verifies the token and returns the auth data, or `undefined` to reject it
-- `options.resourceUrl` (optional) - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. Without it, the URL comes from the request, which can differ from the public URL behind a proxy. Build the metadata route with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express`, passing the same URL as its `resourceUrl`.
-- `options.requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
-- `options.challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
+- `resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. Required unless you pass `verifyToken`. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge. Under Clerk verification that URL is the audience: Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. The request's origin comes from `req.protocol` and `req.host`, so behind a proxy set `trust proxy` to read them from `X-Forwarded-Proto` and `X-Forwarded-Host`. The challenge's `resource_metadata` is derived from it. With `verifyToken` and without `resourceUrl`, the URL comes from the request, which can differ from the public URL behind a proxy. Set the metadata route's `resource` to the same URL, as in `protectedResourceMetadataHandler({ resource: resourceUrl })`, or build it with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express`. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/express`.
+- `requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
+- `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
+- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
+- `verifyToken` (optional) - `(token: string, req: express.Request) => Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
 
 **Example:**
 
 ```ts
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import {
-  generateProtectedResourceMetadata,
-  mcpAuth,
-  streamableHttpHandler,
-} from '@clerk/mcp-tools/express';
+import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+
+app.post(
+  '/mcp',
+  mcpAuth({
+    resourceUrl: 'https://mcp.example.com/mcp',
+    requiredScopes: ['profile', 'email'],
+  }),
+  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+);
+```
+
+**Example with your own verifier:**
+
+```ts
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
 async function verifyToken(token: string, req: express.Request) {
   // Your custom token verification logic
@@ -201,27 +214,33 @@ async function verifyToken(token: string, req: express.Request) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     return decoded; // Return auth data
   } catch (error) {
-    return false; // Return false for invalid tokens
+    return undefined; // Return undefined for invalid tokens
   }
 }
 
 app.post(
   '/mcp',
-  mcpAuth(verifyToken),
+  mcpAuth({ verifyToken }),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 ```
+
+Earlier versions took the verifier as the first argument, `mcpAuth(verifyToken, options)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
 The middleware will:
 
 - Check for the `Authorization` header
 - Extract the Bearer token
-- Call your `verifyToken` function
+- Verify it with Clerk, or call your `verifyToken` function
 - Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 
-A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. Under `mcpAuthClerk`, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
+The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
+
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware passes an error to Express, which answers with a `500`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+
+A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
 ```ts
 import { McpAuthError } from '@clerk/mcp-tools/express';
@@ -231,37 +250,6 @@ app.use((err, req, res, next) => {
   next(err);
 });
 ```
-
-### `mcpAuthClerk`
-
-Authentication middleware that verifies OAuth access tokens with Clerk, including that their audience is this endpoint.
-
-**Parameters:**
-
-- `options.resourceUrl` - The exact URL clients use for this endpoint, or a list of them, one for each origin, as for `mcpAuth`. Clerk rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/express`. Set the metadata route's `resource` to the same URL, as in `protectedResourceMetadataHandler({ resource: resourceUrl })`: that route also derives it from the request when it is not set.
-- `options.requiredScopes` (optional) - Scopes every request needs
-- `options.challengeScopes` (optional) - As for `mcpAuth`
-- `options.clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY`. If you pass the secret key or a client to `clerkMiddleware()` instead, pass the same client here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
-
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware passes an error to Express, which answers with a `500`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
-
-**Example:**
-
-```ts
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuthClerk, streamableHttpHandler } from '@clerk/mcp-tools/express';
-
-app.post(
-  '/mcp',
-  mcpAuthClerk({
-    resourceUrl: 'https://mcp.example.com/mcp',
-    requiredScopes: ['profile', 'email'],
-  }),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
-);
-```
-
-The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/express` 2.1.70 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
@@ -344,7 +332,7 @@ server.tool(
   'A tool that needs user authentication',
   { type: 'object', properties: {} },
   async (args, { authInfo }) => {
-    // For Clerk authentication, mcpAuthClerk puts the user ID in `extra`
+    // Under Clerk verification, mcpAuth puts the user ID in `extra`
     const userId = authInfo?.extra?.userId as string | undefined;
 
     if (!userId) {
@@ -425,7 +413,7 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 app.post(
   '/mcp',
-  mcpAuthClerk({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
+  mcpAuth({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
   streamableHttpHandler(createServer, StreamableHTTPServerTransport), // MCP request handling
 );
 ```

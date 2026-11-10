@@ -1,11 +1,9 @@
 import { clerkClient } from '@clerk/express';
-import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
+import type { McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
-  type McpAuthClerkOptions,
-  type McpAuthOptions,
-  assertMcpAuthClerkOptions,
-  assertMcpAuthOptions,
+  type MiddlewareAuthOptions,
+  assertMiddlewareAuthOptions,
   assertServerFactory,
   assertTransportClass,
   audienceFor,
@@ -14,7 +12,6 @@ import {
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
-  type ClerkOAuthClient,
   type McpAuthFailure,
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
@@ -32,7 +29,12 @@ declare global {
 // Everything in the core subpath, so an Express app imports from this subpath alone
 export * from '../server';
 
-export type { McpAuthClerkOptions, McpAuthOptions };
+/**
+ * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
+ * its audience, and `clerkClient` defaults to `clerkClient` from `@clerk/express`. With `verifyToken`, that function
+ * verifies each token with the Express request, `resourceUrl` is optional, and `clerkClient` is not allowed.
+ */
+export type McpAuthOptions = MiddlewareAuthOptions<express.Request>;
 
 /**
  * The part of a Node.js streamable HTTP server transport, such as `StreamableHTTPServerTransport` from
@@ -55,26 +57,31 @@ interface NodeStreamableHttpTransport {
 }
 
 /**
- * Express middleware that enforces authentication for MCP requests.
- * @param verifyToken - A function that verifies a token and returns the auth
- * data, or `undefined` to reject it
- * @param options - The public `resourceUrl` of this endpoint and the
- * `requiredScopes` every request needs
- * @returns The middleware. A missing or rejected token gets a 401 challenge,
- * and a token without `requiredScopes` gets a 403 challenge.
+ * Express middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
+ * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
+ * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
+ * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
+ * `verifyToken` function. Pass the client you gave `clerkMiddleware()` when the secret key does not come from
+ * `CLERK_SECRET_KEY`; it defaults to `clerkClient` from `@clerk/express`. Create the client with both `secretKey` and
+ * `publishableKey`: without a publishable key, every request fails. A client from `@clerk/backend` must be version
+ * 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called with the token and the request,
+ * and returns the auth data, or `undefined` to reject it.
+ * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
+ * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded on
+ * `res.locals.mcpAuthFailure`.
  * @example
  * ```ts
- * function createServer() {
- *   const server = new McpServer({
- *     name: "test-server",
- *     version: "0.0.1",
- *   });
- *
- *   // define server tools, resources, etc...
- *
- *   return server;
- * }
- *
+ * app.post(
+ *   "/mcp",
+ *   mcpAuth({
+ *     resourceUrl: "https://mcp.example.com/mcp",
+ *     requiredScopes: ["profile", "email"],
+ *   }),
+ *   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+ * );
+ * ```
+ * @example
+ * ```ts
  * async function verifyToken(token, req) {
  *   const authData = // verify the token and return the auth data
  *   return authData;
@@ -82,16 +89,23 @@ interface NodeStreamableHttpTransport {
  *
  * app.post(
  *   "/mcp",
- *   mcpAuth(verifyToken),
+ *   mcpAuth({ verifyToken, resourceUrl: "https://mcp.example.com/mcp" }),
  *   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
  * );
  * ```
  */
-export function mcpAuth(
-  verifyToken: (token: string, req: express.Request) => Promise<AuthInfo | undefined>,
-  options?: McpAuthOptions,
-) {
-  assertMcpAuthOptions('mcpAuth', options);
+export function mcpAuth(options: McpAuthOptions) {
+  assertMiddlewareAuthOptions(options);
+  const verifyToken =
+    options.verifyToken ??
+    ((token: string, req: express.Request) =>
+      verifyClerkOAuthToken(
+        options.clerkClient ?? clerkClient,
+        token,
+        // The middleware answers a request without a usable URL before it calls this, and `resourceUrl` is set
+        // whenever `verifyToken` is not
+        audienceFor(options.resourceUrl!, getRequestUrl(req)!),
+      ));
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
@@ -105,9 +119,9 @@ export function mcpAuth(
     const result = await authenticateBearer({
       authorization: req.headers.authorization,
       requestUrl,
-      resourceUrl: options?.resourceUrl,
-      requiredScopes: options?.requiredScopes,
-      challengeScopes: options?.challengeScopes,
+      resourceUrl: options.resourceUrl,
+      requiredScopes: options.requiredScopes,
+      challengeScopes: options.challengeScopes,
       verifyToken: (token) => verifyToken(token, req),
     });
 
@@ -124,46 +138,6 @@ export function mcpAuth(
 
     next();
   };
-}
-
-/**
- * Express middleware that enforces authentication for MCP requests and verifies the OAuth access token with Clerk,
- * including that its audience is this endpoint.
- * @param options - `resourceUrl`, the exact URL clients use for this endpoint,
- * the `requiredScopes` every request needs, and the `clerkClient` that
- * verifies tokens. Pass the client you gave `clerkMiddleware()` when the
- * secret key does not come from `CLERK_SECRET_KEY`; it defaults to
- * `clerkClient` from `@clerk/express`. Create the client with both
- * `secretKey` and `publishableKey`: without a publishable key, every request
- * fails. A client from `@clerk/backend` must be version 3.19.0 or later, the
- * first with a reliable audience check.
- * @returns The middleware. A missing or rejected token gets a 401 challenge,
- * and a token without `requiredScopes` gets a 403 challenge.
- * @example
- * ```ts
- * app.post(
- *   "/mcp",
- *   mcpAuthClerk({
- *     resourceUrl: "https://mcp.example.com/mcp",
- *     requiredScopes: ["profile", "email"],
- *   }),
- *   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
- * );
- * ```
- */
-export function mcpAuthClerk(
-  options: McpAuthClerkOptions & {
-    clerkClient?: ClerkOAuthClient | undefined;
-  },
-) {
-  assertMcpAuthClerkOptions(options);
-  const client = options.clerkClient ?? clerkClient;
-  return mcpAuth(
-    (token, req) =>
-      // `mcpAuth` answers a request without a usable URL before it calls this
-      verifyClerkOAuthToken(client, token, audienceFor(options.resourceUrl, getRequestUrl(req)!)),
-    options,
-  );
 }
 
 export function authorizationServerMetadataHandler() {

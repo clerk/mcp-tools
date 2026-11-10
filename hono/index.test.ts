@@ -1,4 +1,4 @@
-import { Hono, type MiddlewareHandler } from 'hono';
+import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../server', async (importOriginal) => {
@@ -30,7 +30,6 @@ import {
   protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
   mcpAuth,
-  mcpAuthClerk,
   streamableHttpHandler,
 } from './index';
 
@@ -172,13 +171,54 @@ describe('authorizationServerMetadataHandler', () => {
 });
 
 describe('mcpAuth', () => {
+  const reject = async () => undefined;
+
+  test.each([
+    ['mcpAuth(verifyToken)', () => (mcpAuth as (...args: unknown[]) => unknown)(reject)],
+    [
+      'mcpAuth(verifyToken, options)',
+      () =>
+        (mcpAuth as (...args: unknown[]) => unknown)(reject, {
+          resourceUrl: 'https://mcp.example.com/mcp',
+        }),
+    ],
+  ])('throws a Clerk error naming the options form for %s', (_form, call) => {
+    expect(call).toThrow('Clerk error: mcpAuth takes an options object');
+    expect(call).toThrow('mcpAuth({ verifyToken })');
+  });
+
+  test.each([['https://mcp.example.com/mcp'], [undefined]])(
+    'calls verifyToken with the token and the context instead of Clerk (resourceUrl: %j)',
+    async (resourceUrl) => {
+      const verifyToken = vi.fn(async (token: string, c: Context) => ({
+        token,
+        scopes: [],
+        clientId: c.req.path,
+      }));
+      const app = new Hono();
+      app.post('/mcp', mcpAuth({ verifyToken, resourceUrl }), (c) => c.json(c.get('mcpAuth')));
+
+      const res = await app.request('https://mcp.example.com/mcp', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer my-token' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(verifyToken).toHaveBeenCalledOnce();
+      expect(verifyToken.mock.calls[0]?.[0]).toBe('my-token');
+      expect(verifyToken.mock.calls[0]?.[1].req.path).toBe('/mcp');
+      expect(await res.json()).toEqual({
+        token: 'my-token',
+        scopes: [],
+        clientId: '/mcp',
+        resourceMetadataUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp',
+      });
+    },
+  );
+
   test('returns 401 with WWW-Authenticate when Authorization header is missing', async () => {
     const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => undefined),
-      (c) => c.json({ ok: true }),
-    );
+    app.get('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
 
     const res = await app.request('http://localhost/mcp');
     expect(res.status).toBe(401);
@@ -188,11 +228,7 @@ describe('mcpAuth', () => {
 
   test('returns 401 when verifyToken returns undefined', async () => {
     const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => undefined),
-      (c) => c.json({ ok: true }),
-    );
+    app.get('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
 
     const res = await app.request('http://localhost/mcp', {
       headers: { Authorization: 'Bearer bad-token' },
@@ -205,7 +241,8 @@ describe('mcpAuth', () => {
     const app = new Hono();
     app.get(
       '/mcp',
-      mcpAuth(async () => ({ token: 't', scopes: ['openid'], clientId: 'c' }), {
+      mcpAuth({
+        verifyToken: async () => ({ token: 't', scopes: ['openid'], clientId: 'c' }),
         requiredScopes: ['profile', 'email'],
       }),
       (c) => c.json({ ok: true }),
@@ -226,7 +263,8 @@ describe('mcpAuth', () => {
     const app = new Hono();
     app.get(
       '/mcp',
-      mcpAuth(async () => ({ token: 't', scopes: ['profile', 'email'], clientId: 'c' }), {
+      mcpAuth({
+        verifyToken: async () => ({ token: 't', scopes: ['profile', 'email'], clientId: 'c' }),
         requiredScopes: ['profile', 'email'],
       }),
       (c) => c.json({ ok: true }),
@@ -243,7 +281,7 @@ describe('mcpAuth', () => {
     const app = new Hono();
     app.get(
       '/mcp',
-      mcpAuth(async () => undefined, { resourceUrl: 'https://mcp.example.com/mcp' }),
+      mcpAuth({ verifyToken: async () => undefined, resourceUrl: 'https://mcp.example.com/mcp' }),
       (c) => c.json({ ok: true }),
     );
 
@@ -260,14 +298,14 @@ describe('mcpAuth', () => {
       'mailto:foo@example.com',
       'https://user:pass@mcp.example.com/mcp',
     ]) {
-      expect(() => mcpAuth(async () => undefined, { resourceUrl })).toThrow(
+      expect(() => mcpAuth({ verifyToken: async () => undefined, resourceUrl })).toThrow(
         'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
       );
     }
-    expect(() => mcpAuth(async () => undefined, { requiredScopes: ['a b'] })).toThrow(
+    expect(() => mcpAuth({ verifyToken: async () => undefined, requiredScopes: ['a b'] })).toThrow(
       'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
     );
-    expect(() => mcpAuth(async () => undefined, { challengeScopes: ['a"b'] })).toThrow(
+    expect(() => mcpAuth({ verifyToken: async () => undefined, challengeScopes: ['a"b'] })).toThrow(
       'Clerk error: mcpAuth challengeScopes must contain only scope tokens',
     );
   });
@@ -281,7 +319,8 @@ describe('mcpAuth', () => {
       const app = new Hono();
       app.get(
         '/mcp',
-        mcpAuth(async () => undefined, {
+        mcpAuth({
+          verifyToken: async () => undefined,
           requiredScopes: ['profile'],
           challengeScopes: ['email', 'profile', 'org:read'],
         }),
@@ -303,7 +342,8 @@ describe('mcpAuth', () => {
     const app = new Hono();
     app.get(
       '/mcp',
-      mcpAuth(async () => ({ token: 't', scopes: [], clientId: 'c' }), {
+      mcpAuth({
+        verifyToken: async () => ({ token: 't', scopes: [], clientId: 'c' }),
         challengeScopes: ['email'],
       }),
       (c) => c.json({ ok: true }),
@@ -333,7 +373,7 @@ describe('mcpAuth', () => {
       });
       app.get(
         '/mcp',
-        mcpAuth(async () => authInfo, { requiredScopes: ['profile'] }),
+        mcpAuth({ verifyToken: async () => authInfo, requiredScopes: ['profile'] }),
         (c) => c.json({ ok: true }),
       );
 
@@ -349,7 +389,7 @@ describe('mcpAuth', () => {
     const app = new Hono();
     app.get(
       '/mcp',
-      mcpAuth(async () => ({ token: 't', scopes: [], clientId: 'c' })),
+      mcpAuth({ verifyToken: async () => ({ token: 't', scopes: [], clientId: 'c' }) }),
       (c) => c.json({ failure: c.get('mcpAuthFailure') ?? null }),
     );
 
@@ -370,8 +410,10 @@ describe('mcpAuth', () => {
     });
     app.get(
       '/mcp',
-      mcpAuth(async () => {
-        throw cause;
+      mcpAuth({
+        verifyToken: async () => {
+          throw cause;
+        },
       }),
       (c) => c.json({ ok: true }),
     );
@@ -396,8 +438,10 @@ describe('mcpAuth', () => {
     });
     app.get(
       '/mcp',
-      mcpAuth(async () => {
-        throw cause;
+      mcpAuth({
+        verifyToken: async () => {
+          throw cause;
+        },
       }),
       (c) => c.json({ ok: true }),
     );
@@ -420,10 +464,8 @@ describe('mcpAuth', () => {
       extra: { userId: 'user-1' },
     };
     const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => authInfo),
-      (c) => c.json(c.get('mcpAuth')),
+    app.get('/mcp', mcpAuth({ verifyToken: async () => authInfo }), (c) =>
+      c.json(c.get('mcpAuth')),
     );
 
     const res = await app.request('http://localhost/mcp', {
@@ -436,25 +478,9 @@ describe('mcpAuth', () => {
     });
   });
 
-  test('passes token and context to verifyToken', async () => {
-    const verifyToken = vi.fn().mockResolvedValue(undefined);
-    const app = new Hono();
-    app.get('/mcp', mcpAuth(verifyToken), (c) => c.json({ ok: true }));
-
-    await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer my-token' },
-    });
-
-    expect(verifyToken).toHaveBeenCalledWith('my-token', expect.any(Object));
-  });
-
   test('returns 401 when Authorization header has no token value', async () => {
     const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth(async () => undefined),
-      (c) => c.json({ ok: true }),
-    );
+    app.get('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
 
     const res = await app.request('http://localhost/mcp', {
       headers: { Authorization: 'Bearer' },
@@ -471,7 +497,7 @@ describe('mcpAuth', () => {
       clientId: 'client-1',
     });
     const app = new Hono();
-    app.get('/mcp', mcpAuth(verifyToken), (c) => c.json({ ok: true }));
+    app.get('/mcp', mcpAuth({ verifyToken }), (c) => c.json({ ok: true }));
 
     const res = await app.request('http://localhost/mcp', {
       headers: { Authorization: 'Basic valid' },
@@ -489,7 +515,7 @@ describe('mcpAuth', () => {
       clientId: 'client-1',
     });
     const app = new Hono();
-    app.get('/mcp', mcpAuth(verifyToken), (c) => c.json({ ok: true }));
+    app.get('/mcp', mcpAuth({ verifyToken }), (c) => c.json({ ok: true }));
 
     const res = await app.request('http://localhost/mcp', {
       headers: { Authorization: 'Bearer valid extra' },
@@ -501,7 +527,7 @@ describe('mcpAuth', () => {
   });
 });
 
-describe('mcpAuthClerk', () => {
+describe('mcpAuth with Clerk', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
   const clerk = { authenticateRequest: vi.fn() };
 
@@ -511,7 +537,7 @@ describe('mcpAuthClerk', () => {
       c.set('clerk' as never, clerk as never);
       await next();
     });
-    app.post('/mcp', mcpAuthClerk({ resourceUrl, requiredScopes: ['profile'] }), (c) =>
+    app.post('/mcp', mcpAuth({ resourceUrl, requiredScopes: ['profile'] }), (c) =>
       c.json(c.get('mcpAuth')),
     );
     return app;
@@ -557,7 +583,7 @@ describe('mcpAuthClerk', () => {
     });
     app.post(
       '/mcp',
-      mcpAuthClerk({
+      mcpAuth({
         resourceUrl: ['https://a.example.com/mcp', 'https://b.example.com/mcp'],
         clerkClient: clerk as never,
       }),
@@ -599,17 +625,15 @@ describe('mcpAuthClerk', () => {
   });
 
   test('throws at setup for an empty list or two URLs with one origin', () => {
-    expect(() => mcpAuthClerk({ resourceUrl: [], clerkClient: clerk as never })).toThrow(
-      'Clerk error: mcpAuthClerk resourceUrl must be a URL or a non-empty list of URLs',
+    expect(() => mcpAuth({ resourceUrl: [], clerkClient: clerk as never })).toThrow(
+      'Clerk error: mcpAuth resourceUrl must be a URL or a non-empty list of URLs',
     );
     expect(() =>
-      mcpAuthClerk({
+      mcpAuth({
         resourceUrl: ['https://a.example.com/mcp', 'https://a.example.com/other'],
         clerkClient: clerk as never,
       }),
-    ).toThrow(
-      'Clerk error: mcpAuthClerk resourceUrl lists more than one URL for https://a.example.com',
-    );
+    ).toThrow('Clerk error: mcpAuth resourceUrl lists more than one URL for https://a.example.com');
   });
 
   test('answers a rejected token with the invalid_token challenge', async () => {
@@ -635,7 +659,7 @@ describe('mcpAuthClerk', () => {
       await next();
       failures.push(c.get('mcpAuthFailure'));
     });
-    app.post('/mcp', mcpAuthClerk({ resourceUrl, clerkClient: clerk as never }), (c) =>
+    app.post('/mcp', mcpAuth({ resourceUrl, clerkClient: clerk as never }), (c) =>
       c.json({ ok: true }),
     );
 
@@ -698,12 +722,12 @@ describe('mcpAuthClerk', () => {
       error = err;
       return c.text('error', 500);
     });
-    app.post('/mcp', mcpAuthClerk as unknown as MiddlewareHandler, (c) => c.json({ ok: true }));
+    app.post('/mcp', mcpAuth as unknown as MiddlewareHandler, (c) => c.json({ ok: true }));
 
     const res = await post(app);
 
     expect(res.status).toBe(500);
-    expect(String(error)).toContain('Clerk error: mcpAuthClerk needs a resourceUrl');
+    expect(String(error)).toContain('Clerk error: mcpAuth needs a resourceUrl');
   });
 
   test('verifies with the clerkClient option without clerkMiddleware', async () => {
@@ -718,10 +742,8 @@ describe('mcpAuthClerk', () => {
       }),
     });
     const app = new Hono();
-    app.post(
-      '/mcp',
-      mcpAuthClerk({ resourceUrl, clerkClient: { authenticateRequest } as never }),
-      (c) => c.json(c.get('mcpAuth')),
+    app.post('/mcp', mcpAuth({ resourceUrl, clerkClient: { authenticateRequest } as never }), (c) =>
+      c.json(c.get('mcpAuth')),
     );
 
     const res = await post(app);
@@ -738,14 +760,14 @@ describe('mcpAuthClerk', () => {
       error = err;
       return c.text('error', 500);
     });
-    app.post('/mcp', mcpAuthClerk({ resourceUrl }), (c) => c.json({ ok: true }));
+    app.post('/mcp', mcpAuth({ resourceUrl }), (c) => c.json({ ok: true }));
 
     const res = await post(app);
 
     expect(res.status).toBe(500);
     expect(error).toBeInstanceOf(McpAuthError);
     expect(String((error as McpAuthError).cause)).toContain(
-      'Clerk error: mcpAuthClerk needs a clerkClient option',
+      'Clerk error: mcpAuth needs a clerkClient option',
     );
   });
 });

@@ -257,7 +257,7 @@ const mcpRoutes: [string, Send][] = [
     'express',
     (path, init) => {
       const app = express();
-      app.post('/mcp', expressAdapter.mcpAuth(verifyExpired), (_req, res) => {
+      app.post('/mcp', expressAdapter.mcpAuth({ verifyToken: verifyExpired }), (_req, res) => {
         res.json({ ok: true });
       });
       return sendExpress(app, path, init);
@@ -267,7 +267,9 @@ const mcpRoutes: [string, Send][] = [
     'hono',
     async (path, init) => {
       const app = new Hono();
-      app.post('/mcp', honoAdapter.mcpAuth(verifyExpired), (c) => c.json({ ok: true }));
+      app.post('/mcp', honoAdapter.mcpAuth({ verifyToken: verifyExpired }), (c) =>
+        c.json({ ok: true }),
+      );
       return answer(
         await app.request(`${origin}${path}`, {
           method: init?.method,
@@ -302,5 +304,93 @@ describe.each(mcpRoutes)('%s mcpAuth', (_name, send) => {
     expect(res.challenge).toBe(
       `Bearer resource_metadata="${res.origin}${WELL_KNOWN}/mcp", error="invalid_token"`,
     );
+  });
+});
+
+// Clerk verification, through `mcpAuth` without `verifyToken` in Express and Hono and through `withMcpAuth` in Next.js
+const rejectingClerk = {
+  authenticateRequest: vi.fn(async () => ({
+    isAuthenticated: false,
+    reason: 'token-invalid',
+    message: 'Invalid token',
+  })),
+} as never;
+
+const clerkRoutes: [string, Send][] = [
+  [
+    'express',
+    (path, init) => {
+      const app = express();
+      // The test server's port is only known once it listens, so the middleware is built per request
+      app.post(
+        '/mcp',
+        (req, res, next) =>
+          expressAdapter.mcpAuth({
+            resourceUrl: `http://${req.get('host')}/mcp`,
+            clerkClient: rejectingClerk,
+          })(req, res, next),
+        (_req, res) => {
+          res.json({ ok: true });
+        },
+      );
+      return sendExpress(app, path, init);
+    },
+  ],
+  [
+    'hono',
+    async (path, init) => {
+      const app = new Hono();
+      app.post(
+        '/mcp',
+        honoAdapter.mcpAuth({ resourceUrl: `${origin}/mcp`, clerkClient: rejectingClerk }),
+        (c) => c.json({ ok: true }),
+      );
+      return answer(
+        await app.request(`${origin}${path}`, {
+          method: init?.method,
+          headers: init?.authorization ? { authorization: init.authorization } : {},
+        }),
+        origin,
+      );
+    },
+  ],
+  [
+    'next',
+    async (path, init) => {
+      const handler = nextAdapter.withMcpAuth(() => Response.json({ ok: true }), {
+        resourceUrl: `${origin}/mcp`,
+        clerkClient: rejectingClerk,
+      });
+      return answer(
+        await handler(
+          new Request(`${origin}${path}`, {
+            method: init?.method,
+            headers: init?.authorization ? { authorization: init.authorization } : {},
+          }),
+        ),
+        origin,
+      );
+    },
+  ],
+];
+
+describe.each(clerkRoutes)('%s Clerk verification', (_name, send) => {
+  test('asks Clerk to check the audience and answers a rejected token with invalid_token', async () => {
+    const authenticateRequest = vi.mocked(
+      (rejectingClerk as { authenticateRequest: () => unknown }).authenticateRequest,
+    );
+    authenticateRequest.mockClear();
+
+    const res = await send('/mcp', { method: 'POST', authorization: 'Bearer t' });
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${res.origin}${WELL_KNOWN}/mcp", error="invalid_token"`,
+    );
+    expect(authenticateRequest).toHaveBeenCalledOnce();
+    expect(authenticateRequest.mock.calls[0]).toEqual([
+      expect.any(Request),
+      { acceptsToken: 'oauth_token', audience: `${res.origin}/mcp` },
+    ]);
   });
 });
