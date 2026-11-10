@@ -198,7 +198,7 @@ The middleware will:
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 
-A request answered with a challenge gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, or `insufficient_scope`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`:
+A request answered with a challenge gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. Under `mcpAuthClerk`, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
 ```ts
 import { McpAuthError } from '@clerk/mcp-tools/express';

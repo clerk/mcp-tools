@@ -17,12 +17,39 @@ export type McpAuthFailure = {
     | 'invalid_token'
     | 'insufficient_scope'
     | 'misdirected_request';
+  /**
+   * What the verifier reported for the token behind an `invalid_token`, when it reported anything. `mcpAuthClerk`
+   * sets it for a token Clerk rejected.
+   */
+  cause?: McpTokenVerificationError | undefined;
 };
+
+/**
+ * What a verifier reported for a token it did not accept. `mcpAuthClerk` creates one from the `reason` and `message`
+ * of Clerk's request state. It is the `cause` of an `invalid_token` failure when Clerk rejected the token, and the
+ * `cause` of the `McpAuthError` when Clerk answered but could not verify the token. A verifier passed to `mcpAuth`
+ * can throw one to reject a token with a code of its own. It is never sent to the client.
+ */
+export class McpTokenVerificationError extends Error {
+  /**
+   * A machine-readable code for the failure. From `mcpAuthClerk` it is the `reason` of Clerk's request state, such as
+   * `token-invalid` or `token-verification-failed`. Clerk gives every failed check on a JWT access token
+   * `token-verification-failed`, so the `message` is what says which check failed.
+   */
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'McpTokenVerificationError';
+    this.code = code;
+  }
+}
 
 /**
  * Thrown by `mcpAuth` and `mcpAuthClerk` when the token could not be verified at all, such as when the verifier
  * throws or Clerk is unreachable, so the request reaches the framework's error handler instead of a challenge that
- * would make the client discard a valid token. The verifier's error is the `cause`.
+ * would make the client discard a valid token. The verifier's error is the `cause`: an `McpTokenVerificationError`
+ * when Clerk answered but could not verify the token.
  */
 export class McpAuthError extends Error {
   readonly reason = 'verification_failed';
@@ -215,7 +242,8 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * `error="insufficient_scope"` (RFC 6750 section 3.1). The 403 `scope` is the granted scopes followed by the missing
  * ones, as in `requireAdditionalScopes`, so the new grant keeps the old access. A verified token's auth info gets
  * `resourceMetadataUrl`, which MCP SDK 2 puts in the `resource_metadata` of its own scope challenges. A verifier that
- * throws gets its error wrapped in an `McpAuthError`.
+ * throws an `McpTokenVerificationError` rejects the token, with that error as the failure's `cause`. Any other error
+ * it throws gets wrapped in an `McpAuthError`.
  */
 export async function authenticateBearer({
   authorization,
@@ -264,16 +292,20 @@ export async function authenticateBearer({
   }
 
   let authInfo: AuthInfo | undefined;
+  let rejection: McpTokenVerificationError | undefined;
   try {
     authInfo = await verifyToken(parsed.token);
   } catch (error) {
-    throw new McpAuthError(error);
+    if (!(error instanceof McpTokenVerificationError)) {
+      throw error instanceof McpAuthError ? error : new McpAuthError(error);
+    }
+    rejection = error;
   }
 
   if (!authInfo) {
     return {
       ok: false,
-      failure: { reason: 'invalid_token' },
+      failure: { reason: 'invalid_token', ...(rejection && { cause: rejection }) },
       status: 401,
       challenge: bearerChallenge({
         resourceMetadataUrl,
@@ -308,11 +340,12 @@ const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerific
 ]);
 
 /**
- * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. A token Clerk rejects resolves
- * to `undefined`, so that it reaches the client as an `invalid_token` challenge. When Clerk could not verify an opaque
- * token at all, this throws instead and the framework answers with a server error: an `invalid_token` challenge would
- * make the client discard a valid token and restart authorization. Clerk does not report a JWKS failure on a JWT access
- * token separately from an invalid signature, so that case still resolves to `undefined`.
+ * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. For a token Clerk rejects, this
+ * throws an `McpTokenVerificationError` with the reason and message Clerk gave, so that the token reaches the client
+ * as an `invalid_token` challenge. When Clerk could not verify an opaque token at all, this throws an `McpAuthError`
+ * around that error instead and the framework answers with a server error: an `invalid_token` challenge would make
+ * the client discard a valid token and restart authorization. Clerk does not report a JWKS failure on a JWT access
+ * token separately from an invalid signature, so that case is still a rejection.
  */
 export async function verifyClerkOAuthToken(
   client: Pick<ClerkClient, 'authenticateRequest'>,
@@ -324,12 +357,14 @@ export async function verifyClerkOAuthToken(
     { acceptsToken: 'oauth_token', audience },
   );
   if (!requestState.isAuthenticated) {
-    if (verificationUnavailable.has(requestState.reason)) {
-      throw new Error(
-        `Clerk could not verify the token (${requestState.reason}): ${requestState.message}`,
-      );
-    }
-    return undefined;
+    const { reason, message } = requestState;
+    // Clerk leaves the message empty for some reasons, such as `token-type-mismatch`
+    const error = new McpTokenVerificationError(
+      reason,
+      message || `Clerk did not accept the token (${reason})`,
+    );
+    if (verificationUnavailable.has(reason)) throw new McpAuthError(error);
+    throw error;
   }
   return verifyClerkToken(requestState.toAuth(), token);
 }

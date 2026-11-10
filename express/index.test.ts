@@ -9,7 +9,14 @@ vi.mock('@clerk/express', () => ({
 }));
 
 import { clerkClient } from '@clerk/express';
-import { McpAuthError, mcpAuth, mcpAuthClerk, streamableHttpHandler } from './index';
+import {
+  McpAuthError,
+  type McpAuthFailure,
+  McpTokenVerificationError,
+  mcpAuth,
+  mcpAuthClerk,
+  streamableHttpHandler,
+} from './index';
 
 const mcpHeaders = {
   'Content-Type': 'application/json',
@@ -430,6 +437,38 @@ describe('mcpAuthClerk', () => {
     expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
   });
 
+  test('records what Clerk reported for a rejected token on res.locals.mcpAuthFailure', async () => {
+    authenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'token-verification-failed',
+      message: 'JWT is expired. (code=token-verification-failed, status=n/a)',
+    } as never);
+    const failures: unknown[] = [];
+    const app = express();
+    app.use((_req, res, next) => {
+      res.on('finish', () => failures.push(res.locals.mcpAuthFailure));
+      next();
+    });
+    app.post('/mcp', mcpAuthClerk({ resourceUrl }), (_req, res) => {
+      res.json({});
+    });
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer bad' } }),
+    );
+
+    const [failure] = failures as McpAuthFailure[];
+    expect(failure?.reason).toBe('invalid_token');
+    expect(failure?.cause).toBeInstanceOf(McpTokenVerificationError);
+    expect(failure?.cause).toMatchObject({
+      code: 'token-verification-failed',
+      message: 'JWT is expired. (code=token-verification-failed, status=n/a)',
+    });
+    expect(res.headers.get('WWW-Authenticate')).toBe(
+      `Bearer resource_metadata="${metadataUrl}", error="invalid_token"`,
+    );
+  });
+
   test.each(['unexpected-error', 'secret-key-invalid'])(
     'answers a %s verification failure with a 500 instead of a challenge',
     async (reason) => {
@@ -438,11 +477,31 @@ describe('mcpAuthClerk', () => {
         reason,
         message: 'Unexpected error',
       } as never);
+      const errors: unknown[] = [];
+      const app = express();
+      app.post('/mcp', mcpAuthClerk({ resourceUrl }));
+      app.use(
+        (
+          err: unknown,
+          _req: express.Request,
+          res: express.Response,
+          _next: express.NextFunction,
+        ) => {
+          errors.push(err);
+          res.status(500).end();
+        },
+      );
 
-      const res = await request(mcpAuthClerk({ resourceUrl }), { authorization: 'Bearer t' });
+      const res = await withListening(app, (baseUrl) =>
+        fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
+      );
 
       expect(res.status).toBe(500);
-      expect(res.challenge).toBeNull();
+      expect(res.headers.get('WWW-Authenticate')).toBeNull();
+      expect(errors[0]).toBeInstanceOf(McpAuthError);
+      const { cause } = errors[0] as McpAuthError;
+      expect(cause).toBeInstanceOf(McpTokenVerificationError);
+      expect(cause).toMatchObject({ code: reason, message: 'Unexpected error' });
     },
   );
 

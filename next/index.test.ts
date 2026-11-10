@@ -9,6 +9,7 @@ vi.mock('@clerk/nextjs/server', () => ({
 
 import {
   McpAuthError,
+  McpTokenVerificationError,
   type McpRouteHandler,
   mcpAuth,
   mcpAuthClerk,
@@ -249,9 +250,14 @@ describe('mcpAuthClerk', () => {
       message: 'Clerk is unavailable',
     });
 
-    await expect(
-      mcpAuthClerk({ resourceUrl })(echoAuth)(request('Bearer token-1')),
-    ).rejects.toThrow(McpAuthError);
+    const error = await mcpAuthClerk({ resourceUrl })(echoAuth)(request('Bearer token-1')).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(McpAuthError);
+    const { cause } = error as McpAuthError;
+    expect(cause).toBeInstanceOf(McpTokenVerificationError);
+    expect(cause).toMatchObject({ code: 'unexpected-error', message: 'Clerk is unavailable' });
   });
 
   test('verifies with the clerkClient option instead of the default client', async () => {
