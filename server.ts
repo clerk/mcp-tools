@@ -177,7 +177,8 @@ function deriveFapiUrl(publishableKey: string) {
  *
  * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
  * @param publishableKey - Clerk publishable key
- * @returns The parsed metadata document
+ * @returns The parsed metadata document. It throws a `Clerk error:` when the Frontend API does not answer with a 2xx,
+ * so an error body is never served, or cached, as the metadata.
  */
 export async function fetchAuthorizationServerMetadata({
   publishableKey,
@@ -186,11 +187,13 @@ export async function fetchAuthorizationServerMetadata({
 }) {
   const fapiUrl = deriveFapiUrl(publishableKey);
 
-  return fetch(`${fapiUrl}/.well-known/oauth-authorization-server`)
-    .then((res) => res.json())
-    .then((metadata) => {
-      return metadata;
-    });
+  const res = await fetch(`${fapiUrl}/.well-known/oauth-authorization-server`);
+  if (!res.ok) {
+    throw new Error(
+      `Clerk error: fetching authorization server metadata from ${fapiUrl} failed with status ${res.status}`,
+    );
+  }
+  return res.json();
 }
 
 /**
