@@ -94,6 +94,7 @@ import {
   mcpAuth,
   streamableHttpHandler,
 } from '@clerk/mcp-tools/express';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 const app = express();
 app.use(express.json());
@@ -101,10 +102,16 @@ const resourceUrl = 'https://mcp.example.com/mcp';
 
 // Custom token verification
 // Return `undefined` to reject the token
-async function verifyToken(token: string) {
+async function verifyToken(token: string): Promise<AuthInfo | undefined> {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    return { userId: decoded.sub, email: decoded.email };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as jwt.JwtPayload;
+    return {
+      token,
+      clientId: decoded.azp,
+      scopes: typeof decoded.scope === 'string' ? decoded.scope.split(' ') : [],
+      expiresAt: decoded.exp,
+      extra: { userId: decoded.sub },
+    };
   } catch {
     return undefined;
   }
@@ -122,7 +129,7 @@ function createServer() {
     'Returns the ID of the user that authorized this request',
     {},
     async (_, { authInfo }) => ({
-      content: [{ type: 'text', text: String((authInfo as any)?.userId) }],
+      content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
     }),
   );
 
@@ -183,15 +190,14 @@ app.post(
 ```ts
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
-async function verifyToken(token: string, req: express.Request) {
+async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
   // Your custom token verification logic
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    return decoded; // Return auth data
-  } catch (error) {
-    return undefined; // Return undefined for invalid tokens
-  }
+  const user = await verifyMyToken(token);
+  if (!user) return undefined; // Return undefined for invalid tokens
+  // Return the auth info: `scopes` is what `requiredScopes` is checked against
+  return { token, clientId: user.clientId, scopes: user.scopes, extra: { userId: user.id } };
 }
 
 app.post(

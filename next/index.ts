@@ -36,6 +36,13 @@ const withMcpAuthOnlyOptionKeys: ReadonlySet<string> = new Set<keyof McpAuthFail
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
 
+// The headers of a metadata handler's successful response
+const metadataResponseHeaders = {
+  'Cache-Control': 'max-age=3600',
+  'Content-Type': 'application/json',
+  ...metadataCorsHeaders,
+};
+
 /**
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withMcpAuth`'s challenge points to.
@@ -73,15 +80,7 @@ export function protectedResourceMetadataHandler(
       );
     }
 
-    return Response.json(metadata, {
-      headers: Object.assign(
-        {
-          'Cache-Control': 'max-age=3600',
-          'Content-Type': 'application/json',
-        },
-        metadataCorsHeaders,
-      ),
-    });
+    return Response.json(metadata, { headers: metadataResponseHeaders });
   };
 }
 
@@ -104,15 +103,7 @@ export function authorizationServerMetadataHandler(): () => Promise<Response> {
       publishableKey,
     });
 
-    return Response.json(metadata, {
-      headers: Object.assign(
-        {
-          'Cache-Control': 'max-age=3600',
-          'Content-Type': 'application/json',
-        },
-        metadataCorsHeaders,
-      ),
-    });
+    return Response.json(metadata, { headers: metadataResponseHeaders });
   };
 }
 
@@ -231,8 +222,8 @@ export function withMcpAuth(
     if (!result.ok) {
       // A logging callback that throws or rejects must not turn the challenge into a server error
       try {
-        const returned: unknown = options.onAuthFailure?.(result.failure, req);
-        if (returned instanceof Promise) returned.catch(() => {});
+        // `Promise.resolve` adopts any thenable, so a rejection from one that is not a native promise is caught too
+        void Promise.resolve(options.onAuthFailure?.(result.failure, req)).catch(() => {});
       } catch {}
       return Response.json(
         { error: result.error },

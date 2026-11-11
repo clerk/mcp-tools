@@ -1,5 +1,9 @@
-import { describe, expect, test } from 'vitest';
-import { generateProtectedResourceMetadata, matchResourceUrl } from './server';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import {
+  fetchAuthorizationServerMetadata,
+  generateProtectedResourceMetadata,
+  matchResourceUrl,
+} from './server';
 
 // RFC 9728 section 2 parameters only: `jwks_uri` would name the protected resource's own keys, not the
 // authorization server's, and Clerk's documentation link is `resource_documentation`.
@@ -93,5 +97,36 @@ describe('matchResourceUrl', () => {
     expect(matchResourceUrl(urls, 'https://evil.example.com/mcp')).toBeUndefined();
     expect(matchResourceUrl(urls, 'http://mcp.example.com/mcp')).toBeUndefined();
     expect(matchResourceUrl(['not a url'], 'https://mcp.example.com/mcp')).toBeUndefined();
+  });
+});
+
+describe('fetchAuthorizationServerMetadata', () => {
+  const publishableKey = `pk_test_${btoa('clerk.example.com$')}`;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("returns the Frontend API's metadata", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json({ issuer: 'https://clerk.example.com' }));
+
+    await expect(fetchAuthorizationServerMetadata({ publishableKey })).resolves.toStrictEqual({
+      issuer: 'https://clerk.example.com',
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://clerk.example.com/.well-known/oauth-authorization-server',
+    );
+  });
+
+  test('throws instead of returning an error body as the metadata', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      Response.json({ errors: [{ code: 'resource_not_found' }] }, { status: 404 }),
+    );
+
+    await expect(fetchAuthorizationServerMetadata({ publishableKey })).rejects.toThrow(
+      'Clerk error: fetching authorization server metadata from https://clerk.example.com failed with status 404',
+    );
   });
 });

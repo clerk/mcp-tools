@@ -223,7 +223,7 @@ export async function POST(request: Request) {
 
   const body = await request.json();
 
-  const { client, connect } = getMcpClientBySessionId({
+  const { client, connect } = await getMcpClientBySessionId({
     sessionId,
     store,
   });

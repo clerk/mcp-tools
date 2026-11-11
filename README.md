@@ -334,7 +334,7 @@ Once authentication is complete, you can call MCP tools:
 import { getMcpClientBySessionId } from '@clerk/mcp-tools/client';
 
 export async function callMCPTool(sessionId: string, toolName: string, args: any) {
-  const { client, connect } = getMcpClientBySessionId({
+  const { client, connect } = await getMcpClientBySessionId({
     sessionId,
     store,
   });
