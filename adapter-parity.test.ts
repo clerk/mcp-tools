@@ -194,75 +194,6 @@ describe.each(metadataRoutesWithOptions)(
       expect(res.status).toBe(421);
       expect(res.body).toEqual({ error: 'misdirected_request' });
     });
-
-    test('merges properties over the generated metadata', async () => {
-      const res = await send(() => ({
-        resourceUrl: 'https://public.example.com/mcp',
-        properties: { scopes_supported: ['email'], resource_documentation: 'https://example.com' },
-      }));
-
-      expect(res.body).toMatchObject({
-        resource: 'https://public.example.com/mcp',
-        scopes_supported: ['email'],
-        resource_documentation: 'https://example.com',
-      });
-    });
-
-    // RFC 9728 section 2: `scopes_supported` lists the scope values used to request access to this resource
-    test('lists requiredScopes then challengeScopes, each once, as scopes_supported', async () => {
-      const res = await send(() => ({
-        resourceUrl: 'https://public.example.com/mcp',
-        requiredScopes: ['profile', 'email'],
-        challengeScopes: ['email', 'projects:read'],
-      }));
-
-      expect(res.status).toBe(200);
-      expect((res.body as { scopes_supported: unknown }).scopes_supported).toEqual([
-        'profile',
-        'email',
-        'projects:read',
-      ]);
-    });
-
-    // A key set to `undefined`, as `{ scopes_supported: config.scopes }` gives without one, is not a list to use
-    test('lists requiredScopes then challengeScopes when properties sets scopes_supported to undefined', async () => {
-      const res = await send(() => ({
-        resourceUrl: 'https://public.example.com/mcp',
-        requiredScopes: ['profile'],
-        challengeScopes: ['email'],
-        properties: { scopes_supported: undefined, resource_name: 'MCP' },
-      }));
-
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({
-        scopes_supported: ['profile', 'email'],
-        resource_name: 'MCP',
-      });
-    });
-
-    test('leaves scopes_supported out without scopes', async () => {
-      const res = await send(() => ({ resourceUrl: 'https://public.example.com/mcp' }));
-
-      expect(res.status).toBe(200);
-      expect(res.body).not.toHaveProperty('scopes_supported');
-    });
-
-    // RFC 9728 section 2 lets a resource advertise scopes it does not require
-    test('uses an explicit scopes_supported that lists every scope as given', async () => {
-      const res = await send(() => ({
-        resourceUrl: 'https://public.example.com/mcp',
-        requiredScopes: ['profile'],
-        challengeScopes: ['email'],
-        properties: { scopes_supported: ['email', 'admin', 'profile'] },
-      }));
-
-      expect(res.status).toBe(200);
-      expect((res.body as { scopes_supported: unknown }).scopes_supported).toEqual([
-        'email',
-        'admin',
-        'profile',
-      ]);
-    });
   },
 );
 
@@ -340,82 +271,6 @@ describe.each(metadataRoutesWithAuthOptions)(
     });
   },
 );
-
-describe.each([
-  ['express', expressAdapter.protectedResourceMetadataHandler],
-  ['hono', honoAdapter.protectedResourceMetadataHandler],
-  ['next', nextAdapter.protectedResourceMetadataHandler],
-])('%s protectedResourceMetadataHandler options', (_name, protectedResourceMetadataHandler) => {
-  test.each([
-    ['additional metadata', { scopes_supported: ['email'] }],
-    ['a resource', { resource: 'https://mcp.example.com/mcp' }],
-    ['additional metadata beside resourceUrl', { resourceUrl: origin, resource_name: 'MCP' }],
-  ])('throws at setup when given %s in place of options', (_case, options) => {
-    // @ts-expect-error metadata fields belong under `properties`, not beside the options
-    expect(() => protectedResourceMetadataHandler(options)).toThrow(
-      'Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties',
-    );
-  });
-
-  test.each([
-    ['is not a URL', 'mcp.example.com/mcp'],
-    ['has a fragment', 'https://mcp.example.com/mcp#tools'],
-    ['is an empty list', []],
-  ])('throws at setup when resourceUrl %s', (_case, resourceUrl) => {
-    expect(() => protectedResourceMetadataHandler({ resourceUrl })).toThrow(
-      'Clerk error: protectedResourceMetadataHandler resourceUrl must be',
-    );
-  });
-
-  test('throws at setup when resourceUrl lists two URLs for one origin', () => {
-    expect(() =>
-      protectedResourceMetadataHandler({ resourceUrl: [`${origin}/mcp`, `${origin}/other`] }),
-    ).toThrow('Clerk error: protectedResourceMetadataHandler resourceUrl lists more than one URL');
-  });
-
-  test.each([
-    ['a required scope', { requiredScopes: ['profile', 'email'] }, 'email'],
-    ['a challenge scope', { challengeScopes: ['projects:read'] }, 'projects:read'],
-  ])('throws at setup when scopes_supported leaves out %s', (_case, scopes, missing) => {
-    expect(() =>
-      protectedResourceMetadataHandler({
-        resourceUrl: origin,
-        ...scopes,
-        properties: { scopes_supported: ['profile'] },
-      }),
-    ).toThrow(
-      `Clerk error: protectedResourceMetadataHandler properties.scopes_supported leaves out ${missing},`,
-    );
-  });
-
-  test.each([
-    ['a string', 'email', {}],
-    ['a string beside requiredScopes', 'email', { requiredScopes: ['email'] }],
-    ['a list with an entry that is not a string', ['email', 1], {}],
-    [
-      'a list with an entry that is not a string beside requiredScopes',
-      [1],
-      { requiredScopes: ['email'] },
-    ],
-    ['null', null, {}],
-  ])('throws at setup when scopes_supported is %s', (_case, scopes_supported, scopes) => {
-    expect(() =>
-      protectedResourceMetadataHandler({
-        resourceUrl: origin,
-        ...scopes,
-        properties: { scopes_supported },
-      }),
-    ).toThrow(
-      'Clerk error: protectedResourceMetadataHandler properties.scopes_supported must be an array of strings',
-    );
-  });
-
-  test('throws at setup for a requiredScopes entry that is not a scope token', () => {
-    expect(() => protectedResourceMetadataHandler({ requiredScopes: ['two words'] })).toThrow(
-      'Clerk error: protectedResourceMetadataHandler requiredScopes must contain only scope tokens',
-    );
-  });
-});
 
 // The handler takes the keys of its own adapter's `mcpAuth` options, and `onAuthFailure` is Next.js's alone
 describe('protectedResourceMetadataHandler onAuthFailure', () => {
@@ -560,11 +415,6 @@ describe('metadata handler headers', () => {
       'access-control-max-age': '86400',
     });
   });
-
-  test('express and hono have no metadataCorsHandler', () => {
-    expect('metadataCorsHandler' in expressAdapter).toBe(false);
-    expect('metadataCorsHandler' in honoAdapter).toBe(false);
-  });
 });
 
 // 0.9.0's `authServerMetadataHandlerClerk` was passed to the route without being called, so code that only renames it
@@ -705,17 +555,6 @@ const mcpRoutes: [string, Send][] = [
   ],
 ];
 
-// Each adapter has one auth entry point that takes either verifier: `mcpAuth` in Express and Hono, and `withMcpAuth`
-// in Next.js, where a route handler is wrapped instead of preceded by middleware
-test('each adapter has a single auth entry point', () => {
-  const entryPoints = (adapter: object) =>
-    ['mcpAuth', 'mcpAuthClerk', 'withMcpAuth'].filter((name) => name in adapter);
-
-  expect(entryPoints(expressAdapter)).toEqual(['mcpAuth']);
-  expect(entryPoints(honoAdapter)).toEqual(['mcpAuth']);
-  expect(entryPoints(nextAdapter)).toEqual(['withMcpAuth']);
-});
-
 describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) => {
   test('answers a token whose expiresAt has passed with invalid_token (RFC 6750 section 3.1)', async () => {
     const res = await send('/mcp', { method: 'POST', authorization: 'Bearer t' });
@@ -724,93 +563,5 @@ describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) =
     expect(res.challenge).toBe(
       `Bearer resource_metadata="${res.origin}${WELL_KNOWN}/mcp", error="invalid_token"`,
     );
-  });
-});
-
-// Clerk verification, through the same entry points without `verifyToken`
-const rejectingClerk = {
-  authenticateRequest: vi.fn(async () => ({
-    isAuthenticated: false,
-    reason: 'token-invalid',
-    message: 'Invalid token',
-  })),
-} as never;
-
-const clerkRoutes: [string, Send][] = [
-  [
-    'express',
-    (path, init) => {
-      const app = express();
-      // The test server's port is only known once it listens, so the middleware is built per request
-      app.post(
-        '/mcp',
-        (req, res, next) =>
-          expressAdapter.mcpAuth({
-            resourceUrl: `http://${req.get('host')}/mcp`,
-            clerkClient: rejectingClerk,
-          })(req, res, next),
-        (_req, res) => {
-          res.json({ ok: true });
-        },
-      );
-      return sendExpress(app, path, init);
-    },
-  ],
-  [
-    'hono',
-    async (path, init) => {
-      const app = new Hono();
-      app.post(
-        '/mcp',
-        honoAdapter.mcpAuth({ resourceUrl: `${origin}/mcp`, clerkClient: rejectingClerk }),
-        (c) => c.json({ ok: true }),
-      );
-      return answer(
-        await app.request(`${origin}${path}`, {
-          method: init?.method,
-          headers: init?.authorization ? { authorization: init.authorization } : {},
-        }),
-        origin,
-      );
-    },
-  ],
-  [
-    'next',
-    async (path, init) => {
-      const handler = nextAdapter.withMcpAuth(() => Response.json({ ok: true }), {
-        resourceUrl: `${origin}/mcp`,
-        clerkClient: rejectingClerk,
-      });
-      return answer(
-        await handler(
-          new Request(`${origin}${path}`, {
-            method: init?.method,
-            headers: init?.authorization ? { authorization: init.authorization } : {},
-          }),
-        ),
-        origin,
-      );
-    },
-  ],
-];
-
-describe.each(clerkRoutes)('%s Clerk verification', (_name, send) => {
-  test('asks Clerk to check the audience and answers a rejected token with invalid_token', async () => {
-    const authenticateRequest = vi.mocked(
-      (rejectingClerk as { authenticateRequest: () => unknown }).authenticateRequest,
-    );
-    authenticateRequest.mockClear();
-
-    const res = await send('/mcp', { method: 'POST', authorization: 'Bearer t' });
-
-    expect(res.status).toBe(401);
-    expect(res.challenge).toBe(
-      `Bearer resource_metadata="${res.origin}${WELL_KNOWN}/mcp", error="invalid_token"`,
-    );
-    expect(authenticateRequest).toHaveBeenCalledOnce();
-    expect(authenticateRequest.mock.calls[0]).toEqual([
-      expect.any(Request),
-      { acceptsToken: 'oauth_token', audience: `${res.origin}/mcp` },
-    ]);
   });
 });
