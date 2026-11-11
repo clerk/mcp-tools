@@ -17,9 +17,6 @@ importers:
       '@clerk/express':
         specifier: ^2.1.70
         version: 2.1.70(express@5.2.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      '@clerk/hono':
-        specifier: ^0.1.80
-        version: 0.1.80(hono@4.12.14)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@clerk/nextjs':
         specifier: ^7.9.5
         version: 7.9.25(next@15.5.15(react-dom@19.1.0(react@19.1.0))(react@19.1.0))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -172,12 +169,6 @@ packages:
     engines: {node: '>=20.9.0'}
     peerDependencies:
       express: ^4.17.0 || ^5.0.0
-
-  '@clerk/hono@0.1.80':
-    resolution: {integrity: sha512-AkrAuhWy4Jkc/IhkE3Q+elwDE6dSj2ffl/0I+kXThMXmy1iiJNSzRhKZxwwOcd1ejNaHOVCKWvzXdZeGG5UMtA==}
-    engines: {node: '>=20.9.0'}
-    peerDependencies:
-      hono: '>=4'
 
   '@clerk/nextjs@7.9.25':
     resolution: {integrity: sha512-XO3CAgy2uFCaL0Ei4yRs4m5YTHhafumyMY6qepdn0TGWzUnchj4a7XfLjJlZE29PnFgNXTeD0A+5yvrfNaZQyA==}
@@ -2432,15 +2423,6 @@ snapshots:
       '@clerk/shared': 4.44.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       express: 5.2.1
       tslib: 2.8.1
-    transitivePeerDependencies:
-      - react
-      - react-dom
-
-  '@clerk/hono@0.1.80(hono@4.12.14)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
-    dependencies:
-      '@clerk/backend': 3.27.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      '@clerk/shared': 4.44.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      hono: 4.12.14
     transitivePeerDependencies:
       - react
       - react-dom

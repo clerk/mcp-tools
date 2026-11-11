@@ -96,7 +96,6 @@
     "@changesets/cli": "^2.29.4",
     "@clerk/backend": "^3.19.0",
     "@clerk/express": "^2.1.70",
-    "@clerk/hono": "^0.1.80",
     "@clerk/nextjs": "^7.9.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server": "2.4.0",
@@ -121,7 +120,6 @@
   "peerDependencies": {
     "@clerk/backend": "^3.19.0",
     "@clerk/express": "^2.1.70",
-    "@clerk/hono": "^0.1.80",
     "@clerk/nextjs": "^7.9.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^8.7.0",
@@ -137,9 +135,6 @@
       "optional": true
     },
     "@clerk/express": {
-      "optional": true
-    },
-    "@clerk/hono": {
       "optional": true
     },
     "@clerk/nextjs": {

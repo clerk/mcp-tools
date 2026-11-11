@@ -288,12 +288,9 @@ The key consideration for Next.js applications is choosing a store that works we
 - **Development**: Use `createFsStore()` for local development
 - **Production**: Use Redis, Postgres, or SQLite stores for persistent session storage
 
-## App Router vs Pages Router
+## App Router only
 
-All examples in this documentation use the App Router (app directory). If you're using the Pages Router, the concepts are the same but the file locations will be different:
-
-- `app/api/mcp/route.ts` → `pages/api/mcp.ts`
-- `app/.well-known/oauth-protected-resource/route.ts` → `pages/.well-known/oauth-protected-resource.ts`
+These handlers are App Router route handlers: they take a Web `Request` and return a `Response`. The Pages Router's `req`/`res` API routes aren't supported.
 
 ## Working Examples
 

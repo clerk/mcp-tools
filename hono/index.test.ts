@@ -536,12 +536,10 @@ describe('mcpAuth with Clerk', () => {
 
   function clerkApp() {
     const app = new Hono();
-    app.use(async (c, next) => {
-      c.set('clerk' as never, clerk as never);
-      await next();
-    });
-    app.post('/mcp', mcpAuth({ resourceUrl, requiredScopes: ['profile'] }), (c) =>
-      c.json(c.get('mcpAuth')),
+    app.post(
+      '/mcp',
+      mcpAuth({ resourceUrl, requiredScopes: ['profile'], clerkClient: clerk as never }),
+      (c) => c.json(c.get('mcpAuth')),
     );
     return app;
   }
@@ -765,7 +763,7 @@ describe('mcpAuth with Clerk', () => {
     ['with a token', { authorization: 'Bearer token' }],
     ['without a token', undefined],
   ])(
-    'throws the Clerk error itself %s when there is no clerkClient, clerkMiddleware has not run, and no keys are set',
+    'throws the Clerk error itself %s when there is no clerkClient and no keys are set',
     async (_case, headers) => {
       vi.mocked(env).mockReturnValue({});
       const app = new Hono();
@@ -781,7 +779,7 @@ describe('mcpAuth with Clerk', () => {
       expect(res.status).toBe(500);
       expect(error).not.toBeInstanceOf(McpAuthError);
       expect((error as Error).message).toBe(
-        'Clerk error: mcpAuth needs the CLERK_SECRET_KEY environment variable, a clerkClient option, or clerkMiddleware() to run first',
+        'Clerk error: mcpAuth needs the CLERK_SECRET_KEY environment variable or a clerkClient option',
       );
     },
   );
@@ -877,32 +875,6 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
     expect(client.authenticateRequest).toHaveBeenCalledTimes(3);
   });
 
-  test('prefers the clerkClient option, then the clerkMiddleware() client, then the environment', async () => {
-    vi.mocked(env).mockReturnValue(keys(5));
-    const fromEnv = envClient();
-    const fromOption = { authenticateRequest: vi.fn().mockResolvedValue(authenticated) };
-    const fromMiddleware = { authenticateRequest: vi.fn().mockResolvedValue(authenticated) };
-    const withMiddleware = (options: Parameters<typeof mcpAuth>[0]) => {
-      const app = new Hono();
-      app.use(async (c, next) => {
-        c.set('clerk' as never, fromMiddleware as never);
-        await next();
-      });
-      app.post('/mcp', mcpAuth(options), (c) => c.json({ ok: true }));
-      return app;
-    };
-
-    await post(withMiddleware({ resourceUrl, clerkClient: fromOption as never }));
-    expect(fromOption.authenticateRequest).toHaveBeenCalledOnce();
-    expect(fromMiddleware.authenticateRequest).not.toHaveBeenCalled();
-
-    await post(withMiddleware({ resourceUrl }));
-    expect(fromMiddleware.authenticateRequest).toHaveBeenCalledOnce();
-
-    expect(fromEnv.authenticateRequest).not.toHaveBeenCalled();
-    expect(createClerkClient).not.toHaveBeenCalled();
-  });
-
   test('throws a Clerk error asking to install @clerk/backend, with the load error as the cause, when it cannot be loaded', async () => {
     const loadError = new Error('Cannot find package @clerk/backend');
     vi.resetModules();
@@ -952,7 +924,7 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
 
     expect(res.status).toBe(500);
     expect((error as Error).message).toBe(
-      'Clerk error: mcpAuth needs the CLERK_PUBLISHABLE_KEY environment variable, a clerkClient option, or clerkMiddleware() to run first',
+      'Clerk error: mcpAuth needs the CLERK_PUBLISHABLE_KEY environment variable or a clerkClient option',
     );
     expect(createClerkClient).not.toHaveBeenCalled();
   });
