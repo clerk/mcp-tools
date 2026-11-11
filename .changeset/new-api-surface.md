@@ -54,7 +54,7 @@
 
 - `challengeScopes` adds scopes to the `401` challenge without requiring them. `requiredScopes` are listed too, and a token missing them gets a `403` `insufficient_scope` challenge.
 - `resourceUrl` can be a list of URLs, one for each origin. A request to an origin that is not listed gets a `421`. `matchResourceUrl` applies the same rule in a route of your own.
-- Auth failures are reported for logging: in `res.locals.mcpAuthFailure` in Express, in `c.get('mcpAuthFailure')` in Hono, and through `onAuthFailure(failure, req)` in Next.js.
+- Auth failures are reported for logging: in `res.locals.mcpAuthFailure` in Express, in `c.get('mcpAuthFailure')` in Hono, and through `onAuthFailure(failure, req)` in Next.js. `onAuthFailure` is a synchronous notification whose return value is ignored; schedule asynchronous logging with Next.js `after()` to keep it alive after the response without delaying the challenge.
 - In Hono, `mcpAuth({ resourceUrl })` works without `clerkMiddleware()`. It builds a client from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` through `env(c)`, which requires `@clerk/backend`.
 - The auth info now carries `resourceMetadataUrl`, which MCP SDK 2 step-up challenges need.
 - New exports: `McpAuthError`, `McpTokenVerificationError`, and the `McpAuthOptions`, `ProtectedResourceMetadataOptions`, `McpResourceUrl`, `McpAuthFailure`, and `ClerkOAuthClient` types. `@clerk/mcp-tools/package.json` is importable.

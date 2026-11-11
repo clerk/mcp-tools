@@ -61,6 +61,15 @@ describe('the mcpAuth options', () => {
     nextWithMcpAuth(handler, { verifyToken, onAuthFailure });
   });
 
+  test('declare onAuthFailure as a void-returning notification', () => {
+    const onAuthFailure: NonNullable<NextMcpAuthOptions['onAuthFailure']> = () => {};
+    const result: void = onAuthFailure({ reason: 'missing_token' }, new Request(resourceUrl));
+    void result;
+
+    // TypeScript permits async functions in void callback positions; their promises are not awaited
+    nextWithMcpAuth(handler, { verifyToken, onAuthFailure: async () => {} });
+  });
+
   test('require a resourceUrl without verifyToken', () => {
     // @ts-expect-error no resourceUrl or verifyToken
     expressMcpAuth({});
