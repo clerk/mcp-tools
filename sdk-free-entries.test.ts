@@ -127,10 +127,6 @@ vi.mock('@clerk/backend', () => {
   clerkLoads.push('@clerk/backend');
   throw new Error('Cannot find package @clerk/backend');
 });
-vi.mock('@clerk/hono', () => {
-  clerkLoads.push('@clerk/hono');
-  throw new Error('Cannot find package @clerk/hono');
-});
 
 describe('hono/index.ts without Clerk packages', () => {
   test('has no top-level runtime import from a Clerk package', () => {
