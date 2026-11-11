@@ -2,7 +2,9 @@ import { describe, expect, test, vi } from 'vitest';
 
 import {
   assertMcpAuthOptions,
+  assertProtectedResourceMetadataOptions,
   authenticateBearer,
+  clerkProtectedResourceMetadata,
   resourceFromMetadataUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
@@ -251,5 +253,142 @@ describe('verifyClerkOAuthToken', () => {
 
     expect(error).toBeInstanceOf(McpTokenVerificationError);
     expect(error).toMatchObject({ code: 'token-claims-missing' });
+  });
+});
+
+const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+const metadataOrigin = 'https://mcp.example.com';
+const metadataUrl = `${metadataOrigin}/.well-known/oauth-protected-resource/mcp`;
+
+describe('clerkProtectedResourceMetadata', () => {
+  const metadata = (options: Parameters<typeof clerkProtectedResourceMetadata>[0]) =>
+    clerkProtectedResourceMetadata(
+      { resourceUrl: 'https://public.example.com/mcp', ...options },
+      metadataUrl,
+      FAKE_PK,
+    );
+
+  test('merges properties over the generated metadata', () => {
+    expect(
+      metadata({
+        properties: { scopes_supported: ['email'], resource_documentation: 'https://example.com' },
+      }),
+    ).toMatchObject({
+      resource: 'https://public.example.com/mcp',
+      scopes_supported: ['email'],
+      resource_documentation: 'https://example.com',
+    });
+  });
+
+  // RFC 9728 section 2: `scopes_supported` lists the scope values used to request access to this resource
+  test('lists requiredScopes then challengeScopes, each once, as scopes_supported', () => {
+    expect(
+      metadata({
+        requiredScopes: ['profile', 'email'],
+        challengeScopes: ['email', 'projects:read'],
+      })?.scopes_supported,
+    ).toEqual(['profile', 'email', 'projects:read']);
+  });
+
+  // A key set to `undefined`, as `{ scopes_supported: config.scopes }` gives without one, is not a list to use
+  test('lists requiredScopes then challengeScopes when properties sets scopes_supported to undefined', () => {
+    expect(
+      metadata({
+        requiredScopes: ['profile'],
+        challengeScopes: ['email'],
+        properties: { scopes_supported: undefined, resource_name: 'MCP' },
+      }),
+    ).toMatchObject({ scopes_supported: ['profile', 'email'], resource_name: 'MCP' });
+  });
+
+  test('leaves scopes_supported out without scopes', () => {
+    expect(metadata({})).not.toHaveProperty('scopes_supported');
+  });
+
+  // RFC 9728 section 2 lets a resource advertise scopes it does not require
+  test('uses an explicit scopes_supported that lists every scope as given', () => {
+    expect(
+      metadata({
+        requiredScopes: ['profile'],
+        challengeScopes: ['email'],
+        properties: { scopes_supported: ['email', 'admin', 'profile'] },
+      })?.scopes_supported,
+    ).toEqual(['email', 'admin', 'profile']);
+  });
+});
+
+describe('assertProtectedResourceMetadataOptions', () => {
+  test.each([
+    ['additional metadata', { scopes_supported: ['email'] }],
+    ['a resource', { resource: 'https://mcp.example.com/mcp' }],
+    [
+      'additional metadata beside resourceUrl',
+      { resourceUrl: metadataOrigin, resource_name: 'MCP' },
+    ],
+  ])('throws when given %s in place of options', (_case, options) => {
+    expect(() => assertProtectedResourceMetadataOptions(options)).toThrow(
+      'Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties',
+    );
+  });
+
+  test.each([
+    ['is not a URL', 'mcp.example.com/mcp'],
+    ['has a fragment', 'https://mcp.example.com/mcp#tools'],
+    ['is an empty list', []],
+  ])('throws when resourceUrl %s', (_case, resourceUrl) => {
+    expect(() => assertProtectedResourceMetadataOptions({ resourceUrl })).toThrow(
+      'Clerk error: protectedResourceMetadataHandler resourceUrl must be',
+    );
+  });
+
+  test('throws when resourceUrl lists two URLs for one origin', () => {
+    expect(() =>
+      assertProtectedResourceMetadataOptions({
+        resourceUrl: [`${metadataOrigin}/mcp`, `${metadataOrigin}/other`],
+      }),
+    ).toThrow('Clerk error: protectedResourceMetadataHandler resourceUrl lists more than one URL');
+  });
+
+  test.each([
+    ['a required scope', { requiredScopes: ['profile', 'email'] }, 'email'],
+    ['a challenge scope', { challengeScopes: ['projects:read'] }, 'projects:read'],
+  ])('throws when scopes_supported leaves out %s', (_case, scopes, missing) => {
+    expect(() =>
+      assertProtectedResourceMetadataOptions({
+        resourceUrl: metadataOrigin,
+        ...scopes,
+        properties: { scopes_supported: ['profile'] },
+      }),
+    ).toThrow(
+      `Clerk error: protectedResourceMetadataHandler properties.scopes_supported leaves out ${missing},`,
+    );
+  });
+
+  test.each([
+    ['a string', 'email', {}],
+    ['a string beside requiredScopes', 'email', { requiredScopes: ['email'] }],
+    ['a list with an entry that is not a string', ['email', 1], {}],
+    [
+      'a list with an entry that is not a string beside requiredScopes',
+      [1],
+      { requiredScopes: ['email'] },
+    ],
+    ['null', null, {}],
+  ])('throws when scopes_supported is %s', (_case, scopes_supported, scopes) => {
+    expect(() =>
+      assertProtectedResourceMetadataOptions({
+        resourceUrl: metadataOrigin,
+        ...scopes,
+        properties: { scopes_supported },
+      }),
+    ).toThrow(
+      'Clerk error: protectedResourceMetadataHandler properties.scopes_supported must be an array of strings',
+    );
+  });
+
+  test('throws for a requiredScopes entry that is not a scope token', () => {
+    expect(() => assertProtectedResourceMetadataOptions({ requiredScopes: ['two words'] })).toThrow(
+      'Clerk error: protectedResourceMetadataHandler requiredScopes must contain only scope tokens',
+    );
   });
 });
