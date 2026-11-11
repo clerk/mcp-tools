@@ -230,6 +230,28 @@ describe('withMcpAuth with verifyToken', () => {
     ]);
   });
 
+  test('does not wait for a promise returned by onAuthFailure', async () => {
+    let resolveNotification: (() => void) | undefined;
+    const notification = new Promise<void>((resolve) => {
+      resolveNotification = resolve;
+    });
+    const onAuthFailure = vi.fn(() => notification);
+
+    try {
+      const res = await withMcpAuth(echoAuth, {
+        verifyToken: async () => undefined,
+        resourceUrl,
+        onAuthFailure,
+      })(request());
+
+      expect(res.status).toBe(401);
+      expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+      expect(onAuthFailure).toHaveBeenCalledOnce();
+    } finally {
+      resolveNotification?.();
+    }
+  }, 1000);
+
   test('still sends the challenge when onAuthFailure throws', async () => {
     const res = await withMcpAuth(echoAuth, {
       verifyToken: async () => undefined,

@@ -127,10 +127,12 @@ type McpRouteHandler = (req: Request) => Response | Promise<Response>;
 
 type McpAuthFailureOption = {
   /**
-   * Called with why a request is about to be answered with a 401 or 403 challenge or a 421, for example for logging.
-   * A route wrapper has no request context to record it on, as the Express and Hono adapters do.
+   * Synchronously notifies why a request is about to be answered with a 401 or 403 challenge or a 421, for example
+   * for logging. A route wrapper has no request context to record it on, as the Express and Hono adapters do.
+   * Return values are ignored. Schedule asynchronous work with `after()` from `next/server` to keep it alive after
+   * the response; a promise returned here is not awaited or registered with the request lifecycle.
    */
-  onAuthFailure?: ((failure: McpAuthFailure, req: Request) => unknown) | undefined;
+  onAuthFailure?: ((failure: McpAuthFailure, req: Request) => void) | undefined;
 };
 
 /**
@@ -162,8 +164,9 @@ const withMcpAuthCallForm =
  * @param handler - The route handler, such as the one `createMcpHandler` from `mcp-handler` returns
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
  * needs, the `challengeScopes` the 401 challenge also asks for, either the `clerkClient` that verifies tokens or a
- * `verifyToken` function, and `onAuthFailure`, which is called with the reason for each request answered with a
- * challenge or a 421. `verifyToken` is called with the token and the request, and `resourceUrl` is optional with it.
+ * `verifyToken` function, and `onAuthFailure`, a synchronous notification with the reason for each request answered
+ * with a challenge or a 421. `verifyToken` is called with the token and the request, and `resourceUrl` is optional
+ * with it.
  * @returns The wrapped route handler. A missing or rejected token gets a 401 challenge, and a token without
  * `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler` reads it,
  * with `resourceMetadataUrl` added for the SDK's scope challenges. When Clerk cannot verify an opaque token at all,
@@ -220,9 +223,9 @@ export function withMcpAuth(
     });
 
     if (!result.ok) {
-      // A logging callback that throws or rejects must not turn the challenge into a server error
+      // The notification must not delay the challenge or turn it into a server error
       try {
-        // `Promise.resolve` adopts any thenable, so a rejection from one that is not a native promise is caught too
+        // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
         void Promise.resolve(options.onAuthFailure?.(result.failure, req)).catch(() => {});
       } catch {}
       return Response.json(
