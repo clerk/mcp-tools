@@ -10,7 +10,7 @@
 | -------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------- |
 | `mcpAuthClerk`                               | `mcpAuth({ resourceUrl })`                                              | `./express`, `./hono`           |
 | `mcpAuth(verifyToken, options)`              | `mcpAuth({ verifyToken, ...options })`                                  | `./express`, `./hono`           |
-| `withMcpAuth` from `mcp-handler`             | `withMcpAuth(handler, { resourceUrl, clerkClient })`                    | `./next`                        |
+| `withMcpAuth` from `mcp-handler`             | `withMcpAuth(handler, { resourceUrl })`                                 | `./next`                        |
 | `protectedResourceHandlerClerk(properties)`  | `protectedResourceMetadataHandler({ resourceUrl, properties })`         | `./express`, `./hono`, `./next` |
 | `authServerMetadataHandlerClerk`             | `authorizationServerMetadataHandler()`                                  | `./express`, `./hono`, `./next` |
 | `metadataCorsOptionsRequestHandler`          | `metadataCorsHandler`                                                   | `./next`                        |
@@ -30,7 +30,7 @@
 | `./feedback`, `./create-browser-session`     | `./tools`                                                               | subpath                         |
 | `./stores`                                   | `./stores/fs`, `./stores/redis`, `./stores/postgres`, `./stores/sqlite` | subpath                         |
 
-`mcpAuth` (and `withMcpAuth` in Next.js) takes one `McpAuthOptions` object. Without `verifyToken`, Clerk verifies the token and `resourceUrl` is required. With `verifyToken(token, req)`, your function returns the MCP SDK's `AuthInfo`, or `undefined` to reject the token, and `resourceUrl` is optional. Pass the same options object to `protectedResourceMetadataHandler`, which ignores the verification options. In Express, `streamableHttpHandler` takes `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js`. In Hono, it takes `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`.
+`mcpAuth` (and `withMcpAuth` in Next.js) takes one `McpAuthOptions` object. Without `verifyToken`, Clerk verifies the token and `resourceUrl` is required. `clerkClient` is optional in every adapter: it defaults to `clerkClient` from `@clerk/express` in Express, a client built from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in Hono, and `clerkClient` from `@clerk/nextjs/server`, loaded on the first request, in Next.js. With `verifyToken(token, req)`, your function returns the MCP SDK's `AuthInfo`, or `undefined` to reject the token, and `resourceUrl` is optional. Pass the same options object to `protectedResourceMetadataHandler`, which ignores the verification options. In Express, `streamableHttpHandler` takes `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js`. In Hono, it takes `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`.
 
 ### Behavior changes
 

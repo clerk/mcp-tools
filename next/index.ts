@@ -137,25 +137,26 @@ type McpAuthFailureOption = {
 
 /**
  * Options for `withMcpAuth`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as its
- * audience, and `clerkClient` is required. With `verifyToken`, that function verifies each token with the request,
- * `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure` is available either way.
+ * audience, and `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`. With `verifyToken`, that function
+ * verifies each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure`
+ * is available either way.
  */
 export type McpAuthOptions = McpAuthFailureOption &
   (
     | (ClerkAuthOptions & {
         /**
-         * `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`,
-         * from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check. It is an option, not an
-         * import of this package, so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`.
+         * The client that verifies tokens. Defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first
+         * request. Pass a client created with both `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0 or
+         * later, the first with a reliable audience check, to verify with another Clerk instance.
          */
-        clerkClient: ClerkOAuthClient | (() => Promise<ClerkOAuthClient>);
+        clerkClient?: ClerkOAuthClient | (() => Promise<ClerkOAuthClient>) | undefined;
         verifyToken?: never;
       })
     | CustomVerifierAuthOptions<Request>
   );
 
 const withMcpAuthCallForm =
-  'withMcpAuth(handler, { resourceUrl, clerkClient }), or as withMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
+  'withMcpAuth(handler, { resourceUrl }), or as withMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
 
 /**
  * Wraps a Next.js MCP route handler so that every request needs a valid bearer token. By default Clerk verifies the
@@ -165,21 +166,19 @@ const withMcpAuthCallForm =
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
  * needs, the `challengeScopes` the 401 challenge also asks for, either the `clerkClient` that verifies tokens or a
  * `verifyToken` function, and `onAuthFailure`, a synchronous notification with the reason for each request answered
- * with a challenge or a 421. `verifyToken` is called with the token and the request, and `resourceUrl` is optional
- * with it.
+ * with a challenge or a 421. `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first
+ * request. `verifyToken` is called with the token and the request, and `resourceUrl` is optional with it.
  * @returns The wrapped route handler. A missing or rejected token gets a 401 challenge, and a token without
  * `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler` reads it,
  * with `resourceMetadataUrl` added for the SDK's scope challenges. When Clerk cannot verify an opaque token at all,
  * the handler throws, so Next.js answers with a 500 instead of a challenge that would make the client discard a valid
- * token.
+ * token. Without a `clerkClient` option, every request throws a `Clerk error:` when `@clerk/nextjs` can't be loaded.
  * @example
  * ```ts
  * import { withMcpAuth } from "@clerk/mcp-tools/next";
- * import { clerkClient } from "@clerk/nextjs/server";
  *
  * const authHandler = withMcpAuth(handler, {
  *   resourceUrl: "https://mcp.example.com/mcp",
- *   clerkClient,
  *   requiredScopes: ["profile", "email"],
  * });
  *
@@ -210,9 +209,15 @@ export function withMcpAuth(
   );
   assertMcpAuthOptions('withMcpAuth', options);
 
-  const verifyToken = options.verifyToken ?? clerkVerifier(options);
+  const clerkClientFor = clerkClientResolver(options);
+  const verifyToken =
+    options.verifyToken ?? clerkTokenVerifier(options, clerkClientFor, (req: Request) => req.url);
 
   return async (req) => {
+    // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
+    // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
+    if (!options.verifyToken) await clerkClientFor();
+
     const result = await authenticateBearer({
       authorization: req.headers.get('authorization') ?? undefined,
       requestUrl: req.url,
@@ -243,17 +248,38 @@ export function withMcpAuth(
   };
 }
 
-// The verifier for the Clerk branch of the options, which checks the `clerkClient` option at startup
-function clerkVerifier(options: Extract<McpAuthOptions, { clerkClient: unknown }>) {
-  const { clerkClient } = options;
+/**
+ * Returns the Clerk client for the Clerk branch of the options: the `clerkClient` option, checked at startup, or
+ * `clerkClient` from `@clerk/nextjs/server`, loaded on the first request.
+ * @param options - `withMcpAuth`'s options. With `verifyToken`, `clerkClient` is never set and the result is unused.
+ * @returns A function that resolves the client for a request
+ */
+function clerkClientResolver({ clerkClient }: Pick<McpAuthOptions, 'clerkClient'>) {
+  if (clerkClient === undefined) return nextClerkClient;
   if (typeof clerkClient !== 'function' && typeof clerkClient?.authenticateRequest !== 'function') {
     throw new Error(
-      `Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a clerkClient option. Import clerkClient from '@clerk/nextjs/server' and call ${withMcpAuthCallForm}`,
+      `Clerk error: withMcpAuth from @clerk/mcp-tools/next takes a clerkClient with authenticateRequest, or a function that returns one. Omit clerkClient to use clerkClient from '@clerk/nextjs/server', or call it as ${withMcpAuthCallForm}`,
     );
   }
-  return clerkTokenVerifier(
-    options,
-    () => (typeof clerkClient === 'function' ? clerkClient() : clerkClient),
-    (req: Request) => req.url,
-  );
+  return async (): Promise<ClerkOAuthClient> =>
+    typeof clerkClient === 'function' ? clerkClient() : clerkClient;
+}
+
+/**
+ * `clerkClient()` from `@clerk/nextjs/server`. The package is an optional peer that only this path needs, so it is
+ * loaded with `import()` inside `try`: webpack and Turbopack fail the build on a bare reference to a package that
+ * isn't installed, but only warn on an `import()` inside `try`, and leave it to fail at run time.
+ * @returns The client. It throws a `Clerk error:` asking to install `@clerk/nextjs` when the package can't be loaded,
+ * with the load error as the `cause`.
+ */
+async function nextClerkClient(): Promise<ClerkOAuthClient> {
+  let nextjs: typeof import('@clerk/nextjs/server');
+  try {
+    nextjs = await import('@clerk/nextjs/server');
+  } catch (error) {
+    throw new Error('Clerk error: install @clerk/nextjs, or pass clerkClient to withMcpAuth', {
+      cause: error,
+    });
+  }
+  return nextjs.clerkClient();
 }

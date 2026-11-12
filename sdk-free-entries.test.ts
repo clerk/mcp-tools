@@ -67,14 +67,6 @@ describe('server entry points', () => {
     expect(sdkImports).toEqual([]);
   });
 
-  // `@clerk/nextjs` is an optional peer too, and webpack fails the build of an app without it on any reference to it,
-  // so `withMcpAuth` takes `clerkClient` from the app instead of importing it
-  test('next/index.ts does not import @clerk/nextjs', () => {
-    expect(
-      [...reachableSpecifiers('next/index.ts').keys()].filter((s) => s.startsWith('@clerk/nextjs')),
-    ).toEqual([]);
-  });
-
   test('the import scan finds the SDK where it is used', () => {
     expect([...reachableSpecifiers('client.ts').keys()]).toContain(
       '@modelcontextprotocol/sdk/client/index.js',
@@ -82,9 +74,10 @@ describe('server entry points', () => {
   });
 });
 
-// Every Clerk package is an optional peer of the Hono entry: an app that verifies tokens with `verifyToken` may have
-// none. So the entry only imports types from them, and loads `@clerk/backend` with `import()` inside `try` when it
-// builds a Clerk client from the environment, which a bundler leaves to fail at run time instead of failing the build.
+// Every Clerk package is an optional peer of the Hono and Next.js entries: an app that verifies tokens with
+// `verifyToken` may have none. So the entries only import types from them, and load their default client's package
+// (`@clerk/backend` in Hono, `@clerk/nextjs` in Next.js) with `import()` inside `try`, which webpack, Turbopack, and
+// esbuild leave to fail at run time with at most a warning, where a bare reference would fail the build.
 function runtimeClerkImports(entry: string) {
   const found: string[] = [];
   const seen = new Set<string>();
@@ -131,6 +124,10 @@ vi.mock('@clerk/backend', () => {
 describe('hono/index.ts without Clerk packages', () => {
   test('has no top-level runtime import from a Clerk package', () => {
     expect(runtimeClerkImports('hono/index.ts')).toEqual([]);
+  });
+
+  test('next/index.ts has no top-level runtime import from a Clerk package', () => {
+    expect(runtimeClerkImports('next/index.ts')).toEqual([]);
   });
 
   test('the runtime import scan finds a Clerk import where there is one', () => {
