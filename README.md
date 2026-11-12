@@ -138,6 +138,39 @@ server.registerTool(
 - `requireAdditionalScopes` throws a `Clerk error:` message when it is given no scopes or a scope that is not a valid OAuth scope token.
 - `createBrowserSessionTool` sets this option from its `requiredScopes` for you, and leaves it out when `requiredScopes` is empty.
 
+#### Public access: sign in only when needed
+
+By default every request without a token gets the `401` challenge, so an MCP client signs in before it can connect. `publicAccess` names what a request without a token may do instead. A client can then connect, list tools, and call the tools you list without an account, and it is asked to sign in the first time it reaches anything else. Claude calls this "Sign in when needed" for a custom connector.
+
+```ts
+const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  // Asked for in the 401, so the first sign-in covers the protected tools
+  challengeScopes: ['profile', 'email'],
+  publicAccess: {
+    methods: true,
+    tools: ['search_docs'],
+  },
+} satisfies McpAuthOptions;
+```
+
+Pass the same object to `mcpAuth` (`withMcpAuth` in Next.js) and to `protectedResourceMetadataHandler`, which ignores `publicAccess`.
+
+- `methods`: the protocol methods open without a token. `true` opens all of `initialize`, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`. A list opens only the ones it names. `initialize` covers the `notifications/initialized` notification that follows it. It never opens a call.
+- `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
+- `resources` and `prompts`: `true` opens `resources/read` and `prompts/get`.
+
+Nothing is open unless it is listed, and without `publicAccess` every request without a token still gets the `401`.
+
+- A request that carries a token is verified as usual, even for an open method, and a token that does not verify gets its `401`.
+- A `POST` without a token passes only when every JSON-RPC message in its body is open. A batch with one protected message, a body that is not sent as `application/json`, and a body over 1 MiB all get the `401`.
+- The `401` for a protected call is the usual challenge, with `resource_metadata` and the `scope` from `requiredScopes` and `challengeScopes`. It is sent before the MCP SDK runs, which is what makes a client start authorization. A tool cannot send it: the SDK turns an error from a tool into a `200` result, which no client treats as a reason to sign in.
+- A `GET` without a token gets a `405` when `methods` opens `initialize` or `server/discover`. MCP clients open a `GET` stream once they have connected, and a `401` there would start authorization before the client reached anything protected.
+- An open list method shows its whole list. With `tools/list` open, anyone can read the name, description, and input schema of every tool, the protected ones included.
+- A request that `publicAccess` lets through has no auth info, so a public tool cannot assume there is a user.
+- A protected tool still declares the scopes it needs with `requireAdditionalScopes`, as in [Step-up for your own tools](#step-up-for-your-own-tools), so that a token without them gets the `403` step-up.
+- A mistake in `publicAccess`, such as `tools/call` in `methods`, throws a `Clerk error:` at startup.
+
 #### Collecting feedback from agents
 
 Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `submitFeedbackTool` from `@clerk/mcp-tools/tools` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.

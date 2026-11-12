@@ -41,6 +41,7 @@
 - **Authorization server metadata errors.** `fetchAuthorizationServerMetadata`, and so `authorizationServerMetadataHandler`, now throws a `Clerk error:` when the Frontend API answers with a non-2xx status, instead of serving its error body as the metadata.
 - **Expired tokens.** A token whose `expiresAt` has passed now gets an `invalid_token` challenge, even when `verifyToken` returned its auth info.
 - **`@clerk/hono`.** The Hono adapter no longer uses `@clerk/hono`, and it is no longer a peer dependency. Without `clerkClient`, `mcpAuth` builds its own client and ignores one that `clerkMiddleware()` set.
+- **Hono `mcpAuth` variable.** `c.get('mcpAuth')` is now typed `AuthInfo | undefined`, because a request that `publicAccess` lets through has no auth info.
 - **Next.js Pages Router.** The Next.js handlers are App Router route handlers. The README no longer suggests they work from Pages Router API routes, which they never did.
 - **MCP SDK.** `@modelcontextprotocol/sdk` is now an optional peer dependency. The server entry points never import it. `./client` and `./next/client` require it at 1.29 or later in your own dependencies.
 
@@ -53,6 +54,7 @@
 ### New
 
 - `challengeScopes` adds scopes to the `401` challenge without requiring them. `requiredScopes` are listed too, and a token missing them gets a `403` `insufficient_scope` challenge.
+- `publicAccess` on `mcpAuth` and `withMcpAuth` names what a request without a token may do: `methods` (`true`, or a list of protocol and list methods), `tools` (tool names), `resources`, and `prompts`. A client can then connect and call the tools you list without signing in, and gets the `401` challenge when it reaches anything else. Nothing is open without it. With the handshake open, a `GET` without a token gets a `405` instead of the challenge, so a client does not start authorization by opening its stream. In Express, mount `express.json()` before `mcpAuth` to use it. The new `PublicAccess` and `McpPublicMethod` types are exported from `./server` and every adapter.
 - `resourceUrl` can be a list of URLs, one for each origin. A request to an origin that is not listed gets a `421`. `matchResourceUrl` applies the same rule in a route of your own.
 - Auth failures are reported for logging: in `res.locals.mcpAuthFailure` in Express, in `c.get('mcpAuthFailure')` in Hono, and through `onAuthFailure(failure, req)` in Next.js. `onAuthFailure` is a synchronous notification whose return value is ignored; schedule asynchronous logging with Next.js `after()` to keep it alive after the response without delaying the challenge.
 - In Hono, `mcpAuth({ resourceUrl })` works without `clerkMiddleware()`. It builds a client from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` through `env(c)`, which requires `@clerk/backend`.
