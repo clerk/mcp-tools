@@ -11,12 +11,16 @@ export {
   type CreateBrowserSessionOptions,
   type CreateBrowserSessionRequest,
   type CreateBrowserSessionTool,
+  type CreateBrowserSessionToolOptions,
   BrowserSessionError,
+  CREATE_BROWSER_SESSION_TOOL_NAME,
   browserSessionInstructions,
   createBrowserSession,
   createBrowserSessionTool,
 } from './create-browser-session';
 export {
+  type FeedbackImpact,
+  type FeedbackKind,
   type FeedbackOrigin,
   type FeedbackReport,
   type SubmitFeedbackOptions,
@@ -24,6 +28,7 @@ export {
   type SubmitFeedbackToolOptions,
   type SubmittedFeedback,
   FeedbackSubmissionError,
+  SUBMIT_FEEDBACK_TOOL_NAME,
   submitFeedback,
   submitFeedbackTool,
 } from './feedback';

@@ -29,7 +29,9 @@ const PINNED: Record<string, Surface> = {
   './tools': {
     values: [
       'BrowserSessionError',
+      'CREATE_BROWSER_SESSION_TOOL_NAME',
       'FeedbackSubmissionError',
+      'SUBMIT_FEEDBACK_TOOL_NAME',
       'browserSessionInstructions',
       'createBrowserSession',
       'createBrowserSessionTool',
@@ -42,6 +44,9 @@ const PINNED: Record<string, Surface> = {
       'CreateBrowserSessionOptions',
       'CreateBrowserSessionRequest',
       'CreateBrowserSessionTool',
+      'CreateBrowserSessionToolOptions',
+      'FeedbackImpact',
+      'FeedbackKind',
       'FeedbackOrigin',
       'FeedbackReport',
       'SubmitFeedbackOptions',

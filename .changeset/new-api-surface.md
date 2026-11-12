@@ -47,7 +47,7 @@
 ### Removed
 
 - `protectedResourceHandler`, the metadata handler for an authorization server other than Clerk. For another server, serve `generateProtectedResourceMetadata({ resourceUrl, authServerUrl })` from your own route.
-- The tool constants and schemas `SUBMIT_FEEDBACK_TOOL_NAME`, `SUBMIT_FEEDBACK_DESCRIPTION`, `submitFeedbackInputSchema`, `FEEDBACK_KINDS`, `FEEDBACK_IMPACTS`, `FeedbackToolExtra`, `CREATE_BROWSER_SESSION_TOOL_NAME`, `browserSessionInputSchema`, `browserSessionToolText`, `browserSessionErrorMessage`, and `validateBrowserSessionOptions`. Register a tool with `server.registerTool(...submitFeedbackTool({ secretKey }))`.
+- The tool schemas and helpers `SUBMIT_FEEDBACK_DESCRIPTION`, `submitFeedbackInputSchema`, `FEEDBACK_KINDS`, `FEEDBACK_IMPACTS`, `FeedbackToolExtra`, `browserSessionInputSchema`, `browserSessionToolText`, `browserSessionErrorMessage`, and `validateBrowserSessionOptions`. Register a tool with `server.registerTool(...submitFeedbackTool({ secretKey }))`, and customise it by overriding the config it returns and wrapping its callback. Use the `FeedbackKind` and `FeedbackImpact` types in place of `FEEDBACK_KINDS` and `FEEDBACK_IMPACTS`. `SUBMIT_FEEDBACK_TOOL_NAME` and `CREATE_BROWSER_SESSION_TOOL_NAME` are still exported.
 - The `main` field of `package.json`. Import a subpath.
 
 ### New
@@ -58,3 +58,6 @@
 - In Hono, `mcpAuth({ resourceUrl })` works without `clerkMiddleware()`. It builds a client from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` through `env(c)`, which requires `@clerk/backend`.
 - The auth info now carries `resourceMetadataUrl`, which MCP SDK 2 step-up challenges need.
 - New exports: `McpAuthError`, `McpTokenVerificationError`, and the `McpAuthOptions`, `ProtectedResourceMetadataOptions`, `McpResourceUrl`, `McpAuthFailure`, and `ClerkOAuthClient` types. `@clerk/mcp-tools/package.json` is importable.
+- `createBrowserSessionTool` takes `organizationId`, an ID or a function that returns one for each call from the verified auth info, run after the auth, scope, and path checks. Its options type is the new `CreateBrowserSessionToolOptions`.
+- `create_browser_session` error results carry the `BrowserSessionErrorCode` in `_meta['clerk.com/error_code']`, so a wrapper can tell failures apart without reading the text.
+- New `./tools` types: `FeedbackKind`, `FeedbackImpact`, and `CreateBrowserSessionToolOptions`. `FeedbackReport.kind` and `impact` are typed with them, and still accept other slugs.
