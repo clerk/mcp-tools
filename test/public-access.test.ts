@@ -1,0 +1,176 @@
+// End to end: the MCP SDK v1 client against a Hono server that uses `mcpAuth` with `publicAccess`, on MCP SDK 2.x.
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
+import { Hono } from 'hono';
+import { describe, expect, test, vi } from 'vitest';
+
+import { mcpAuth, requireAdditionalScopes, streamableHttpHandler } from '../hono';
+import type { AuthInfo } from '../mcp-types';
+import { textOf } from './mcp-harness';
+
+const ORIGIN = 'https://mcp.example.com';
+const MCP_URL = new URL('/mcp', ORIGIN);
+
+const TOKENS: Record<string, string[]> = {
+  token_profile_only: ['profile'],
+  token_full: ['profile', 'email'],
+};
+
+function verifyToken(token: string): AuthInfo | undefined {
+  const scopes = TOKENS[token];
+  return scopes && { token, clientId: 'client_1', scopes, extra: { userId: 'user_1' } };
+}
+
+function startServer() {
+  const toolCalls = vi.fn();
+  // Every answer the MCP endpoint gave, as `<method> <status>`
+  const answers: string[] = [];
+
+  const createServer = () => {
+    const server = new McpServer({ name: 'docs-server', version: '0.0.0' });
+    server.registerTool('search_docs', { description: 'Searches the public docs' }, async () => {
+      toolCalls('search_docs');
+      return { content: [{ type: 'text' as const, text: 'results' }] };
+    });
+    server.registerTool(
+      'get_primary_email',
+      {
+        description: "Returns the signed-in user's email",
+        scopeChallenge: requireAdditionalScopes('email'),
+      },
+      async (ctx) => {
+        toolCalls('get_primary_email');
+        const userId = String(ctx.http?.authInfo?.extra?.userId);
+        return { content: [{ type: 'text' as const, text: `email of ${userId}` }] };
+      },
+    );
+    return server;
+  };
+
+  const app = new Hono();
+  app.all(
+    '/mcp',
+    mcpAuth({
+      verifyToken,
+      resourceUrl: MCP_URL.href,
+      challengeScopes: ['profile', 'email'],
+      publicAccess: { methods: true, tools: ['search_docs'] },
+    }),
+    streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+  );
+
+  const fetchImpl = async (input: string | URL, init?: RequestInit) => {
+    const req = new Request(input, init);
+    const path = new URL(req.url).pathname;
+    if (path === '/.well-known/oauth-protected-resource/mcp') {
+      return Response.json({
+        resource: MCP_URL.href,
+        authorization_servers: [ORIGIN],
+        scopes_supported: ['profile', 'email'],
+      });
+    }
+    if (path === '/.well-known/oauth-authorization-server') {
+      return Response.json({
+        issuer: ORIGIN,
+        authorization_endpoint: `${ORIGIN}/authorize`,
+        token_endpoint: `${ORIGIN}/token`,
+        response_types_supported: ['code'],
+        code_challenge_methods_supported: ['S256'],
+      });
+    }
+    if (path !== '/mcp') return new Response('Not Found', { status: 404 });
+    const res = await app.fetch(req);
+    answers.push(`${req.method} ${res.status}`);
+    return res;
+  };
+
+  return { fetchImpl, toolCalls, answers };
+}
+
+// A client that holds `token`, or none. Authorization ends at the redirect, which it records.
+async function connect(token?: string) {
+  const { fetchImpl, toolCalls, answers } = startServer();
+  const redirects: URL[] = [];
+  const authProvider: OAuthClientProvider = {
+    redirectUrl: 'http://localhost/callback',
+    clientMetadata: { redirect_uris: ['http://localhost/callback'], client_name: 'e2e' },
+    clientInformation: () => ({ client_id: 'client_1' }),
+    tokens: () => (token ? { access_token: token, token_type: 'Bearer' } : undefined),
+    saveTokens: () => {},
+    redirectToAuthorization: (url) => {
+      redirects.push(url);
+    },
+    saveCodeVerifier: () => {},
+    codeVerifier: () => 'verifier',
+  };
+  const client = new Client({ name: 'e2e', version: '0.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(MCP_URL, { authProvider, fetch: fetchImpl }),
+  );
+  return { client, redirects, toolCalls, answers };
+}
+
+describe('a server with publicAccess', () => {
+  test('lets a client without a token connect, list tools, and call a public tool, without starting authorization', async () => {
+    const { client, redirects, toolCalls, answers } = await connect();
+
+    const { tools } = await client.listTools();
+    // The list is open, so it names the protected tool as well
+    expect(tools.map((tool) => tool.name)).toEqual(['search_docs', 'get_primary_email']);
+
+    const result = await client.callTool({ name: 'search_docs', arguments: {} });
+    expect(textOf(result)).toBe('results');
+    expect(toolCalls).toHaveBeenCalledWith('search_docs');
+
+    expect(redirects).toHaveLength(0);
+    expect(answers.filter((answer) => answer.endsWith(' 401'))).toEqual([]);
+  });
+
+  test('answers the stream a client opens after connecting with a 405, not a challenge', async () => {
+    const { redirects, answers } = await connect();
+
+    // The client opens the stream without waiting for it, so give it a turn
+    await vi.waitFor(() => expect(answers).toContain('GET 405'));
+    expect(redirects).toHaveLength(0);
+  });
+
+  test('starts authorization when the client reaches a protected tool', async () => {
+    const { client, redirects, toolCalls } = await connect();
+
+    await expect(
+      client.callTool({ name: 'get_primary_email', arguments: {} }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(redirects).toHaveLength(1);
+    expect(redirects[0]!.origin + redirects[0]!.pathname).toBe(`${ORIGIN}/authorize`);
+    // The 401 challenge's `scope`, so one sign-in covers the protected tools
+    expect(redirects[0]!.searchParams.get('scope')).toBe('profile email');
+    expect(redirects[0]!.searchParams.get('resource')).toBe(MCP_URL.href);
+    expect(toolCalls).not.toHaveBeenCalled();
+  });
+
+  test('steps up a token that lacks the scope of a protected tool', async () => {
+    const { client, redirects, toolCalls, answers } = await connect('token_profile_only');
+
+    await expect(
+      client.callTool({ name: 'get_primary_email', arguments: {} }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(answers).toContain('POST 403');
+    expect(redirects).toHaveLength(1);
+    expect(redirects[0]!.searchParams.get('scope')).toBe('profile email');
+    expect(toolCalls).not.toHaveBeenCalled();
+  });
+
+  test('runs a protected tool for a token with its scope', async () => {
+    const { client, redirects } = await connect('token_full');
+
+    const result = await client.callTool({ name: 'get_primary_email', arguments: {} });
+
+    expect(textOf(result)).toBe('email of user_1');
+    expect(redirects).toHaveLength(0);
+  });
+});
