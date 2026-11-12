@@ -86,6 +86,7 @@ Wraps a Next.js MCP route handler so that every request needs a valid bearer tok
 - `resourceUrl: string | string[]` - Required unless you pass `verifyToken`. The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. With `verifyToken` and without `resourceUrl`, the URL comes from the request. Pass the same value to the protected resource metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, so its `resource` is the URL checked here.
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
+- `publicAccess?: PublicAccess` - What a request without a token may do: `methods` (`true`, or a list of protocol methods), `tools` (tool names), `resources`, and `prompts`. Without it, every such request gets the `401`. See [Public access](#public-access).
 - `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient` from `@clerk/nextjs/server`, which reads `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`; it is loaded on the first request, so an app that only uses `verifyToken` builds without `@clerk/nextjs` installed. Without `@clerk/nextjs`, every request on the Clerk path throws a `Clerk error:` asking you to install it. Pass a client created with both `secretKey` and `publishableKey` to verify with another instance. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
 - `verifyToken?: (token: string, req: Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>` - A function that verifies the token in place of Clerk and returns the auth info, or `undefined` to reject it. Throw an `McpTokenVerificationError` to reject it with a reason. It is called with the token first and the request second, the reverse of the `(req, bearerToken)` verifier `mcp-handler`'s `withMcpAuth` takes, so swap the parameters of a verifier you move over.
 - `onAuthFailure?: (failure, req) => void` - Synchronously notifies why a request is about to be answered with a `401` or `403` challenge or a `421`, for example for logging. Return values are ignored; a returned promise is not awaited or kept alive after the response. `failure.reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`. For a token Clerk or `verifyToken` rejected with a reason, `failure.cause` is an `McpTokenVerificationError`, whose `code` is Clerk's reason and whose `message` says which check failed. The Express and Hono adapters record the same value on the request context instead.
@@ -119,6 +120,19 @@ const authHandler = withMcpAuth(handler, {
   requiredScopes: ['read'],
 });
 ```
+
+### Public access
+
+`publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected. Add it to the options `withMcpAuth` takes:
+
+```ts
+export const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  publicAccess: { methods: true, tools: ['search_docs'] },
+} satisfies McpAuthOptions;
+```
+
+The route handler gets no `req.auth` for a request that `publicAccess` let through. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
 
 ### Building an MCP Client
 

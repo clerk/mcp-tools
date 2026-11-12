@@ -131,6 +131,7 @@ Middleware that enforces authentication for MCP requests. Extracts the bearer to
 - `resourceUrl`: the exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. Required unless you pass `verifyToken`. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge, with `c.get('mcpAuthFailure')` set to `misdirected_request`. Under Clerk verification that URL is the audience, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/hono`. The challenge's `resource_metadata` is derived from it. The request's origin comes from `c.req.url`, so behind a proxy that terminates TLS or rewrites `Host`, as with Node.js behind nginx, a listed URL can fail to match and every request gets a `421`: list the URLs the app itself sees, or rebuild the request URL from `X-Forwarded-*` headers you trust before this middleware. With `verifyToken` and without `resourceUrl`, the URL comes from the request, which can differ from the public URL behind a proxy. Pass the same value to the metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, so its `resource` is the URL checked here, or build the route with `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono`, passing the same URL as its `resourceUrl`.
 - `requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by the missing ones, so the new grant keeps the old access. The `401` challenge lists them in its `scope`.
 - `challengeScopes`: more scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
+- `publicAccess` (optional): what a request without a token may do: `methods` (`true`, or a list of protocol methods), `tools` (tool names), `resources`, and `prompts`. Without it, every such request gets the `401`. See [Public access](#public-access).
 - `clerkClient` (optional): the Clerk client that verifies tokens. Without it, `mcpAuth` builds one with `createClerkClient` from `@clerk/backend`, from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through Hono's `env(c)`, so it works on Cloudflare Workers, where they are only on `c.env`. It keeps that client for later requests with the same keys. A missing variable throws a `Clerk error:` that names it, and a missing `@clerk/backend` throws a `Clerk error:` asking you to install it or pass `clerkClient`. `clerkMiddleware()` also verifies the token, so keep it off the MCP route, or each token is verified twice. A client you pass must come from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
 - `verifyToken` (optional): `(token: string, c: Context) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
 
@@ -150,6 +151,23 @@ app.onError((err, c) => {
 ```
 
 Your Clerk instance must issue the `aud` claim. Require `@clerk/backend` 3.19.0 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
+
+### Public access
+
+`publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected.
+
+```ts
+app.post(
+  '/mcp',
+  mcpAuth({
+    resourceUrl: 'https://mcp.example.com/mcp',
+    publicAccess: { methods: true, tools: ['search_docs'] },
+  }),
+  streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+);
+```
+
+`c.get('mcpAuth')` is `undefined` for a request that `publicAccess` let through, and its type is `AuthInfo | undefined`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
 
 ### `protectedResourceMetadataHandler(options?)`
 
