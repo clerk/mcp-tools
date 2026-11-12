@@ -18,8 +18,12 @@ import {
   toolResult,
 } from './mcp-tool';
 import { assertScopeTokens, missingScopes, requireAdditionalScopes } from './scope-challenge';
-import { isClerkAuthInfo } from './server';
+import { type ClerkAuthInfo, isClerkAuthInfo } from './server';
 
+/**
+ * The name `createBrowserSessionTool` registers the tool under. Use it to allowlist the tool or name it in server
+ * instructions before the tool is built.
+ */
 export const CREATE_BROWSER_SESSION_TOOL_NAME = 'create_browser_session';
 
 const DEFAULT_TASK_DESCRIPTION = 'Signed-in browser session requested through MCP';
@@ -53,6 +57,18 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
    * unless Clerk confirms the restriction in its response.
    */
   restricted?: boolean;
+};
+
+/**
+ * Options for `createBrowserSessionTool`: the `createBrowserSession` options, plus the organization each link starts in.
+ */
+export type CreateBrowserSessionToolOptions = CreateBrowserSessionOptions & {
+  /**
+   * Organization the session starts in, as `CreateBrowserSessionRequest.organizationId`: an ID, or a function that
+   * returns one for each call from the request's verified auth info, after the auth and scope checks pass. Return
+   * `undefined` to leave it to Clerk. When the function throws, the tool answers with its generic error.
+   */
+  organizationId?: string | ((authInfo: ClerkAuthInfo) => Promise<string | undefined>);
 };
 
 /**
@@ -385,9 +401,12 @@ export async function createBrowserSession(
   return requestBrowserSession(request, resolveBrowserSessionConfig(options));
 }
 
-// Throws a BrowserSessionError. Nothing reaches the log here: the tool callback logs `error.detail`.
+// Throws a BrowserSessionError, or what an `organizationId` function throws. Nothing reaches the log here: the tool
+// callback logs `error.detail`.
 async function requestBrowserSession(
-  request: CreateBrowserSessionRequest,
+  request: Omit<CreateBrowserSessionRequest, 'organizationId'> & {
+    organizationId?: CreateBrowserSessionToolOptions['organizationId'];
+  },
   config: BrowserSessionConfig,
 ): Promise<BrowserSession> {
   const { authInfo } = request;
@@ -399,14 +418,19 @@ async function requestBrowserSession(
   }
 
   const redirectUrl = resolveRedirectUrl(config.destination, request.path);
+  // Resolved after the checks, so a refused request never runs the caller's lookup.
+  const organizationId =
+    typeof request.organizationId === 'function'
+      ? await request.organizationId(authInfo)
+      : request.organizationId;
   const agentName =
     config.agentName?.trim() || (authInfo.clientId ? `mcp:${authInfo.clientId}` : 'mcp');
   const body = {
     on_behalf_of: { user_id: authInfo.extra.userId },
     permissions: '*',
     session_restricted: config.restricted,
-    ...(request.organizationId !== undefined && {
-      session_organization_id: request.organizationId,
+    ...(organizationId !== undefined && {
+      session_organization_id: organizationId,
     }),
     agent_name: agentName,
     task_description: request.taskDescription?.trim() || DEFAULT_TASK_DESCRIPTION,
@@ -437,8 +461,7 @@ async function requestBrowserSession(
   const validId = IDENTIFIER_PATTERN.test(agentTaskId);
   const unconfirmed =
     (config.restricted && result.data.session_restricted !== true) ||
-    (request.organizationId !== undefined &&
-      result.data.session_organization_id !== request.organizationId);
+    (organizationId !== undefined && result.data.session_organization_id !== organizationId);
   if (unconfirmed) {
     // An id that is not an identifier is never logged. It is still revoked when it is a safe path segment. Otherwise
     // nothing safely names the task, so it is left to expire: the link is never returned or logged, and it works once,
@@ -540,13 +563,25 @@ const warnStepUpUnsupported = once(() =>
 );
 
 /**
- * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`.
+ * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`,
+ * or override parts of the returned config and wrap the callback to customise it. A failure the tool can name returns
+ * an error result whose `_meta['clerk.com/error_code']` is the `BrowserSessionErrorCode`.
  * Throws when the options cannot work.
  */
 export function createBrowserSessionTool(
-  options: CreateBrowserSessionOptions,
+  options: CreateBrowserSessionToolOptions,
 ): CreateBrowserSessionTool {
   const config = resolveBrowserSessionConfig(options);
+  const { organizationId } = options;
+  if (
+    organizationId !== undefined &&
+    typeof organizationId !== 'string' &&
+    typeof organizationId !== 'function'
+  ) {
+    throw new Error(
+      'Clerk error: createBrowserSessionTool organizationId must be a string or a function that returns one',
+    );
+  }
   const callback: CreateBrowserSessionTool[2] = async (input, extra) => {
     try {
       const link = await requestBrowserSession(
@@ -554,6 +589,7 @@ export function createBrowserSessionTool(
           authInfo: toolAuthInfo(extra),
           path: input.path,
           taskDescription: input.task_description,
+          organizationId,
         },
         config,
       );
@@ -569,7 +605,7 @@ export function createBrowserSessionTool(
         console.error(
           `Clerk error: createBrowserSession failed (${error.code}${error.detail ? `: ${error.detail}` : ''})`,
         );
-        return toolError(browserSessionErrorMessage(error));
+        return toolError(browserSessionErrorMessage(error), error.code);
       }
       // Not the message or stack: they could carry the link or the key.
       console.error(

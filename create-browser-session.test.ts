@@ -14,6 +14,7 @@ import {
   createBrowserSessionTool,
   browserSessionInstructions,
   type CreateBrowserSessionOptions,
+  type CreateBrowserSessionToolOptions,
 } from './tools';
 import { connectTool, sentBody, textOf } from './test/mcp-harness';
 
@@ -961,6 +962,93 @@ describe('createBrowserSessionTool', () => {
     expect(() => createBrowserSessionTool(options(okFetch(), { secretKey: ' ' }))).toThrow(
       'Clerk error:',
     );
+  });
+
+  test('names the error code in _meta', async () => {
+    const client = await connect(okFetch(), authInfo, { requiredScopes: ['sign_in_link'] });
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(result._meta).toEqual({ 'clerk.com/error_code': 'insufficient_scope' });
+  });
+
+  test('leaves the error code out of an unexpected error', async () => {
+    const client = await connect(vi.fn<typeof fetch>(async () => undefined as never));
+    const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(result._meta).toBeUndefined();
+  });
+
+  describe('organizationId', () => {
+    function connectWithOrg(
+      fetchImpl: typeof fetch,
+      organizationId: CreateBrowserSessionToolOptions['organizationId'],
+      auth: AuthInfo | null = authInfo,
+    ) {
+      return connectTool(
+        (server) =>
+          server.registerTool(
+            ...createBrowserSessionTool({ ...options(fetchImpl), organizationId }),
+          ),
+        { authInfo: auth ?? undefined },
+      );
+    }
+
+    test('sends a fixed organization', async () => {
+      const fetchImpl = okFetch({ session_organization_id: 'org_1' });
+      const client = await connectWithOrg(fetchImpl, 'org_1');
+      const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+      expect(result.isError).toBeFalsy();
+      expect(sentBody(fetchImpl).session_organization_id).toBe('org_1');
+    });
+
+    test('resolves the organization per call from the verified auth info', async () => {
+      const fetchImpl = okFetch({ session_organization_id: 'org_user_1' });
+      const resolve = vi.fn(
+        async (info: { extra: { userId: string } }) => `org_${info.extra.userId}`,
+      );
+      const client = await connectWithOrg(fetchImpl, resolve);
+      const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+      expect(result.isError).toBeFalsy();
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(sentBody(fetchImpl).session_organization_id).toBe('org_user_1');
+    });
+
+    test('leaves the organization to Clerk when the function returns undefined', async () => {
+      const fetchImpl = okFetch();
+      const client = await connectWithOrg(fetchImpl, async () => undefined);
+      await client.callTool({ name: 'create_browser_session', arguments: {} });
+      expect(sentBody(fetchImpl)).not.toHaveProperty('session_organization_id');
+    });
+
+    test('does not call the function for a refused request', async () => {
+      const fetchImpl = okFetch();
+      const resolve = vi.fn(async () => 'org_1');
+      const client = await connectWithOrg(fetchImpl, resolve, null);
+      const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test('answers with the generic error when the function throws', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const fetchImpl = okFetch();
+      const client = await connectWithOrg(fetchImpl, async () => {
+        throw new Error('lookup failed');
+      });
+      const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe(
+        'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test('refuses a value that is neither a string nor a function when built', () => {
+      expect(() =>
+        createBrowserSessionTool({ ...options(okFetch()), organizationId: 42 as never }),
+      ).toThrow('Clerk error: createBrowserSessionTool organizationId');
+    });
   });
 });
 

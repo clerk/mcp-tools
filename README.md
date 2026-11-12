@@ -157,7 +157,7 @@ function createServer() {
 The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/sdk` 1.x (`McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`) and `@modelcontextprotocol/server` 2.x (`McpServer` from `@modelcontextprotocol/server`). The registration line is the same. With SDK 2.x, install `zod` 4 (SDK 2.x requires it), so the tool's input schema type-checks against `registerTool`.
 
 - `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `submitFeedbackTool` throws if it's empty, so a missing environment variable fails at startup.
-- Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`), how the task ended, and what they tried and what went wrong.
+- Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`, the `FeedbackKind` type), how the task ended (`FeedbackImpact`), and what they tried and what went wrong. `SUBMIT_FEEDBACK_TOOL_NAME` names the tool before it is built.
 - Each report names your server as its source: the request's host by default, or pass `server: { name, version }` to label it yourself.
 - Each report names the agent from the client info its MCP client sends with the request, or otherwise from the HTTP `User-Agent` header. Generic HTTP libraries and browsers (such as `node` or `Mozilla`) aren't used as names, and clients that identify themselves only when they connect (common over stdio) appear without a name.
 - When the request's auth info came from `toClerkAuthInfo` (for example through `mcpAuth` in the Express and Hono adapters or `withMcpAuth` from `@clerk/mcp-tools/next`, without `verifyToken`), the signed-in user's ID and the OAuth client ID are attached to each report. `toClerkAuthInfo` marks its result with `extra.verifiedBy: 'clerk'` (check it with `isClerkAuthInfo` from `@clerk/mcp-tools/server`); identity from any other verifier is not sent.
@@ -261,6 +261,22 @@ export { handler as GET, handler as POST, handler as DELETE };
 - The link is a bearer credential: anyone who has it before it is used or expires can sign in as the user. The tool never puts it in error messages, but its text result contains the link so that the agent can open it. Never log it, and treat MCP client and gateway logs of tool results as credentials.
 - `restricted` (default `true`) limits the session the link starts. Clerk's Frontend API refuses these writes from that session: touch, switching the active session or organization, sign-out, writes to the user's own profile and organizations, reverification, and OAuth consent and approval. The one exception is refreshing its own session token. Clerk enforces this restriction, not your app's own backend: your backend sees an ordinary signed-in session unless it checks for an agent session itself. Pass `restricted: false` for an ordinary session. When Clerk does not confirm the restriction in its response, for example on a Clerk Backend API that does not support it yet, the tool revokes the new session link on a best-effort basis, refuses to return it, and fails with the error code `restricted_not_applied`. The log line names the `agent_task_id` when it is a well-formed ID. A malformed ID is never logged. It is still revoked when it can safely go in the revoke request's path; otherwise the log line says `revoke_skipped`, and the unused link expires on its own.
 - Optional settings: `sessionMaxDurationInSeconds` sets the maximum length, in seconds, of the session the link starts. Clerk's default is 30 minutes, and a larger value makes the session longer. `agentName`, `apiUrl`, and `fetch` are also available. Requests to Clerk time out after 10 seconds.
+- `organizationId` sets the organization each link starts in, as described for `createBrowserSession` below. Pass an ID, or a function that returns one for each call from the request's verified auth info, such as the workspace the user connected. The function runs only after the auth, scope, and path checks pass. Return `undefined` to leave the organization to Clerk. When it throws, the tool answers with its generic error.
+- To customise the tool, override parts of the config it returns instead of building your own, and wrap its callback to add logging. When the tool fails for a reason it can name, its error result carries the `BrowserSessionErrorCode` in `_meta['clerk.com/error_code']`, so a wrapper can tell, for example, `rate_limited` from `invalid_path` without reading the text. Use `CREATE_BROWSER_SESSION_TOOL_NAME` to allowlist the tool or name it before it is built.
+
+  ```ts
+  const [name, config, callback] = createBrowserSessionTool(options);
+  server.registerTool(
+    name,
+    { ...config, description: `${config.description} ${READ_ONLY_NOTE}` },
+    async (input, extra) => {
+      const result = await callback(input, extra);
+      if (result.isError) log(name, result._meta?.['clerk.com/error_code']);
+      return result;
+    },
+  );
+  ```
+
 - To create a link outside of an MCP tool, use `createBrowserSession({ authInfo, path, taskDescription, organizationId }, options)` from `@clerk/mcp-tools/tools`. It resolves to `{ url, agentTaskId, redirectUrl }`. `organizationId` is optional and sets the organization the session starts in. With `restricted`, it is also the only organization the session can use. Without it, Clerk uses the user's last active organization. When you pass it, the link is refused with `restricted_not_applied` unless Clerk confirms that organization, and it fails with `organization_rejected` when the user does not belong to the organization, or when the instance requires one and none applies. It rejects with a `Clerk error:` message when the options cannot work. When it rejects with a `BrowserSessionError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`, or `restricted_not_applied`).
 - The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs; with SDK 2.x, install `zod` 4.
 

@@ -17,11 +17,25 @@ import {
 } from './mcp-tool';
 import { isClerkAuthInfo } from './server';
 
+/**
+ * The name `submitFeedbackTool` registers the tool under. Use it to allowlist the tool or name it in server
+ * instructions before the tool is built.
+ */
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
 export const FEEDBACK_KINDS = ['missing', 'broken', 'confusing', 'idea'] as const;
 
 export const FEEDBACK_IMPACTS = ['blocked', 'worked_around', 'friction'] as const;
+
+/**
+ * What sort of problem a report describes: the `kind` values the feedback tool accepts.
+ */
+export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];
+
+/**
+ * How much the problem affected the task: the `impact` values the feedback tool accepts.
+ */
+export type FeedbackImpact = (typeof FEEDBACK_IMPACTS)[number];
 
 export const SUBMIT_FEEDBACK_DESCRIPTION = [
   'Report a problem you ran into while doing a task for the user, so the team that runs this MCP server can fix it.',
@@ -91,11 +105,11 @@ export type FeedbackOrigin = { type: string; name?: string; version?: string };
  */
 export type FeedbackReport = {
   /** Known values: missing, broken, confusing, idea. Other lowercase slugs are stored as-is. */
-  kind: string;
+  kind: FeedbackKind | (string & {});
   task: string;
   description: string;
   /** Known values: blocked, worked_around, friction. Other lowercase slugs are stored as-is. */
-  impact?: string;
+  impact?: FeedbackImpact | (string & {});
   operation?: string;
   error?: string;
   suggestion?: string;

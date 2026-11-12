@@ -57,13 +57,21 @@ export type McpToolTuple<
     content: { type: 'text'; text: string }[];
     structuredContent?: z.infer<z.ZodObject<OutputSchema>>;
     isError?: boolean;
+    _meta?: Record<string, unknown>;
   }>,
 ];
+
+/** The `_meta` key of a tool error result that holds the error's code, for wrappers that log or route on it. */
+export const ERROR_CODE_META_KEY = 'clerk.com/error_code';
 
 export function toolResult<T extends Record<string, unknown>>(text: string, structuredContent: T) {
   return { content: [{ type: 'text' as const, text }], structuredContent };
 }
 
-export function toolError(text: string) {
-  return { isError: true, content: [{ type: 'text' as const, text }] };
+export function toolError(text: string, code?: string) {
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text }],
+    ...(code !== undefined && { _meta: { [ERROR_CODE_META_KEY]: code } }),
+  };
 }
