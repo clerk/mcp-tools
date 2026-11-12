@@ -22,8 +22,7 @@ describe('the clerkClient option', () => {
     nextWithMcpAuth(handler, { resourceUrl, clerkClient: nextClerkClient });
   });
 
-  test('is required in the Next.js adapter', () => {
-    // @ts-expect-error no clerkClient
+  test('is optional in the Next.js adapter', () => {
     nextWithMcpAuth(handler, { resourceUrl });
   });
 

@@ -83,8 +83,7 @@ describe('the mcpAuth options', () => {
     nextWithMcpAuth(handler, { clerkClient });
   });
 
-  test('require a clerkClient in Next.js without verifyToken', () => {
-    // @ts-expect-error no clerkClient or verifyToken
+  test('accept Clerk verification without a clerkClient in Next.js', () => {
     nextWithMcpAuth(handler, { resourceUrl });
   });
 

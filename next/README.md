@@ -31,11 +31,9 @@ The MCP endpoint and its metadata live in separate route files, so export their 
 ```ts
 // lib/mcp.ts
 import type { McpAuthOptions } from '@clerk/mcp-tools/next';
-import { clerkClient } from '@clerk/nextjs/server';
 
 export const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
-  clerkClient,
   requiredScopes: ['profile', 'email'],
 } satisfies McpAuthOptions;
 ```
@@ -81,14 +79,14 @@ export { authHandler as GET, authHandler as POST };
 
 ### `withMcpAuth(handler, options)`
 
-Wraps a Next.js MCP route handler so that every request needs a valid bearer token. By default Clerk verifies the OAuth access token, including that its `aud` claim includes `resourceUrl`. Pass `verifyToken` to verify tokens with your own function instead. It takes the same options as `mcpAuth` in the Express and Hono adapters, except that `clerkClient` is required without `verifyToken`.
+Wraps a Next.js MCP route handler so that every request needs a valid bearer token. By default Clerk verifies the OAuth access token, including that its `aud` claim includes `resourceUrl`. Pass `verifyToken` to verify tokens with your own function instead. It takes the same options as `mcpAuth` in the Express and Hono adapters, plus `onAuthFailure`.
 
 **Options:**
 
 - `resourceUrl: string | string[]` - Required unless you pass `verifyToken`. The exact URL clients use for this endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one for each origin, for a server that answers on several hostnames. With a list, a request uses the URL with its origin as the audience, so a token issued for one listed URL doesn't pass on another, and a request to any other origin gets a `421 Misdirected Request`. The request's origin comes from `req.url`. On Vercel that is the public URL, but a self-hosted app behind a proxy that terminates TLS or rewrites `Host` can see another origin, and then every request gets a `421`: list the URLs the app itself sees. With `verifyToken` and without `resourceUrl`, the URL comes from the request. Pass the same value to the protected resource metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, so its `resource` is the URL checked here.
 - `requiredScopes?: string[]` - The scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes?: string[]` - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
-- `clerkClient` - The client that verifies tokens: `clerkClient` from `@clerk/nextjs/server`, or a client created with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. It is an option rather than an import of this package so that the rest of `@clerk/mcp-tools/next` builds without `@clerk/nextjs`: Next.js fails the build on any reference to a package that isn't installed. Required without `verifyToken`, and not allowed together with it.
+- `clerkClient?` - The client that verifies tokens. Defaults to `clerkClient` from `@clerk/nextjs/server`, which reads `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`; it is loaded on the first request, so an app that only uses `verifyToken` builds without `@clerk/nextjs` installed. Without `@clerk/nextjs`, every request on the Clerk path throws a `Clerk error:` asking you to install it. Pass a client created with both `secretKey` and `publishableKey` to verify with another instance. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
 - `verifyToken?: (token: string, req: Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>` - A function that verifies the token in place of Clerk and returns the auth info, or `undefined` to reject it. Throw an `McpTokenVerificationError` to reject it with a reason. It is called with the token first and the request second, the reverse of the `(req, bearerToken)` verifier `mcp-handler`'s `withMcpAuth` takes, so swap the parameters of a verifier you move over.
 - `onAuthFailure?: (failure, req) => void` - Synchronously notifies why a request is about to be answered with a `401` or `403` challenge or a `421`, for example for logging. Return values are ignored; a returned promise is not awaited or kept alive after the response. `failure.reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`. For a token Clerk or `verifyToken` rejected with a reason, `failure.cause` is an `McpTokenVerificationError`, whose `code` is Clerk's reason and whose `message` says which check failed. The Express and Hono adapters record the same value on the request context instead.
 

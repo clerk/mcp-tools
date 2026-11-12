@@ -6,6 +6,10 @@ const defaultAuthenticateRequest = vi.fn();
 // The shape of `clerkClient` from `@clerk/nextjs/server`: an async function that returns the client
 const clerkClient = async () => ({ authenticateRequest: defaultAuthenticateRequest });
 
+// The default client, which `withMcpAuth` loads with `import()` when there is no `clerkClient` option
+const nextClerkClient = vi.hoisted(() => vi.fn());
+vi.mock('@clerk/nextjs/server', () => ({ clerkClient: nextClerkClient }));
+
 import {
   McpAuthError,
   type McpAuthFailure,
@@ -313,7 +317,7 @@ describe('withMcpAuth with Clerk', () => {
 
   test("throws a Clerk error for mcp-handler's call form, with a verifier function", () => {
     const callForm = () => withMcpAuth(echoAuth, (async () => undefined) as never);
-    expect(callForm).toThrow('withMcpAuth(handler, { resourceUrl, clerkClient })');
+    expect(callForm).toThrow('withMcpAuth(handler, { resourceUrl })');
     expect(callForm).toThrow('withMcpAuth(handler, { verifyToken })');
   });
 
@@ -475,11 +479,71 @@ describe('withMcpAuth with Clerk', () => {
     expect(defaultAuthenticateRequest).not.toHaveBeenCalled();
   });
 
-  test('throws at setup without a clerkClient, naming the import', () => {
-    expect(() => withMcpAuth(echoAuth, { resourceUrl } as never)).toThrow(
-      "Import clerkClient from '@clerk/nextjs/server'",
+  test('verifies with clerkClient from @clerk/nextjs/server without a clerkClient option', async () => {
+    const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
+    nextClerkClient.mockResolvedValue({ authenticateRequest });
+
+    const res = await withMcpAuth(echoAuth, { resourceUrl })(request('Bearer token-1'));
+
+    expect(res.status).toBe(200);
+    expect(nextClerkClient).toHaveBeenCalled();
+    expect(authenticateRequest).toHaveBeenCalledOnce();
+    expect(defaultAuthenticateRequest).not.toHaveBeenCalled();
+  });
+
+  test('prefers the clerkClient option over the one from @clerk/nextjs/server', async () => {
+    nextClerkClient.mockClear();
+    defaultAuthenticateRequest.mockResolvedValue(authenticated([]));
+
+    const res = await withMcpAuth(echoAuth, { resourceUrl, clerkClient })(
+      request('Bearer token-1'),
+    );
+
+    expect(res.status).toBe(200);
+    expect(nextClerkClient).not.toHaveBeenCalled();
+  });
+
+  test('throws at setup for a clerkClient without authenticateRequest', () => {
+    expect(() => withMcpAuth(echoAuth, { resourceUrl, clerkClient: {} as never })).toThrow(
+      "Omit clerkClient to use clerkClient from '@clerk/nextjs/server'",
     );
   });
+
+  // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives
+  test.each([
+    ['with a token', 'Bearer token-1'],
+    ['without a token', undefined],
+  ])(
+    'throws a Clerk error asking to install @clerk/nextjs %s when it cannot be loaded',
+    async (_case, authorization) => {
+      const loadError = new Error('Cannot find package @clerk/nextjs');
+      vi.resetModules();
+      vi.doMock('@clerk/nextjs/server', () => {
+        throw loadError;
+      });
+      try {
+        const { withMcpAuth: freshWithMcpAuth, McpAuthError: FreshMcpAuthError } =
+          await import('./index');
+
+        const error = await freshWithMcpAuth(echoAuth, { resourceUrl })(
+          request(authorization),
+        ).catch((err: unknown) => err);
+
+        expect(error).not.toBeInstanceOf(FreshMcpAuthError);
+        expect((error as Error).message).toBe(
+          'Clerk error: install @clerk/nextjs, or pass clerkClient to withMcpAuth',
+        );
+        // Vitest wraps an error thrown by a mock factory in its own, with the original as that error's cause
+        const { cause } = error as Error;
+        expect(cause).toBeInstanceOf(Error);
+        expect((cause as Error).cause).toBe(loadError);
+      } finally {
+        // Back to the mock the other tests use, which later imports of `@clerk/nextjs/server` load again
+        vi.doMock('@clerk/nextjs/server', () => ({ clerkClient: nextClerkClient }));
+        vi.resetModules();
+      }
+    },
+  );
 
   test('passes the verified auth info to tools in an mcp-handler route', async () => {
     defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
