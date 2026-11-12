@@ -691,7 +691,11 @@ describe('assertPublicAccess', () => {
 
 describe('readJsonBody', () => {
   const post = (body: BodyInit, headers: Record<string, string> = {}) =>
-    new Request('https://mcp.example.com/mcp', { method: 'POST', body, headers });
+    new Request('https://mcp.example.com/mcp', {
+      method: 'POST',
+      body,
+      headers: { 'content-type': 'application/json', ...headers },
+    });
 
   test('parses the body and leaves the request readable', async () => {
     const request = post('{"jsonrpc":"2.0","id":1,"method":"ping"}');
@@ -702,6 +706,7 @@ describe('readJsonBody', () => {
   test.each([
     ['a body that is not JSON', post('initialize')],
     ['an empty body', post('')],
+    ['JSON sent as text/plain', post('{"method":"ping"}', { 'content-type': 'text/plain' })],
     ['a request without a body', new Request('https://mcp.example.com/mcp')],
   ])('returns undefined for %s', async (_label, request) => {
     await expect(readJsonBody(request)).resolves.toBeUndefined();
@@ -723,6 +728,7 @@ describe('readJsonBody', () => {
     });
     const request = new Request('https://mcp.example.com/mcp', {
       method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
       body: stream,
       // @ts-expect-error - Node needs `duplex` for a stream body, and the DOM types do not have it
       duplex: 'half',

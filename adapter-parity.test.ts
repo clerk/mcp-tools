@@ -565,3 +565,275 @@ describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) =
     );
   });
 });
+
+// `publicAccess`: what a request without a token may reach, and what it gets when it may not
+type PublicAccessOptions = {
+  publicAccess?: nextAdapter.PublicAccess | undefined;
+  challengeScopes?: readonly string[] | undefined;
+};
+
+type PublicAccessInit = {
+  method?: string;
+  authorization?: string;
+  body?: unknown;
+  contentType?: string;
+};
+
+/** What the route behind the auth saw, when the request reached it. */
+type Reached = { reached: true; auth: AuthInfo | null; body: unknown };
+
+type SendPublic = (
+  options: PublicAccessOptions,
+  init?: PublicAccessInit,
+) => Promise<{ status: number; challenge: string | null; allow: string | null; body: unknown }>;
+
+const TOKENS: Record<string, AuthInfo> = {
+  'token-1': { token: 'token-1', clientId: 'client-1', scopes: ['profile'] },
+};
+const verifyToken = (token: string) => TOKENS[token];
+
+function publicRequestInit({
+  method = 'POST',
+  authorization,
+  body,
+  contentType,
+}: PublicAccessInit) {
+  return {
+    method,
+    headers: {
+      ...(body !== undefined && { 'content-type': contentType ?? 'application/json' }),
+      ...(authorization && { authorization }),
+    },
+    ...(body !== undefined && { body: typeof body === 'string' ? body : JSON.stringify(body) }),
+  };
+}
+
+async function publicAnswer(res: Response) {
+  return {
+    status: res.status,
+    challenge: res.headers.get('WWW-Authenticate'),
+    allow: res.headers.get('Allow'),
+    body: await res.json(),
+  };
+}
+
+const publicAccessRoutes: [string, SendPublic][] = [
+  [
+    'express',
+    async (options, init = {}) => {
+      const app = express();
+      app.use(express.json());
+      app.all('/mcp', expressAdapter.mcpAuth({ verifyToken, ...options }), (req, res) => {
+        res.json({
+          reached: true,
+          auth: (req as express.Request & { auth?: AuthInfo }).auth ?? null,
+          body: req.body ?? null,
+        } satisfies Reached);
+      });
+      const server: Server = await new Promise((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s));
+      });
+      try {
+        const { port } = server.address() as AddressInfo;
+        return await publicAnswer(
+          await fetch(`http://127.0.0.1:${port}/mcp`, {
+            ...publicRequestInit(init),
+            signal: AbortSignal.timeout(2000),
+          }),
+        );
+      } finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+  ],
+  [
+    'hono',
+    async (options, init = {}) => {
+      const app = new Hono();
+      app.all('/mcp', honoAdapter.mcpAuth({ verifyToken, ...options }), async (c) =>
+        c.json({
+          reached: true,
+          auth: c.get('mcpAuth') ?? null,
+          // Read after the middleware, as the MCP transport does
+          body: await c.req.json().catch(() => null),
+        } satisfies Reached),
+      );
+      return publicAnswer(await app.request(`${origin}/mcp`, publicRequestInit(init)));
+    },
+  ],
+  [
+    'next',
+    async (options, init = {}) => {
+      const handler = nextAdapter.withMcpAuth(
+        async (req) =>
+          Response.json({
+            reached: true,
+            auth: (req as Request & { auth?: AuthInfo }).auth ?? null,
+            body: await req.json().catch(() => null),
+          } satisfies Reached),
+        { verifyToken, ...options },
+      );
+      return publicAnswer(await handler(new Request(`${origin}/mcp`, publicRequestInit(init))));
+    },
+  ],
+];
+
+const rpc = (method: string, params?: Record<string, unknown>) => ({
+  jsonrpc: '2.0',
+  id: 1,
+  method,
+  ...(params && { params }),
+});
+
+describe.each(publicAccessRoutes)('%s publicAccess', (_name, send) => {
+  const publicAccess = { methods: true, tools: ['search_docs'] } as const;
+
+  test('without it, a request without a token gets the 401', async () => {
+    const res = await send({}, { body: rpc('initialize') });
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+  });
+
+  test('lets an open method through without auth info, with its body still readable', async () => {
+    const res = await send({ publicAccess }, { body: rpc('initialize') });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ reached: true, auth: null, body: rpc('initialize') });
+  });
+
+  test('lets a call to a listed tool through, and challenges a call to any other', async () => {
+    const listed = await send(
+      { publicAccess },
+      { body: rpc('tools/call', { name: 'search_docs' }) },
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.body).toMatchObject({ reached: true, auth: null });
+
+    const other = await send(
+      { publicAccess, challengeScopes: ['profile', 'email'] },
+      { body: rpc('tools/call', { name: 'whoami' }) },
+    );
+    expect(other.status).toBe(401);
+    // RFC 6750 section 3.1: no error code for a request that carries no credentials
+    expect(other.challenge).toMatch(
+      /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp", scope="profile email"$/,
+    );
+    expect(other.body).toEqual({ error: 'Unauthorized' });
+  });
+
+  test('challenges a batch with one protected message', async () => {
+    const res = await send(
+      { publicAccess },
+      { body: [rpc('tools/list'), rpc('tools/call', { name: 'whoami' })] },
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  test('challenges JSON that was not sent as application/json', async () => {
+    const res = await send(
+      { publicAccess },
+      { body: JSON.stringify(rpc('initialize')), contentType: 'text/plain' },
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  test('rejects a token that does not verify, even on an open method', async () => {
+    const res = await send(
+      { publicAccess },
+      { body: rpc('initialize'), authorization: 'Bearer unknown' },
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toContain('error="invalid_token"');
+  });
+
+  test('passes the auth info of a token that verifies', async () => {
+    const res = await send(
+      { publicAccess },
+      { body: rpc('tools/call', { name: 'whoami' }), authorization: 'Bearer token-1' },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reached: true, auth: { clientId: 'client-1' } });
+  });
+
+  test('answers a GET without a token with a 405 when the handshake is open', async () => {
+    const res = await send({ publicAccess }, { method: 'GET' });
+
+    expect(res.status).toBe(405);
+    expect(res.allow).toBe('POST');
+    expect(res.challenge).toBeNull();
+    expect(res.body).toEqual({ error: 'method_not_allowed' });
+  });
+
+  test('answers a GET without a token with the 401 when the handshake is closed', async () => {
+    const res = await send({ publicAccess: { tools: ['search_docs'] } }, { method: 'GET' });
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+  });
+
+  test('lets a GET with a token through', async () => {
+    const res = await send({ publicAccess }, { method: 'GET', authorization: 'Bearer token-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reached: true, auth: { clientId: 'client-1' } });
+  });
+});
+
+describe('express publicAccess without express.json()', () => {
+  async function post(app: express.Express, init: PublicAccessInit) {
+    const server: Server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        ...publicRequestInit(init),
+        signal: AbortSignal.timeout(2000),
+      });
+      return { status: res.status, body: await res.json() };
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  function appWithoutJsonParser(options: PublicAccessOptions) {
+    const app = express();
+    app.post('/mcp', expressAdapter.mcpAuth({ verifyToken, ...options }), (_req, res) => {
+      res.json({ reached: true });
+    });
+    app.use(((error, _req, res, _next) => {
+      res.status(500).json({ message: (error as Error).message });
+    }) satisfies express.ErrorRequestHandler);
+    return app;
+  }
+
+  test('throws a setup error for a JSON request without a token, instead of a 401 with no cause', async () => {
+    const res = await post(appWithoutJsonParser({ publicAccess: { methods: true } }), {
+      body: rpc('initialize'),
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({
+      message:
+        'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
+    });
+  });
+
+  test('does not need the parser without publicAccess, or for a request with a token', async () => {
+    const withoutOption = await post(appWithoutJsonParser({}), { body: rpc('initialize') });
+    expect(withoutOption.status).toBe(401);
+
+    const withToken = await post(appWithoutJsonParser({ publicAccess: { methods: true } }), {
+      body: rpc('initialize'),
+      authorization: 'Bearer token-1',
+    });
+    expect(withToken).toEqual({ status: 200, body: { reached: true } });
+  });
+});

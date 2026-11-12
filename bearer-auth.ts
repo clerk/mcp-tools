@@ -300,11 +300,15 @@ export function isPublicRequest(publicAccess: PublicAccess, body: unknown): bool
 
 /**
  * Reads the JSON body of a request without consuming it, for the `publicAccess` check, so that the MCP transport can
- * still read the request afterwards. It reads a clone, and stops at `PUBLIC_BODY_LIMIT` bytes.
+ * still read the request afterwards. It reads a clone, and stops at `PUBLIC_BODY_LIMIT` bytes. Only a body sent as
+ * `application/json` is read, the one media type the streamable HTTP transport takes a POST in, which is also what
+ * `express.json()` parses for the Express adapter.
  * @param request - The incoming request
  * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON
  */
 export async function readJsonBody(request: Request): Promise<unknown> {
+  const [mediaType = ''] = (request.headers.get('content-type') ?? '').split(';');
+  if (mediaType.trim().toLowerCase() !== 'application/json') return undefined;
   // `Number(null)` is 0, so a request without the header goes on to the counted read below
   if (Number(request.headers.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
   const reader = request.clone().body?.getReader();
