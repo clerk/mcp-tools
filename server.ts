@@ -101,6 +101,48 @@ export class McpAuthError extends Error {
 export type McpResourceUrl = string | readonly string[];
 
 /**
+ * A protocol method that `publicAccess.methods` can open to requests without a token. `initialize` is the handshake
+ * of the protocol revisions before 2026-07-28 and covers its `notifications/initialized` notification, and
+ * `server/discover` replaces it from 2026-07-28. The methods that run something, `tools/call`, `resources/read`, and
+ * `prompts/get`, are not in this list: `publicAccess.tools`, `resources`, and `prompts` open those.
+ */
+export type McpPublicMethod =
+  | 'initialize'
+  | 'server/discover'
+  | 'ping'
+  | 'tools/list'
+  | 'resources/list'
+  | 'resources/templates/list'
+  | 'prompts/list';
+
+/**
+ * What a request without an `Authorization` header may do, as the `publicAccess` option of `mcpAuth` and
+ * `withMcpAuth`. Nothing is open unless it is listed here, and a request for anything else gets the 401 challenge that
+ * starts authorization, so an MCP client signs in only when it reaches something protected. A request that carries a
+ * token is verified as usual, whatever it asks for.
+ */
+export type PublicAccess = {
+  /**
+   * The protocol methods open without a token: `true` for every `McpPublicMethod`, or a list of them. An open list
+   * method shows its whole list, so with `tools/list` open anyone can read the name, description, and input schema of
+   * every tool, the protected ones included. It never opens a call.
+   */
+  methods?: boolean | readonly McpPublicMethod[] | undefined;
+  /**
+   * The tools a `tools/call` may name without a token. Each one is listed by name: no value opens every tool.
+   */
+  tools?: readonly string[] | undefined;
+  /**
+   * Whether `resources/read` is open without a token, for every resource.
+   */
+  resources?: boolean | undefined;
+  /**
+   * Whether `prompts/get` is open without a token, for every prompt.
+   */
+  prompts?: boolean | undefined;
+};
+
+/**
  * Input to `generateProtectedResourceMetadata`: a Clerk publishable key, or the issuer identifier of any other
  * authorization server, never both.
  */

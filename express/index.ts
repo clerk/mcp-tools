@@ -12,6 +12,7 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  failureHeaders,
   requirePublishableKey,
 } from '../bearer-auth';
 import { type McpAuthFailure, fetchAuthorizationServerMetadata } from '../server';
@@ -129,22 +130,40 @@ export function mcpAuth(options: McpAuthOptions) {
       resourceUrl: options.resourceUrl,
       requiredScopes: options.requiredScopes,
       challengeScopes: options.challengeScopes,
+      publicAccess: options.publicAccess,
+      method: req.method,
+      body: () => parsedJsonBody(req),
       verifyToken: (token) => verifyToken(token, req),
     });
 
     if (!result.ok) {
-      res.locals.mcpAuthFailure = result.failure;
-      res.status(result.status);
-      if (result.challenge) res.set('WWW-Authenticate', result.challenge);
-      res.json({ error: result.error });
+      if (result.failure) res.locals.mcpAuthFailure = result.failure;
+      res.status(result.status).set(failureHeaders(result)).json({ error: result.error });
       return;
     }
 
+    // For a request `publicAccess` let through this is `undefined`, which also clears an `auth` that another
+    // middleware set, so the MCP transport never takes one for the auth info of a token.
     // @ts-expect-error - we're monkey patching this on purpose
     req.auth = result.authInfo;
 
     next();
   };
+}
+
+/**
+ * The JSON body `express.json()` parsed, which `publicAccess` checks. Without that middleware a JSON request has no
+ * parsed body, and every request without a token would get a 401 with nothing to say why, so that case throws.
+ * @param req - The incoming request
+ * @returns The parsed body, or `undefined` when the request has no JSON body
+ */
+function parsedJsonBody(req: express.Request): unknown {
+  if (req.body === undefined && req.is('application/json')) {
+    throw new Error(
+      'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
+    );
+  }
+  return req.body;
 }
 
 /**

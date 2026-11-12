@@ -145,7 +145,7 @@ describe('hono/index.ts without Clerk packages', () => {
       mcpAuth({
         verifyToken: async () => ({ token: 'token-1', clientId: 'client-1', scopes: [] }),
       }),
-      (c) => c.json({ clientId: c.get('mcpAuth').clientId }),
+      (c) => c.json({ clientId: c.get('mcpAuth')?.clientId }),
     );
 
     const res = await app.request('https://mcp.example.com/mcp', {

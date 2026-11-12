@@ -12,6 +12,8 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  failureHeaders,
+  readJsonBody,
   requirePublishableKey,
 } from '../bearer-auth';
 import {
@@ -22,7 +24,11 @@ import {
 
 declare module 'hono' {
   interface ContextVariableMap {
-    mcpAuth: AuthInfo;
+    /**
+     * The auth info of the request's verified token, or `undefined` for a request without a token that
+     * `publicAccess` let through.
+     */
+    mcpAuth: AuthInfo | undefined;
     /**
      * Why `mcpAuth` answered this request with a 401 or 403 challenge or a 421, when it did.
      */
@@ -222,17 +228,18 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
       resourceUrl: options.resourceUrl,
       requiredScopes: options.requiredScopes,
       challengeScopes: options.challengeScopes,
+      publicAccess: options.publicAccess,
+      method: c.req.method,
+      // A clone, so the MCP transport can still read the request
+      body: () => readJsonBody(c.req.raw),
       verifyToken: (token) => verifyToken(token, c),
     });
 
     if (!result.ok) {
-      c.set('mcpAuthFailure', result.failure);
+      if (result.failure) c.set('mcpAuthFailure', result.failure);
       return c.json(
         { error: result.error },
-        {
-          status: result.status,
-          headers: result.challenge ? { 'WWW-Authenticate': result.challenge } : undefined,
-        },
+        { status: result.status, headers: failureHeaders(result) },
       );
     }
 

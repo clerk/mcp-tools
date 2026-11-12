@@ -1,15 +1,20 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
+  PUBLIC_BODY_LIMIT,
   assertMcpAuthOptions,
   assertProtectedResourceMetadataOptions,
+  assertPublicAccess,
   authenticateBearer,
   clerkProtectedResourceMetadata,
+  failureHeaders,
+  isPublicRequest,
+  readJsonBody,
   resourceFromMetadataUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from './bearer-auth';
-import { McpAuthError, McpTokenVerificationError } from './server';
+import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './server';
 
 const authInfo = { token: 't', clientId: 'client-1', scopes: ['profile'] };
 
@@ -390,5 +395,345 @@ describe('assertProtectedResourceMetadataOptions', () => {
     expect(() => assertProtectedResourceMetadataOptions({ requiredScopes: ['two words'] })).toThrow(
       'Clerk error: protectedResourceMetadataHandler requiredScopes must contain only scope tokens',
     );
+  });
+});
+
+describe('publicAccess', () => {
+  const rpc = (method: string, params?: Record<string, unknown>) => ({
+    jsonrpc: '2.0',
+    id: 1,
+    method,
+    ...(params && { params }),
+  });
+
+  function withoutToken(
+    publicAccess: PublicAccess | undefined,
+    body: unknown,
+    overrides: Partial<Parameters<typeof authenticateBearer>[0]> = {},
+  ) {
+    return authenticate({
+      authorization: undefined,
+      publicAccess,
+      method: 'POST',
+      body: () => body,
+      ...overrides,
+    });
+  }
+
+  const open = { ok: true, authInfo: undefined };
+  const challenged = { ok: false, status: 401, failure: { reason: 'missing_token' } };
+
+  test('without it, a request without a token gets the 401 and its body is never read', async () => {
+    const body = vi.fn(() => rpc('initialize'));
+    await expect(withoutToken(undefined, undefined, { body })).resolves.toMatchObject(challenged);
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    'initialize',
+    'notifications/initialized',
+    'server/discover',
+    'ping',
+    'tools/list',
+    'resources/list',
+    'resources/templates/list',
+    'prompts/list',
+  ])('methods: true opens %s', async (method) => {
+    await expect(withoutToken({ methods: true }, rpc(method))).resolves.toEqual(open);
+  });
+
+  test('a methods list opens only the methods it names', async () => {
+    const publicAccess: PublicAccess = { methods: ['initialize', 'tools/list'] };
+    await expect(withoutToken(publicAccess, rpc('initialize'))).resolves.toEqual(open);
+    await expect(withoutToken(publicAccess, rpc('tools/list'))).resolves.toEqual(open);
+    await expect(withoutToken(publicAccess, rpc('resources/list'))).resolves.toMatchObject(
+      challenged,
+    );
+    await expect(withoutToken(publicAccess, rpc('ping'))).resolves.toMatchObject(challenged);
+  });
+
+  test('notifications/initialized follows initialize, not the other methods', async () => {
+    const notification = { jsonrpc: '2.0', method: 'notifications/initialized' };
+    await expect(withoutToken({ methods: ['initialize'] }, notification)).resolves.toEqual(open);
+    await expect(
+      withoutToken({ methods: ['server/discover', 'tools/list'] }, notification),
+    ).resolves.toMatchObject(challenged);
+  });
+
+  test.each([
+    ['tools/call', { name: 'search_docs' }],
+    ['resources/read', { uri: 'docs://index' }],
+    ['prompts/get', { name: 'summarize' }],
+  ])('methods: true does not open %s', async (method, params) => {
+    await expect(withoutToken({ methods: true }, rpc(method, params))).resolves.toMatchObject(
+      challenged,
+    );
+  });
+
+  test('tools opens a tools/call only for a tool it names', async () => {
+    const publicAccess: PublicAccess = { tools: ['search_docs'] };
+    await expect(
+      withoutToken(publicAccess, rpc('tools/call', { name: 'search_docs', arguments: {} })),
+    ).resolves.toEqual(open);
+    await expect(
+      withoutToken(publicAccess, rpc('tools/call', { name: 'whoami' })),
+    ).resolves.toMatchObject(challenged);
+  });
+
+  test.each([
+    ['a name inherited from Object.prototype', { name: 'constructor' }],
+    ['__proto__', { name: '__proto__' }],
+    ['a name that is not a string', { name: ['search_docs'] }],
+    ['no name', {}],
+    ['no params', undefined],
+  ])('tools does not open a tools/call with %s', async (_label, params) => {
+    await expect(
+      withoutToken({ tools: ['search_docs'] }, rpc('tools/call', params)),
+    ).resolves.toMatchObject(challenged);
+  });
+
+  test('resources and prompts open resources/read and prompts/get, and nothing else', async () => {
+    await expect(
+      withoutToken({ resources: true }, rpc('resources/read', { uri: 'docs://index' })),
+    ).resolves.toEqual(open);
+    await expect(
+      withoutToken({ prompts: true }, rpc('prompts/get', { name: 'summarize' })),
+    ).resolves.toEqual(open);
+    await expect(
+      withoutToken({ resources: true }, rpc('prompts/get', { name: 'summarize' })),
+    ).resolves.toMatchObject(challenged);
+    // The list is a protocol method, which only `methods` opens
+    await expect(withoutToken({ resources: true }, rpc('resources/list'))).resolves.toMatchObject(
+      challenged,
+    );
+  });
+
+  test('a batch passes only when every message in it is open', async () => {
+    const publicAccess: PublicAccess = { methods: true, tools: ['search_docs'] };
+    const publicCall = rpc('tools/call', { name: 'search_docs' });
+    await expect(withoutToken(publicAccess, [rpc('tools/list'), publicCall])).resolves.toEqual(
+      open,
+    );
+    await expect(
+      withoutToken(publicAccess, [publicCall, rpc('tools/call', { name: 'whoami' })]),
+    ).resolves.toMatchObject(challenged);
+    await expect(withoutToken(publicAccess, [])).resolves.toMatchObject(challenged);
+  });
+
+  test.each([
+    ['a body that could not be read', undefined],
+    ['null', null],
+    ['a string', 'initialize'],
+    ['a JSON-RPC response', { jsonrpc: '2.0', id: 1, result: {} }],
+    ['another notification', { jsonrpc: '2.0', method: 'notifications/cancelled' }],
+    ['an unknown method', { jsonrpc: '2.0', id: 1, method: 'tasks/get' }],
+    ['a method that is not a string', { jsonrpc: '2.0', id: 1, method: ['initialize'] }],
+  ])('does not open %s', async (_label, body) => {
+    await expect(
+      withoutToken({ methods: true, tools: ['search_docs'], resources: true, prompts: true }, body),
+    ).resolves.toMatchObject(challenged);
+  });
+
+  test('the 401 for a protected call names the scopes and carries no error code', async () => {
+    const result = await withoutToken({ methods: true }, rpc('tools/call', { name: 'whoami' }), {
+      resourceUrl: 'https://mcp.example.com/mcp',
+      challengeScopes: ['profile', 'email'],
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 401,
+      challenge:
+        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="profile email"',
+    });
+  });
+
+  test.each([
+    { methods: true },
+    { methods: ['initialize'] },
+    { methods: ['server/discover'] },
+  ] as const)(
+    'answers a GET without a token with a 405 when %j opens the handshake',
+    async (publicAccess) => {
+      const result = await withoutToken(publicAccess, undefined, { method: 'GET' });
+      expect(result).toEqual({
+        ok: false,
+        failure: undefined,
+        status: 405,
+        challenge: undefined,
+        error: 'method_not_allowed',
+      });
+      expect(failureHeaders(result as Extract<typeof result, { ok: false }>)).toEqual({
+        Allow: 'POST',
+      });
+    },
+  );
+
+  test.each([{ methods: ['ping', 'tools/list'] }, { tools: ['search_docs'] }, {}] as const)(
+    'answers a GET without a token with the 401 when %j leaves the handshake closed',
+    async (publicAccess) => {
+      await expect(withoutToken(publicAccess, undefined, { method: 'GET' })).resolves.toMatchObject(
+        challenged,
+      );
+    },
+  );
+
+  test('answers a DELETE without a token with the 401, and reads a body only for a POST', async () => {
+    const body = vi.fn(() => rpc('initialize'));
+    await expect(
+      withoutToken({ methods: true }, undefined, { method: 'DELETE', body }),
+    ).resolves.toMatchObject(challenged);
+    await expect(
+      withoutToken({ methods: true }, undefined, { method: undefined, body }),
+    ).resolves.toMatchObject(challenged);
+    expect(body).not.toHaveBeenCalled();
+    await expect(
+      withoutToken({ methods: true }, undefined, { method: 'post', body }),
+    ).resolves.toEqual(open);
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  test('verifies a request that carries a token as usual, without reading its body', async () => {
+    const body = vi.fn(() => rpc('initialize'));
+    const publicAccess: PublicAccess = { methods: true };
+    await expect(authenticate({ publicAccess, method: 'POST', body })).resolves.toMatchObject({
+      ok: true,
+      authInfo: { clientId: 'client-1' },
+    });
+    await expect(
+      authenticate({ publicAccess, method: 'POST', body, verifyToken: async () => undefined }),
+    ).resolves.toMatchObject({ ok: false, status: 401, failure: { reason: 'invalid_token' } });
+    await expect(
+      authenticate({ publicAccess, method: 'POST', body, authorization: 'Basic dXNlcjpwYXNz' }),
+    ).resolves.toMatchObject({ ok: false, status: 401, failure: { reason: 'malformed_token' } });
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  test('answers an unlisted origin with the 421 before the public check', async () => {
+    await expect(
+      withoutToken({ methods: true }, rpc('initialize'), {
+        resourceUrl: ['https://mcp.example.com/mcp'],
+        requestUrl: 'https://other.example.com/mcp',
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 421 });
+  });
+
+  test('isPublicRequest applies the same rule to a parsed body', () => {
+    expect(isPublicRequest({ methods: true }, rpc('tools/list'))).toBe(true);
+    expect(isPublicRequest({ methods: true }, rpc('tools/call', { name: 'whoami' }))).toBe(false);
+  });
+});
+
+describe('assertPublicAccess', () => {
+  test.each([
+    undefined,
+    {},
+    { methods: true },
+    { methods: false },
+    { methods: ['initialize', 'server/discover', 'ping', 'tools/list'] },
+    { methods: true, tools: ['search_docs'], resources: true, prompts: false },
+    { methods: undefined, tools: undefined, resources: undefined, prompts: undefined },
+  ])('accepts %j', (publicAccess) => {
+    expect(() => assertPublicAccess('mcpAuth', publicAccess)).not.toThrow();
+  });
+
+  test.each([
+    [true, 'Clerk error: mcpAuth publicAccess must be an object'],
+    [['initialize'], 'Clerk error: mcpAuth publicAccess must be an object'],
+    [null, 'Clerk error: mcpAuth publicAccess must be an object'],
+    [{ method: true }, 'Clerk error: mcpAuth publicAccess has no method option'],
+    [{ methods: 'initialize' }, 'Clerk error: mcpAuth publicAccess.methods must be true or a list'],
+    [
+      { methods: ['tools/call'] },
+      'Clerk error: mcpAuth publicAccess.methods cannot list tools/call. To open it without a token, name the tools in publicAccess.tools',
+    ],
+    [
+      { methods: ['resources/read'] },
+      'Clerk error: mcpAuth publicAccess.methods cannot list resources/read. To open it without a token, set publicAccess.resources to true',
+    ],
+    [
+      { methods: ['prompts/get'] },
+      'Clerk error: mcpAuth publicAccess.methods cannot list prompts/get. To open it without a token, set publicAccess.prompts to true',
+    ],
+    [
+      { methods: ['notifications/initialized'] },
+      'Clerk error: mcpAuth publicAccess.methods cannot list "notifications/initialized". It takes true or any of initialize, server/discover, ping, tools/list, resources/list, resources/templates/list, prompts/list',
+    ],
+    [{ methods: [1] }, 'Clerk error: mcpAuth publicAccess.methods cannot list 1'],
+    [{ tools: true }, 'Clerk error: mcpAuth publicAccess.tools must be a list of tool names'],
+    [
+      { tools: 'search_docs' },
+      'Clerk error: mcpAuth publicAccess.tools must be a list of tool names',
+    ],
+    [{ tools: [''] }, 'Clerk error: mcpAuth publicAccess.tools must be a list of tool names'],
+    [{ resources: 'all' }, 'Clerk error: mcpAuth publicAccess.resources must be true or false'],
+    [{ prompts: 1 }, 'Clerk error: mcpAuth publicAccess.prompts must be true or false'],
+  ])('rejects %j', (publicAccess, message) => {
+    expect(() => assertPublicAccess('mcpAuth', publicAccess)).toThrow(message);
+  });
+
+  test('every entry point checks it, and the metadata handler accepts it', () => {
+    expect(() => assertMcpAuthOptions('withMcpAuth', { publicAccess: { tools: [''] } })).toThrow(
+      'Clerk error: withMcpAuth publicAccess.tools must be a list of tool names',
+    );
+    expect(() =>
+      assertProtectedResourceMetadataOptions({
+        resourceUrl: 'https://mcp.example.com/mcp',
+        publicAccess: { methods: true, tools: ['search_docs'] },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertProtectedResourceMetadataOptions({ publicAccess: { methods: ['tools/call'] } }),
+    ).toThrow(
+      'Clerk error: protectedResourceMetadataHandler publicAccess.methods cannot list tools/call',
+    );
+  });
+});
+
+describe('readJsonBody', () => {
+  const post = (body: BodyInit, headers: Record<string, string> = {}) =>
+    new Request('https://mcp.example.com/mcp', { method: 'POST', body, headers });
+
+  test('parses the body and leaves the request readable', async () => {
+    const request = post('{"jsonrpc":"2.0","id":1,"method":"ping"}');
+    await expect(readJsonBody(request)).resolves.toEqual({ jsonrpc: '2.0', id: 1, method: 'ping' });
+    await expect(request.json()).resolves.toEqual({ jsonrpc: '2.0', id: 1, method: 'ping' });
+  });
+
+  test.each([
+    ['a body that is not JSON', post('initialize')],
+    ['an empty body', post('')],
+    ['a request without a body', new Request('https://mcp.example.com/mcp')],
+  ])('returns undefined for %s', async (_label, request) => {
+    await expect(readJsonBody(request)).resolves.toBeUndefined();
+  });
+
+  test('returns undefined for a body over the limit, by its Content-Length', async () => {
+    const request = post('{}', { 'content-length': String(PUBLIC_BODY_LIMIT + 1) });
+    await expect(readJsonBody(request)).resolves.toBeUndefined();
+  });
+
+  test('stops reading a streamed body at the limit', async () => {
+    const chunk = new TextEncoder().encode(' '.repeat(64 * 1024));
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    const request = new Request('https://mcp.example.com/mcp', {
+      method: 'POST',
+      body: stream,
+      // @ts-expect-error - Node needs `duplex` for a stream body, and the DOM types do not have it
+      duplex: 'half',
+    });
+    await expect(readJsonBody(request)).resolves.toBeUndefined();
+    // An endless body: the read ended because of the limit, a little past it
+    expect(sent).toBeLessThan(PUBLIC_BODY_LIMIT * 2);
+  });
+
+  test('reads a body exactly at the limit', async () => {
+    const padding = ' '.repeat(PUBLIC_BODY_LIMIT - 2);
+    await expect(readJsonBody(post(`{}${padding}`))).resolves.toEqual({});
   });
 });

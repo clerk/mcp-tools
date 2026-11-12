@@ -5,7 +5,9 @@ import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
+  type McpPublicMethod,
   type McpResourceUrl,
+  type PublicAccess,
   McpAuthError,
   McpTokenVerificationError,
   generateProtectedResourceMetadata,
@@ -39,6 +41,14 @@ export type BaseAuthOptions = {
    * step-up. A token is not required to have them.
    */
   challengeScopes?: readonly string[] | undefined;
+  /**
+   * What a request without an `Authorization` header may do. Without it, every such request gets the 401 challenge.
+   * With it, a POST passes without auth info when every JSON-RPC message in its body is open: a protocol method in
+   * `methods`, a `tools/call` for a tool in `tools`, a `resources/read` with `resources`, or a `prompts/get` with
+   * `prompts`. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
+   * when it reaches something protected. A request with a token is verified as usual.
+   */
+  publicAccess?: PublicAccess | undefined;
 };
 
 /**
@@ -121,17 +131,212 @@ export type ProtectedResourceMetadataOptions<
 // object can be passed to both. An adapter whose options declare more passes those keys to the check itself.
 const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set<
   keyof ProtectedResourceMetadataOptions<MiddlewareAuthOptions<unknown>>
->(['resourceUrl', 'requiredScopes', 'challengeScopes', 'properties', 'clerkClient', 'verifyToken']);
+>([
+  'resourceUrl',
+  'requiredScopes',
+  'challengeScopes',
+  'publicAccess',
+  'properties',
+  'clerkClient',
+  'verifyToken',
+]);
 
 type BearerResult =
-  | { ok: true; authInfo: AuthInfo & { resourceMetadataUrl: string } }
+  // `authInfo` is `undefined` for a request without a token that `publicAccess` lets through
+  | { ok: true; authInfo: (AuthInfo & { resourceMetadataUrl: string }) | undefined }
   | {
       ok: false;
       failure: McpAuthFailure;
       status: 401 | 403 | 421;
       challenge: string | undefined;
       error: string;
+    }
+  // A GET without a token on a server whose handshake is public. It is not an auth failure, so it has none.
+  | {
+      ok: false;
+      failure: undefined;
+      status: 405;
+      challenge: undefined;
+      error: 'method_not_allowed';
     };
+
+// Every `McpPublicMethod`, for checking a `publicAccess.methods` list and for `methods: true`
+const publicMethods: ReadonlySet<string> = new Set<McpPublicMethod>([
+  'initialize',
+  'server/discover',
+  'ping',
+  'tools/list',
+  'resources/list',
+  'resources/templates/list',
+  'prompts/list',
+]);
+
+const publicAccessKeys: ReadonlySet<string> = new Set<keyof PublicAccess>([
+  'methods',
+  'tools',
+  'resources',
+  'prompts',
+]);
+
+// The methods that run something, and how `publicAccess` opens each. They are not valid in `methods`, so that
+// listing one cannot open every tool, resource, or prompt at once.
+const callMethodHints: Readonly<Record<string, string>> = {
+  'tools/call': 'name the tools in publicAccess.tools',
+  'resources/read': 'set publicAccess.resources to true',
+  'prompts/get': 'set publicAccess.prompts to true',
+};
+
+/**
+ * The largest body, in bytes, read from a request without a token to decide whether `publicAccess` opens it. A larger
+ * one gets the 401 challenge unread, so that an unauthenticated client cannot make the server buffer more than this.
+ */
+export const PUBLIC_BODY_LIMIT = 1024 * 1024;
+
+/**
+ * Throws a `Clerk error:` message unless `publicAccess` is `undefined` or a valid `PublicAccess`: an object with
+ * only its four keys, `methods` a boolean or a list of `McpPublicMethod`s, `tools` a list of tool names, and
+ * `resources` and `prompts` booleans. A mistake here would otherwise only show as requests answered with a 401.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param publicAccess - The option's value, unchecked
+ */
+export function assertPublicAccess(caller: string, publicAccess: unknown) {
+  if (publicAccess === undefined) return;
+  if (typeof publicAccess !== 'object' || publicAccess === null || Array.isArray(publicAccess)) {
+    throw new Error(
+      `Clerk error: ${caller} publicAccess must be an object, such as { methods: true, tools: ['search_docs'] }`,
+    );
+  }
+  const unknownKey = Object.keys(publicAccess).find((key) => !publicAccessKeys.has(key));
+  if (unknownKey !== undefined) {
+    throw new Error(
+      `Clerk error: ${caller} publicAccess has no ${unknownKey} option. It takes methods, tools, resources, and prompts`,
+    );
+  }
+
+  const { methods, tools, resources, prompts } = publicAccess as Record<
+    keyof PublicAccess,
+    unknown
+  >;
+  if (methods !== undefined && typeof methods !== 'boolean') {
+    if (!Array.isArray(methods)) {
+      throw new Error(
+        `Clerk error: ${caller} publicAccess.methods must be true or a list of methods, such as ['initialize', 'tools/list']`,
+      );
+    }
+    for (const method of methods) {
+      if (typeof method === 'string' && Object.hasOwn(callMethodHints, method)) {
+        throw new Error(
+          `Clerk error: ${caller} publicAccess.methods cannot list ${method}. To open it without a token, ${callMethodHints[method]}`,
+        );
+      }
+      if (typeof method !== 'string' || !publicMethods.has(method)) {
+        throw new Error(
+          `Clerk error: ${caller} publicAccess.methods cannot list ${JSON.stringify(method)}. It takes true or any of ${[...publicMethods].join(', ')}`,
+        );
+      }
+    }
+  }
+  if (
+    tools !== undefined &&
+    !(Array.isArray(tools) && tools.every((tool) => typeof tool === 'string' && tool !== ''))
+  ) {
+    throw new Error(
+      `Clerk error: ${caller} publicAccess.tools must be a list of tool names, such as ['search_docs']`,
+    );
+  }
+  for (const [key, value] of [
+    ['resources', resources],
+    ['prompts', prompts],
+  ] as const) {
+    if (value !== undefined && typeof value !== 'boolean') {
+      throw new Error(`Clerk error: ${caller} publicAccess.${key} must be true or false`);
+    }
+  }
+}
+
+function opensMethod({ methods }: PublicAccess, method: McpPublicMethod): boolean {
+  return methods === true || (Array.isArray(methods) && methods.includes(method));
+}
+
+// Whether one JSON-RPC message is open without a token. A response to a server request has no `method`, and any
+// notification other than the handshake's is not listed, so both stay closed.
+function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean {
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) return false;
+  const { method, params } = message as { method?: unknown; params?: unknown };
+  if (typeof method !== 'string') return false;
+
+  switch (method) {
+    case 'tools/call': {
+      const name =
+        typeof params === 'object' && params !== null
+          ? (params as { name?: unknown }).name
+          : undefined;
+      return typeof name === 'string' && (publicAccess.tools ?? []).includes(name);
+    }
+    case 'resources/read':
+      return publicAccess.resources === true;
+    case 'prompts/get':
+      return publicAccess.prompts === true;
+    // The client sends this right after `initialize` succeeds, so it is part of that handshake
+    case 'notifications/initialized':
+      return opensMethod(publicAccess, 'initialize');
+    default:
+      return publicMethods.has(method) && opensMethod(publicAccess, method as McpPublicMethod);
+  }
+}
+
+/**
+ * Whether `publicAccess` opens a request body without a token: one JSON-RPC message, or a batch with at least one,
+ * where every message is open. One protected message closes the whole batch, since the response to a batch cannot be
+ * a challenge for part of it.
+ * @param publicAccess - The `publicAccess` option, already checked
+ * @param body - The request's parsed JSON body, or `undefined` when it could not be read
+ * @returns Whether the request may pass without auth info
+ */
+export function isPublicRequest(publicAccess: PublicAccess, body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  return messages.length > 0 && messages.every((message) => isPublicMessage(publicAccess, message));
+}
+
+/**
+ * Reads the JSON body of a request without consuming it, for the `publicAccess` check, so that the MCP transport can
+ * still read the request afterwards. It reads a clone, and stops at `PUBLIC_BODY_LIMIT` bytes.
+ * @param request - The incoming request
+ * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON
+ */
+export async function readJsonBody(request: Request): Promise<unknown> {
+  // `Number(null)` is 0, so a request without the header goes on to the counted read below
+  if (Number(request.headers.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
+  const reader = request.clone().body?.getReader();
+  if (!reader) return undefined;
+
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > PUBLIC_BODY_LIMIT) {
+      // Not awaited: cancelling one half of a cloned body only settles once the other half is cancelled as well,
+      // and that half belongs to the request the challenge is about to answer
+      void reader.cancel().catch(() => undefined);
+      return undefined;
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Throws a `Clerk error:` message when the options cannot produce a valid challenge: a `requiredScopes` or
@@ -144,6 +349,7 @@ export function assertMcpAuthOptions(caller: string, options: BaseAuthOptions | 
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
   if (options?.resourceUrl !== undefined) assertResourceUrls(caller, options.resourceUrl);
+  assertPublicAccess(caller, options?.publicAccess);
 }
 
 // Each URL is checked once here, so a request only has to find the one with its origin.
@@ -409,6 +615,19 @@ export function resourceFromMetadataUrl(metadataUrl: string): string {
   return `${origin}${pathname.replace('/.well-known/oauth-protected-resource', '')}${search}`;
 }
 
+/**
+ * The response headers for a request `authenticateBearer` did not let through: the challenge, or for the 405 the
+ * `Allow` header RFC 9110 section 15.5.6 requires.
+ * @param result - A result with `ok` false
+ * @returns The headers to send with the status
+ */
+export function failureHeaders(
+  result: Extract<BearerResult, { ok: false }>,
+): Record<string, string> {
+  if (result.status === 405) return { Allow: 'POST' };
+  return result.challenge ? { 'WWW-Authenticate': result.challenge } : {};
+}
+
 // An RFC 9110 `auth-param` value here is a `quoted-string`: a URL's `:` and `/` are not allowed in a bare token.
 function quoted(value: string): string {
   return `"${value.replace(/[\\"]/g, '\\$&')}"`;
@@ -462,6 +681,12 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * `resourceMetadataUrl`, which MCP SDK 2 puts in the `resource_metadata` of its own scope challenges. A verifier that
  * throws an `McpTokenVerificationError` rejects the token, with that error as the failure's `cause`. Any other error
  * it throws gets wrapped in an `McpAuthError`.
+ *
+ * With `publicAccess`, a request without an `Authorization` header is not always challenged. A POST whose body
+ * `isPublicRequest` accepts passes with `authInfo` `undefined`. A GET gets a 405 when the handshake is public: an MCP
+ * client opens a GET stream once it has connected and starts authorization on a 401 there, which would make it sign in
+ * before it reached anything protected, and the transport specification lets a server answer that GET with a 405 for
+ * "no stream". Every other request without a token, and every request with a header, is handled as above.
  */
 export async function authenticateBearer({
   authorization,
@@ -469,6 +694,9 @@ export async function authenticateBearer({
   resourceUrl,
   requiredScopes = [],
   challengeScopes: extraChallengeScopes = [],
+  publicAccess,
+  method,
+  body,
   verifyToken,
 }: {
   authorization: string | undefined;
@@ -479,6 +707,16 @@ export async function authenticateBearer({
   resourceUrl: McpResourceUrl | undefined;
   requiredScopes: readonly string[] | undefined;
   challengeScopes: readonly string[] | undefined;
+  publicAccess?: PublicAccess | undefined;
+  /**
+   * The request's HTTP method, which `publicAccess` needs: only a POST carries JSON-RPC messages.
+   */
+  method?: string | undefined;
+  /**
+   * Returns the request's parsed JSON body, or `undefined` when it cannot be read. It is called at most once, and
+   * only for a POST without a token when `publicAccess` is set.
+   */
+  body?: (() => unknown) | undefined;
   verifyToken: (token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
 }): Promise<BearerResult> {
   let resourceMetadataUrl: string;
@@ -504,6 +742,25 @@ export async function authenticateBearer({
   });
 
   const parsed = parseAuthorization(authorization);
+  // Only a request with no header at all can be public. A malformed header is a failed attempt to authenticate.
+  if ('reason' in parsed && parsed.reason === 'missing_token' && publicAccess) {
+    const httpMethod = method?.toUpperCase();
+    if (httpMethod === 'POST' && isPublicRequest(publicAccess, await body?.())) {
+      return { ok: true, authInfo: undefined };
+    }
+    if (
+      httpMethod === 'GET' &&
+      (opensMethod(publicAccess, 'initialize') || opensMethod(publicAccess, 'server/discover'))
+    ) {
+      return {
+        ok: false,
+        failure: undefined,
+        status: 405,
+        challenge: undefined,
+        error: 'method_not_allowed',
+      };
+    }
+  }
   if ('reason' in parsed) {
     return {
       ok: false,

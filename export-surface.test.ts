@@ -67,7 +67,14 @@ const PINNED: Record<string, Surface> = {
       'requireAdditionalScopes',
       'toClerkAuthInfo',
     ],
-    types: ['ClerkAuthInfo', 'ClerkOAuthClient', 'McpAuthFailure', 'McpResourceUrl'],
+    types: [
+      'ClerkAuthInfo',
+      'ClerkOAuthClient',
+      'McpAuthFailure',
+      'McpPublicMethod',
+      'McpResourceUrl',
+      'PublicAccess',
+    ],
   },
   './next': {
     values: [
@@ -90,8 +97,10 @@ const PINNED: Record<string, Surface> = {
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpAuthOptions',
+      'McpPublicMethod',
       'McpResourceUrl',
       'ProtectedResourceMetadataOptions',
+      'PublicAccess',
     ],
   },
   './next/client': {
@@ -119,8 +128,10 @@ const PINNED: Record<string, Surface> = {
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpAuthOptions',
+      'McpPublicMethod',
       'McpResourceUrl',
       'ProtectedResourceMetadataOptions',
+      'PublicAccess',
     ],
   },
   './hono': {
@@ -144,8 +155,10 @@ const PINNED: Record<string, Surface> = {
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpAuthOptions',
+      'McpPublicMethod',
       'McpResourceUrl',
       'ProtectedResourceMetadataOptions',
+      'PublicAccess',
     ],
   },
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
