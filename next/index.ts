@@ -10,6 +10,8 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  failureHeaders,
+  readJsonBody,
   requirePublishableKey,
 } from '../bearer-auth';
 import {
@@ -224,25 +226,30 @@ export function withMcpAuth(
       resourceUrl: options.resourceUrl,
       requiredScopes: options.requiredScopes,
       challengeScopes: options.challengeScopes,
+      publicAccess: options.publicAccess,
+      method: req.method,
+      // A clone, so the route handler can still read the request
+      body: () => readJsonBody(req),
       verifyToken: (token) => verifyToken(token, req),
     });
 
     if (!result.ok) {
+      const { failure } = result;
       // The notification must not delay the challenge or turn it into a server error
-      try {
-        // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
-        void Promise.resolve(options.onAuthFailure?.(result.failure, req)).catch(() => {});
-      } catch {}
+      if (failure) {
+        try {
+          // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
+          void Promise.resolve(options.onAuthFailure?.(failure, req)).catch(() => {});
+        } catch {}
+      }
       return Response.json(
         { error: result.error },
-        {
-          status: result.status,
-          headers: result.challenge ? { 'WWW-Authenticate': result.challenge } : undefined,
-        },
+        { status: result.status, headers: failureHeaders(result) },
       );
     }
 
-    // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does
+    // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does. It is `undefined` for a
+    // request without a token that `publicAccess` let through.
     (req as Request & { auth?: AuthInfo }).auth = result.authInfo;
     return handler(req);
   };
