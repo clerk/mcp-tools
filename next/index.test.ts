@@ -6,9 +6,22 @@ const defaultAuthenticateRequest = vi.fn();
 // The shape of `clerkClient` from `@clerk/nextjs/server`: an async function that returns the client
 const clerkClient = async () => ({ authenticateRequest: defaultAuthenticateRequest });
 
-// The default client, which `withMcpAuth` loads with `import()` when there is no `clerkClient` option
+// The default client, which `withMcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
+// `clerkNextjsLoad.error` to make that load fail. Every registration of the mock uses this one factory: Vitest
+// registers the `vi.doMock` calls queued for one path in parallel, so with different factories a later call would
+// not reliably replace an earlier one.
 const nextClerkClient = vi.hoisted(() => vi.fn());
-vi.mock('@clerk/nextjs/server', () => ({ clerkClient: nextClerkClient }));
+const clerkNextjsLoad = vi.hoisted(() => {
+  const load = {
+    error: undefined as Error | undefined,
+    factory: () => {
+      if (load.error) throw load.error;
+      return { clerkClient: nextClerkClient };
+    },
+  };
+  return load;
+});
+vi.mock('@clerk/nextjs/server', () => clerkNextjsLoad.factory());
 
 import {
   McpAuthError,
@@ -520,10 +533,11 @@ describe('withMcpAuth with Clerk', () => {
     'throws a Clerk error asking to install @clerk/nextjs %s when it cannot be loaded',
     async (_case, authorization) => {
       const loadError = new Error('Cannot find package @clerk/nextjs');
+      clerkNextjsLoad.error = loadError;
+      // `vi.resetModules()` keeps loaded mocks, so registering the mock again is what drops the loaded one. The next
+      // `import()` of `@clerk/nextjs/server` then runs the factory, which throws.
+      vi.doMock('@clerk/nextjs/server', clerkNextjsLoad.factory);
       vi.resetModules();
-      vi.doMock('@clerk/nextjs/server', () => {
-        throw loadError;
-      });
       try {
         const { withMcpAuth: freshWithMcpAuth, McpAuthError: FreshMcpAuthError } =
           await import('./index');
@@ -542,7 +556,8 @@ describe('withMcpAuth with Clerk', () => {
         expect((cause as Error).cause).toBe(loadError);
       } finally {
         // Back to the mock the other tests use, which later imports of `@clerk/nextjs/server` load again
-        vi.doMock('@clerk/nextjs/server', () => ({ clerkClient: nextClerkClient }));
+        clerkNextjsLoad.error = undefined;
+        vi.doMock('@clerk/nextjs/server', clerkNextjsLoad.factory);
         vi.resetModules();
       }
     },
