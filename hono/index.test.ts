@@ -682,7 +682,11 @@ describe('mcpAuth with Clerk', () => {
   }
 
   test('checks the audience and challenge against the listed resourceUrl with the request origin', async () => {
-    clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
+    clerk.authenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'token-invalid',
+      message: 'OAuth token not found (code=token-invalid, status=404)',
+    });
     const app = listedApp();
 
     for (const origin of ['https://a.example.com', 'https://b.example.com']) {
@@ -726,7 +730,11 @@ describe('mcpAuth with Clerk', () => {
   });
 
   test('answers a rejected token with the invalid_token challenge', async () => {
-    clerk.authenticateRequest.mockResolvedValue({ isAuthenticated: false });
+    clerk.authenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'token-invalid',
+      message: 'OAuth token not found (code=token-invalid, status=404)',
+    });
 
     const res = await post(clerkApp());
 
