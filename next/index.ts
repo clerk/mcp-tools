@@ -172,7 +172,8 @@ const withMcpAuthCallForm =
  * request. `verifyToken` is called with the token and the request, and `resourceUrl` is optional with it.
  * @returns The wrapped route handler. A missing or rejected token gets a 401 challenge, and a token without
  * `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler` reads it,
- * with `resourceMetadataUrl` added for the SDK's scope challenges. When Clerk cannot verify an opaque token at all,
+ * with `resourceMetadataUrl` added for the SDK's scope challenges. Tools read it as `ctx.http?.authInfo`, narrowed with
+ * `isClerkAuthInfo` before they read Clerk fields such as `extra.userId`. When Clerk cannot verify an opaque token at all,
  * the handler throws, so Next.js answers with a 500 instead of a challenge that would make the client discard a valid
  * token. Without a `clerkClient` option, every request throws a `Clerk error:` when `@clerk/nextjs` can't be loaded.
  * @example
@@ -184,7 +185,7 @@ const withMcpAuthCallForm =
  *   requiredScopes: ["profile", "email"],
  * });
  *
- * export { authHandler as GET, authHandler as POST };
+ * export { authHandler as GET, authHandler as POST, authHandler as DELETE };
  * ```
  * @example
  * ```ts

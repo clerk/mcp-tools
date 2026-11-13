@@ -4,17 +4,22 @@ Next.js utilities for building both MCP servers and clients with authentication 
 
 ## Installation
 
-Make sure you have the required dependencies installed:
+For an MCP server, install these in your Next.js app:
 
 ```bash
-npm install @clerk/mcp-tools mcp-handler@^2.3.1 @modelcontextprotocol/server next
+npm install @clerk/mcp-tools @clerk/nextjs mcp-handler @modelcontextprotocol/server zod
 ```
 
-If you're using Clerk for authentication, also install the Clerk Next.js SDK:
+The server runs on `mcp-handler` 2.x, which uses `@modelcontextprotocol/server` 2.1 or later and `zod` 4. `withMcpAuth` verifies tokens with `clerkClient` from `@clerk/nextjs`, so an app that passes its own `verifyToken` can leave `@clerk/nextjs` out.
+
+By default the handlers read two environment variables:
 
 ```bash
-npm install @clerk/nextjs
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
 ```
+
+An MCP-only route doesn't need `clerkMiddleware()` in `middleware.ts` (`proxy.ts` in Next.js 16) or `<ClerkProvider>`: `withMcpAuth` verifies the bearer token itself. If your app has `clerkMiddleware()` for its other pages, it must not protect the MCP route or the `/.well-known/oauth-protected-resource` routes: leave them out of `auth.protect()`, so MCP clients get the challenge and metadata from these handlers instead of a sign-in redirect.
 
 ## Quick Start
 
@@ -54,26 +59,32 @@ export { handler as GET };
 
 ```ts
 // app/mcp/route.ts
-import { withMcpAuth } from '@clerk/mcp-tools/next';
+import { isClerkAuthInfo, withMcpAuth } from '@clerk/mcp-tools/next';
 import { createMcpHandler } from 'mcp-handler';
 import { mcpAuthOptions } from '@/lib/mcp';
 
 const handler = createMcpHandler((server) => {
-  // `authInfo.token` is the bearer token, so return only the user ID that `withMcpAuth` puts in `extra`
   server.registerTool(
     'whoami',
     { description: 'Returns the ID of the Clerk user that authorized this request' },
-    async (ctx) => ({
-      // withMcpAuth only calls the handler with a verified token
-      content: [{ type: 'text', text: String(ctx.http!.authInfo!.extra!.userId) }],
-    }),
+    async (ctx) => {
+      // The auth info `withMcpAuth` verified. `isClerkAuthInfo` narrows it so `extra.userId` is typed.
+      const authInfo = ctx.http?.authInfo;
+      if (!isClerkAuthInfo(authInfo)) {
+        return { content: [{ type: 'text', text: 'Not signed in' }], isError: true };
+      }
+      // `authInfo.token` is the bearer token, so return only the user ID
+      return { content: [{ type: 'text', text: authInfo.extra.userId }] };
+    },
   );
 });
 
 const authHandler = withMcpAuth(handler, mcpAuthOptions);
 
-export { authHandler as GET, authHandler as POST };
+export { authHandler as GET, authHandler as POST, authHandler as DELETE };
 ```
+
+Tools read the verified auth info as `ctx.http?.authInfo`, as `@modelcontextprotocol/server` 2.x passes it. It is `undefined` for a request that [`publicAccess`](#public-access) let through without a token, and with `verifyToken` it is whatever your function returns, so `isClerkAuthInfo` is `false` there.
 
 **Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. Import `withMcpAuth` from `@clerk/mcp-tools/next` instead of `mcp-handler`: it takes the route handler and an options object instead of a verifier function, and verifies tokens with Clerk unless you pass `verifyToken`.
 
@@ -107,7 +118,7 @@ const authHandler = withMcpAuth(handler, {
 });
 ```
 
-A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws an `McpAuthError`, exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`. Next.js answers with an empty `500`, without a stack trace, under both `next dev` and `next start`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http?.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque access token at all, for example during an outage, the handler throws an `McpAuthError`, exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`. Next.js answers with an empty `500`, without a stack trace, under both `next dev` and `next start`, so clients keep their valid token. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
 To log the error, export `onRequestError` from `instrumentation.ts`. Next.js bundles that file apart from your routes, so `err instanceof McpAuthError` is `false` there; check `err.name` instead:
 
@@ -138,6 +149,9 @@ const authHandler = withMcpAuth(handler, {
 `publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected. Add it to the options `withMcpAuth` takes:
 
 ```ts
+// lib/mcp.ts
+import type { McpAuthOptions } from '@clerk/mcp-tools/next';
+
 export const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
   publicAccess: { methods: true, tools: ['search_docs'] },
