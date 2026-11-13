@@ -294,7 +294,7 @@ describe('export surface', () => {
     },
   );
 
-  // `default` lets `require(esm)` (Node 22 and later) and CJS-condition resolvers load the same ESM build.
+  // `default` lets `require(esm)` and CJS-condition resolvers load the same ESM build.
   test.each(entries.map(({ subpath }) => subpath))(
     '%s points default at the import build',
     (subpath) => {
