@@ -33,47 +33,58 @@
   "exports": {
     "./client": {
       "types": "./dist/client.d.mts",
-      "import": "./dist/client.mjs"
+      "import": "./dist/client.mjs",
+      "default": "./dist/client.mjs"
     },
     "./tools": {
       "types": "./dist/tools.d.mts",
-      "import": "./dist/tools.mjs"
+      "import": "./dist/tools.mjs",
+      "default": "./dist/tools.mjs"
     },
     "./server": {
       "types": "./dist/server.d.mts",
-      "import": "./dist/server.mjs"
+      "import": "./dist/server.mjs",
+      "default": "./dist/server.mjs"
     },
     "./next": {
       "types": "./dist/next/index.d.mts",
-      "import": "./dist/next/index.mjs"
+      "import": "./dist/next/index.mjs",
+      "default": "./dist/next/index.mjs"
     },
     "./next/client": {
       "types": "./dist/next/client.d.mts",
-      "import": "./dist/next/client.mjs"
+      "import": "./dist/next/client.mjs",
+      "default": "./dist/next/client.mjs"
     },
     "./express": {
       "types": "./dist/express/index.d.mts",
-      "import": "./dist/express/index.mjs"
+      "import": "./dist/express/index.mjs",
+      "default": "./dist/express/index.mjs"
     },
     "./hono": {
       "types": "./dist/hono/index.d.mts",
-      "import": "./dist/hono/index.mjs"
+      "import": "./dist/hono/index.mjs",
+      "default": "./dist/hono/index.mjs"
     },
     "./stores/fs": {
       "types": "./dist/stores/fs.d.mts",
-      "import": "./dist/stores/fs.mjs"
+      "import": "./dist/stores/fs.mjs",
+      "default": "./dist/stores/fs.mjs"
     },
     "./stores/redis": {
       "types": "./dist/stores/redis.d.mts",
-      "import": "./dist/stores/redis.mjs"
+      "import": "./dist/stores/redis.mjs",
+      "default": "./dist/stores/redis.mjs"
     },
     "./stores/postgres": {
       "types": "./dist/stores/postgres.d.mts",
-      "import": "./dist/stores/postgres.mjs"
+      "import": "./dist/stores/postgres.mjs",
+      "default": "./dist/stores/postgres.mjs"
     },
     "./stores/sqlite": {
       "types": "./dist/stores/sqlite.d.mts",
-      "import": "./dist/stores/sqlite.mjs"
+      "import": "./dist/stores/sqlite.mjs",
+      "default": "./dist/stores/sqlite.mjs"
     },
     "./package.json": "./package.json"
   },
@@ -93,6 +104,7 @@
     "fmt:check": "oxfmt --check",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "version-packages": "changeset version && pnpm install --lockfile-only --engine-strict=false"
   },
   "devDependencies": {
