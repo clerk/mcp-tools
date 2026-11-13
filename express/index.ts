@@ -13,6 +13,7 @@ import {
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
   failureHeaders,
+  methodNotAllowed,
   requirePublishableKey,
 } from '../bearer-auth';
 import {
@@ -85,8 +86,10 @@ interface NodeStreamableHttpTransport {
  * `res.locals.mcpAuthFailure`.
  * @example
  * ```ts
- * app.post(
+ * // Every method, so a GET without a token gets the 401 (or the 405 with publicAccess) rather than a 404
+ * app.all(
  *   "/mcp",
+ *   express.json(),
  *   mcpAuth({
  *     resourceUrl: "https://mcp.example.com/mcp",
  *     requiredScopes: ["profile", "email"],
@@ -101,8 +104,9 @@ interface NodeStreamableHttpTransport {
  *   return authData;
  * }
  *
- * app.post(
+ * app.all(
  *   "/mcp",
+ *   express.json(),
  *   mcpAuth({ verifyToken, resourceUrl: "https://mcp.example.com/mcp" }),
  *   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
  * );
@@ -308,7 +312,8 @@ function getRequestUrl(req: express.Request): string | undefined {
  *   return server;
  * }
  *
- * app.post("/mcp", streamableHttpHandler(createServer, StreamableHTTPServerTransport));
+ * // A request that isn't a POST gets a 405 with `Allow: POST`: the server is stateless
+ * app.all("/mcp", express.json(), streamableHttpHandler(createServer, StreamableHTTPServerTransport));
  * ```
  * @typeParam Transport - The transport the class creates, inferred from the
  * class alone
@@ -324,6 +329,11 @@ export function streamableHttpHandler<
   assertTransportClass(Transport, 'StreamableHTTPServerTransport', 'streamableHttp.js');
 
   return async (req: express.Request, res: express.Response) => {
+    if (req.method !== 'POST') {
+      res.status(methodNotAllowed.status).set(methodNotAllowed.headers).json(methodNotAllowed.body);
+      return;
+    }
+
     const server = createServer();
     const transport = new Transport({ sessionIdGenerator: undefined });
 

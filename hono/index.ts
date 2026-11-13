@@ -13,6 +13,7 @@ import {
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
   failureHeaders,
+  methodNotAllowed,
   readJsonBody,
   requirePublishableKey,
 } from '../bearer-auth';
@@ -195,7 +196,8 @@ export function authorizationServerMetadataHandler() {
  * asking to install `@clerk/backend` when it can't be loaded.
  * @example
  * ```ts
- * app.post(
+ * // Every method, so a GET without a token gets the 401 (or the 405 with publicAccess) rather than a 404
+ * app.all(
  *   '/mcp',
  *   mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp', requiredScopes: ['profile', 'email'] }),
  *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
@@ -203,7 +205,7 @@ export function authorizationServerMetadataHandler() {
  * ```
  * @example
  * ```ts
- * app.post(
+ * app.all(
  *   '/mcp',
  *   mcpAuth({ verifyToken: (token, c) => verifyMyToken(token), resourceUrl: 'https://mcp.example.com/mcp' }),
  *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
@@ -274,7 +276,8 @@ async function requestWithBody(c: Context): Promise<Request> {
  * ```ts
  * import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
  *
- * app.post(
+ * // A request that isn't a POST gets a 405 with `Allow: POST`: the server is stateless
+ * app.all(
  *   '/mcp',
  *   mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }),
  *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
@@ -296,6 +299,13 @@ export function streamableHttpHandler<
   );
 
   return async (c: Context) => {
+    if (c.req.method !== 'POST') {
+      return c.json(methodNotAllowed.body, {
+        status: methodNotAllowed.status,
+        headers: methodNotAllowed.headers,
+      });
+    }
+
     const transport = new Transport({ sessionIdGenerator: undefined });
 
     try {
