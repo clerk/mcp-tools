@@ -167,7 +167,7 @@ app.post(
 );
 ```
 
-`c.get('mcpAuth')` is `undefined` for a request that `publicAccess` let through, and its type is `AuthInfo | undefined`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+`c.get('mcpAuth')` is `undefined` for a request that `publicAccess` let through, and its type is `AuthInfo | undefined`. `mcpAuth` reads the body of a request without a token to check it, so a middleware before it that reads the body must use `c.req.json()` or `c.req.text()`, or read a copy, as `c.req.raw.clone().json()`. One that reads `c.req.raw` itself makes `mcpAuth` throw a `Clerk error:`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
 
 ### `protectedResourceMetadataHandler(options?)`
 

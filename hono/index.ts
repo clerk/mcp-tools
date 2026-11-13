@@ -231,7 +231,7 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
       publicAccess: options.publicAccess,
       method: c.req.method,
       // A clone, so the MCP transport can still read the request
-      body: () => readJsonBody(c.req.raw),
+      body: async () => readJsonBody(await requestWithBody(c)),
       verifyToken: (token) => verifyToken(token, c),
     });
 
@@ -246,6 +246,23 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
     c.set('mcpAuth', result.authInfo);
     await next();
   };
+}
+
+/**
+ * The request whose body `publicAccess` checks. A middleware before `mcpAuth` that read the body through the Hono
+ * request, as `c.req.json()`, leaves the raw request unreadable, but Hono keeps what it read, so the request is
+ * rebuilt around that.
+ * @param c - The Hono context of the request
+ * @returns The raw request, or a copy of it with the body Hono kept when the raw one was already read
+ */
+async function requestWithBody(c: Context): Promise<Request> {
+  const { raw, bodyCache } = c.req;
+  if (!raw.bodyUsed || Object.keys(bodyCache).length === 0) return raw;
+  return new Request(raw.url, {
+    method: raw.method,
+    headers: raw.headers,
+    body: await c.req.text(),
+  });
 }
 
 /**

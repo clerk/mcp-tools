@@ -335,11 +335,18 @@ export function isPublicRequest(publicAccess: PublicAccess, body: unknown): bool
  * `application/json` is read, the one media type the streamable HTTP transport takes a POST in, which is also what
  * `express.json()` parses for the Express adapter.
  * @param request - The incoming request
- * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON
+ * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON. It throws a
+ * `Clerk error:` when the body was already read: a request can't be cloned after that, and answering with the 401
+ * would give nothing to say why, as with the Express adapter without `express.json()`.
  */
 export async function readJsonBody(request: Request): Promise<unknown> {
   const [mediaType = ''] = (request.headers.get('content-type') ?? '').split(';');
   if (mediaType.trim().toLowerCase() !== 'application/json') return undefined;
+  if (request.bodyUsed) {
+    throw new Error(
+      'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+    );
+  }
   // `Number(null)` is 0, so a request without the header goes on to the counted read below
   if (Number(request.headers.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
   const reader = request.clone().body?.getReader();

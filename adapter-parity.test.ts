@@ -1,6 +1,6 @@
 // Rules the Express, Hono, and Next.js adapters must apply the same way, run against all three.
 import express from 'express';
-import { Hono, type MiddlewareHandler } from 'hono';
+import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -835,5 +835,54 @@ describe('express publicAccess without express.json()', () => {
       authorization: 'Bearer token-1',
     });
     expect(withToken).toEqual({ status: 200, body: { reached: true } });
+  });
+});
+
+describe('hono publicAccess behind a middleware that reads the body first', () => {
+  const publicAccess = { methods: true, tools: ['search_docs'] } as const;
+
+  async function post(readBody: (c: Context) => Promise<unknown>, init: PublicAccessInit) {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      await readBody(c);
+      await next();
+    });
+    app.post('/mcp', honoAdapter.mcpAuth({ verifyToken, publicAccess }), (c) =>
+      c.json({ reached: true, auth: c.get('mcpAuth') ?? null }),
+    );
+    app.onError((error, c) => c.json({ message: error.message }, 500));
+    const res = await app.request(`${origin}/mcp`, publicRequestInit(init));
+    return { status: res.status, body: await res.json() };
+  }
+
+  test.each<[string, (c: Context) => Promise<unknown>]>([
+    // What `createMcpHonoApp` from `@modelcontextprotocol/hono` does
+    ['a copy of the request', (c) => c.req.raw.clone().json()],
+    ['c.req.json()', (c) => c.req.json()],
+    ['c.req.text()', (c) => c.req.text()],
+  ])('lets an open method through when it read %s', async (_label, readBody) => {
+    const res = await post(readBody, { body: rpc('initialize') });
+
+    expect(res).toEqual({ status: 200, body: { reached: true, auth: null } });
+  });
+
+  test('still challenges a protected call when it read c.req.json()', async () => {
+    const res = await post((c) => c.req.json(), {
+      body: rpc('tools/call', { name: 'delete_user' }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  test('throws a setup error when it read the raw request, which leaves nothing to check', async () => {
+    const res = await post((c) => c.req.raw.json(), { body: rpc('initialize') });
+
+    expect(res).toEqual({
+      status: 500,
+      body: {
+        message:
+          'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+      },
+    });
   });
 });
