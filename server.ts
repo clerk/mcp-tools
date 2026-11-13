@@ -178,8 +178,7 @@ type GenerateProtectedResourceMetadataOptions = {
 } & (
   | {
       /**
-       * Clerk publishable key. The authorization server is the instance's Frontend API, and Clerk's documentation is
-       * added as `resource_documentation`.
+       * Clerk publishable key. The authorization server is the instance's Frontend API.
        */
       publishableKey: string;
       authServerUrl?: never;
@@ -197,8 +196,7 @@ type GenerateProtectedResourceMetadataOptions = {
  * Generates RFC 9728 protected resource metadata for the given resource url and either a Clerk publishable key or
  * the issuer identifier of another authorization server. It holds only parameters RFC 9728 section 2 defines:
  * `resource`, `authorization_servers`, and `bearer_methods_supported`, since the adapters read the token from the
- * `Authorization` header alone, plus `resource_documentation` pointing at Clerk's documentation when given a
- * publishable key. Pass others, such as `resource_name`, in `properties`.
+ * `Authorization` header alone. Pass others, such as `resource_name` or `resource_documentation`, in `properties`.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-2
  * @param options - `{ resourceUrl, publishableKey }` for Clerk, or `{ resourceUrl, authServerUrl }` for any other
@@ -218,19 +216,24 @@ export function generateProtectedResourceMetadata(
     return Object.assign(metadata(options.authServerUrl), options.properties);
   }
 
-  return Object.assign(
-    metadata(deriveFapiUrl(options.publishableKey)),
-    { resource_documentation: 'https://clerk.com/docs' },
-    options.properties,
-  );
+  return Object.assign(metadata(deriveFapiUrl(options.publishableKey)), options.properties);
 }
 
+// A publishable key is `pk_test_` or `pk_live_` and the base64 of the Frontend API host followed by `$`
 function deriveFapiUrl(publishableKey: string) {
-  const key = publishableKey.replace(/^pk_(test|live)_/, '');
+  const key = /^pk_(?:test|live)_([A-Za-z0-9+/_=-]+)$/.exec(publishableKey)?.[1] ?? '';
   const normalizedKey = key.replace(/-/g, '+').replace(/_/g, '/');
   const paddedKey = normalizedKey.padEnd(Math.ceil(normalizedKey.length / 4) * 4, '=');
-  const decoded = atob(paddedKey);
-  return `https://${decoded.replace(/\$/, '')}`;
+  let decoded = '';
+  try {
+    decoded = atob(paddedKey);
+  } catch {}
+  if (!decoded.endsWith('$') || decoded.length === 1) {
+    throw new Error(
+      'Clerk error: the publishable key is not a Clerk publishable key. Copy it from the API keys page of the Clerk Dashboard',
+    );
+  }
+  return `https://${decoded.slice(0, -1)}`;
 }
 
 /**
@@ -239,8 +242,8 @@ function deriveFapiUrl(publishableKey: string) {
  *
  * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
  * @param publishableKey - Clerk publishable key
- * @returns The parsed metadata document. It throws a `Clerk error:` when the Frontend API does not answer with a 2xx,
- * so an error body is never served, or cached, as the metadata.
+ * @returns The parsed metadata document. It throws a `Clerk error:` when the publishable key is not one, and when
+ * the Frontend API does not answer with a 2xx, so an error body is never served, or cached, as the metadata.
  */
 export async function fetchAuthorizationServerMetadata({
   publishableKey,

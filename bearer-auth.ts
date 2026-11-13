@@ -120,7 +120,8 @@ export type ProtectedResourceMetadataOptions<
    */
   resourceUrl?: McpResourceUrl | undefined;
   /**
-   * Additional metadata, such as `resource_name`. It overrides the generated metadata. Without `scopes_supported`,
+   * Additional metadata, such as `resource_name`. It overrides the generated metadata, except `resource`, which it
+   * cannot set: that is `resourceUrl`, the URL `mcpAuth` checks (RFC 9728 section 3.3). Without `scopes_supported`,
    * the metadata lists `requiredScopes` then `challengeScopes`, each once. A `scopes_supported` given here is used
    * as is, and must list every one of them.
    */
@@ -446,8 +447,8 @@ function assertResourceUrls(caller: string, resourceUrl: unknown) {
 
 /**
  * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only the keys of the adapter's
- * `mcpAuth` options and `properties`, then checks `resourceUrl` and the scopes as `mcpAuth` does, and that an explicit
- * `properties.scopes_supported` is an array of strings listing every required and challenge scope. The handler took
+ * `mcpAuth` options and `properties`, then checks `resourceUrl` and the scopes as `mcpAuth` does, that `properties`
+ * does not set `resource`, and that an explicit `properties.scopes_supported` is an array of strings listing every required and challenge scope. The handler took
  * the additional metadata itself before it took options, so code written for that form, such as
  * `protectedResourceMetadataHandler({ scopes_supported })`, fails at startup with a message naming the new form
  * instead of serving metadata without it.
@@ -473,6 +474,12 @@ export function assertProtectedResourceMetadataOptions(
   }
   const { properties, ...authOptions } = options as ProtectedResourceMetadataOptions;
   assertMcpAuthOptions('protectedResourceMetadataHandler', authOptions);
+  // RFC 9728 section 3.3: a client discards metadata whose `resource` is not the URL it derived the metadata URL from
+  if (properties !== undefined && Object.hasOwn(properties, 'resource')) {
+    throw new Error(
+      "Clerk error: protectedResourceMetadataHandler properties cannot set resource: it is the URL mcpAuth checks. Pass it as resourceUrl instead, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp' })",
+    );
+  }
 
   const listed = properties?.scopes_supported;
   if (listed === undefined) return;
@@ -605,8 +612,10 @@ export function clerkTokenVerifier<Req>(
 }
 
 /**
- * The publishable key the metadata handlers read from the app's environment, or an error when it is not set. The
- * adapters read the variable themselves: Next.js only inlines `process.env.NEXT_PUBLIC_*` where it is written out.
+ * The publishable key the metadata handlers read from the app's environment, or an error when it is not set or is
+ * not a Clerk publishable key. The adapters read the variable themselves: Next.js only inlines
+ * `process.env.NEXT_PUBLIC_*` where it is written out. The key is checked here, before any request to Clerk, so a
+ * mistyped key throws to the framework as a missing one does, instead of being answered as Clerk's failure.
  * @param publishableKey - The value of the variable in the app's environment
  * @param name - The variable's name, for the error: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` in Next.js
  * @returns The publishable key
@@ -617,6 +626,15 @@ export function requirePublishableKey(
 ): string {
   if (!publishableKey) {
     throw new Error(`${name} environment variable is required`);
+  }
+  try {
+    // Deriving the authorization server is what decodes the key
+    generateProtectedResourceMetadata({ resourceUrl: 'https://clerk.invalid', publishableKey });
+  } catch (error) {
+    throw new Error(
+      `Clerk error: ${name} is not a Clerk publishable key. Copy it from the API keys page of the Clerk Dashboard`,
+      { cause: error },
+    );
   }
   return publishableKey;
 }

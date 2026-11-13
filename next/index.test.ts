@@ -63,17 +63,37 @@ describe('protectedResourceMetadataHandler', () => {
     );
   });
 
-  test('sets resource from properties instead of the route path', async () => {
-    const properties = {
+  // RFC 9728 section 3.3: the `resource` must be the URL the client derived the metadata URL from
+  test('throws at setup when properties sets resource, and takes the public URL as resourceUrl', async () => {
+    expect(() =>
+      protectedResourceMetadataHandler({
+        properties: { resource: 'https://public.example.com/mcp' },
+      }),
+    ).toThrow('Clerk error: protectedResourceMetadataHandler properties cannot set resource');
+
+    const metadata = await protectedResourceMetadataHandler({
+      resourceUrl: 'https://public.example.com/mcp',
+      properties: { scopes_supported: ['profile'] },
+    })(new Request(`${METADATA_ROOT}/mcp`)).json();
+
+    expect(metadata).toMatchObject({
       resource: 'https://public.example.com/mcp',
       scopes_supported: ['profile'],
-    };
-    const metadata = await protectedResourceMetadataHandler({ properties })(
-      new Request(`${METADATA_ROOT}/mcp`),
-    ).json();
-
-    expect(metadata).toMatchObject(properties);
+    });
   });
+
+  // Joined so GitHub push protection doesn't read the fake secret key as a Stripe key
+  const secretKeyShaped = ['sk', 'test', 'Y2xlcmsuZXhhbXBsZS5jb20k'].join('_');
+  test.each(['pk_test_abc', secretKeyShaped, 'pk_test_!!!!'])(
+    'throws a Clerk error naming the variable for the publishable key %j',
+    (key) => {
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = key;
+
+      expect(() => protectedResourceMetadataHandler()(new Request(`${METADATA_ROOT}/mcp`))).toThrow(
+        'Clerk error: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is not a Clerk publishable key',
+      );
+    },
+  );
 });
 
 // A route handler that echoes the auth info `mcp-handler` would read from `req.auth`.
