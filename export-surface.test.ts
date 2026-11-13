@@ -289,7 +289,17 @@ describe('export surface', () => {
   test.each(entries.map(({ subpath }) => subpath))(
     '%s lists the types condition first',
     (subpath) => {
-      expect(Object.keys(exportsMap[subpath] ?? {})).toEqual(['types', 'import']);
+      expect(Object.keys(exportsMap[subpath] ?? {})).toEqual(['types', 'import', 'default']);
+    },
+  );
+
+  // `default` lets `require(esm)` (Node 22 and later) and CJS-condition resolvers load the same ESM build.
+  test.each(entries.map(({ subpath }) => subpath))(
+    '%s points default at the import build',
+    (subpath) => {
+      const target = exportsMap[subpath];
+      if (typeof target !== 'object') throw new Error(`${subpath} has no conditions`);
+      expect(target.default).toBe(target.import);
     },
   );
 
