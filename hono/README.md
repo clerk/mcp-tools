@@ -162,9 +162,9 @@ Middleware that enforces authentication for MCP requests. Extracts the bearer to
 
 Earlier versions took the verifier as the first argument, `mcpAuth(verifyToken, options)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware throws to Hono's error handler, and Hono's default handler answers with a JSON `500` (or the `5xx` status Clerk answered with), `{"error":"server_error"}`, and logs the error with `console.error`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify a token at all, for example during an outage, when Clerk rate-limits the server, with an invalid secret key, or when Clerk cannot load the signing keys for a JWT access token, the middleware throws to Hono's error handler, and Hono's default handler answers with a JSON `{"error":"server_error"}` and the `429` or `5xx` status Clerk's Backend API answered with, or `500`, and logs the error with `console.error`, so clients keep their tokens instead of restarting authorization. A Backend API `4xx` other than `401` and `429` means Clerk refused the token, so it gets the `401` challenge.
 
-A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `c.get('mcpAuthFailure')`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, which a middleware mounted earlier can read after `await next()`, for example for logging. When `verifyToken` throws, or Clerk cannot verify the token, the middleware throws an `McpAuthError` to Hono's error handler instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. A custom `onError` replaces the default answer and logging, so answer with the same JSON there. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
+A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `c.get('mcpAuthFailure')`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, which a middleware mounted earlier can read after `await next()`, for example for logging. When `verifyToken` throws, or Clerk cannot verify the token, the middleware throws an `McpAuthError` to Hono's error handler instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. A custom `onError` replaces the default answer and logging, so answer with the same JSON and status there. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
 ```ts
 import { McpAuthError } from '@clerk/mcp-tools/hono';
@@ -172,7 +172,7 @@ import { McpAuthError } from '@clerk/mcp-tools/hono';
 app.onError((err, c) => {
   if (!(err instanceof McpAuthError)) return c.text('Internal Server Error', 500);
   console.error('MCP auth failed', err.reason, err.cause);
-  return c.json({ error: 'server_error' }, 500);
+  return Response.json({ error: 'server_error' }, { status: err.status ?? 500 });
 });
 ```
 
@@ -253,15 +253,15 @@ See [Step-up for your own tools](../README.md#step-up-for-your-own-tools) in the
 
 ### `protectedResourceMetadataHandler(options?)`
 
-Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` in your own route. It takes the options you pass to `mcpAuth`, all optional, plus `properties`, so one object can be passed to both. The handler ignores `clerkClient` and `verifyToken`.
+Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` in your own route. It takes the options you pass to `mcpAuth`, all optional, plus `properties`, so one object can be passed to both. The handler ignores `clerkClient` and `verifyToken`.
 
 - `resourceUrl` (optional): the same value you pass to `mcpAuth`, one URL or a list with one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
 - `requiredScopes` and `challengeScopes` (optional): the same values you pass to `mcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
-- `properties` (optional): additional metadata, such as `resource_name`. It overrides the generated metadata. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
+- `properties` (optional): additional metadata, such as `resource_name`. It overrides the generated metadata, except `resource`, which it can't set: pass the URL as `resourceUrl`, so `resource` is the URL `mcpAuth` checks (RFC 9728 section 3.3). Setting it throws a `Clerk error:` when the handler is created. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
 
 ### `authorizationServerMetadataHandler()`
 
-Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`.
+Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable.
 
 ### `streamableHttpHandler(createServer, Transport)`
 
