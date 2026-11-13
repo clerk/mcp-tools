@@ -1,6 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import {
+  McpServer as McpServerV2,
+  WebStandardStreamableHTTPServerTransport as WebStandardStreamableHTTPServerTransportV2,
+} from '@modelcontextprotocol/server';
 import { describe, test } from 'vitest';
 
 import { streamableHttpHandler as expressStreamableHttpHandler } from './express';
@@ -14,6 +18,13 @@ describe('the streamableHttpHandler transport argument', () => {
   test('accepts the SDK McpServer and transport classes without annotations', () => {
     honoStreamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport);
     expressStreamableHttpHandler(createServer, StreamableHTTPServerTransport);
+  });
+
+  test('accepts the SDK 2.x McpServer and web-standard transport', () => {
+    honoStreamableHttpHandler(
+      () => new McpServerV2({ name: 'test-server', version: '1.0.0' }),
+      WebStandardStreamableHTTPServerTransportV2,
+    );
   });
 
   test('rejects a server object in place of the factory', () => {
