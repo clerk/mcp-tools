@@ -65,11 +65,18 @@ export class McpTokenVerificationError extends Error {
    * `token-verification-failed`, so the `message` is what says which check failed.
    */
   readonly code: string;
+  /**
+   * The HTTP status the verifier's upstream answered with, when it reported one. From Clerk verification it is the
+   * status of Clerk's Backend API response, such as `503`. An `McpAuthError` around this error answers with it when it
+   * is a 429 or a 5xx.
+   */
+  readonly status: number | undefined;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, options?: { status?: number | undefined }) {
     super(message);
     this.name = 'McpTokenVerificationError';
     this.code = code;
+    this.status = options?.status;
   }
 }
 
@@ -82,10 +89,11 @@ export class McpTokenVerificationError extends Error {
 export class McpAuthError extends Error {
   readonly reason = 'verification_failed';
   /**
-   * The `cause`'s `status` when it is a 5xx, so Express's default error handler still answers with it. Any other
-   * status would become the answer to the client's own request, such as a 401 without the challenge a 401 must carry
-   * (RFC 9110 section 15.5.2). A status must be an integer, a three-digit code (RFC 9110 section 15): Express's
-   * `res.status()` throws on any other number, which would lose the JSON answer.
+   * The `cause`'s `status` when it is a 429 or a 5xx, the status the adapters answer with, so a client can tell rate
+   * limiting (RFC 6585 section 4) from an outage. Any other status would become the answer to the client's own
+   * request, such as a 401 without the challenge a 401 must carry (RFC 9110 section 15.5.2). A status must be an
+   * integer, a three-digit code (RFC 9110 section 15): Express's `res.status()` throws on any other number, which would
+   * lose the JSON answer.
    */
   readonly status: number | undefined;
 
@@ -94,7 +102,9 @@ export class McpAuthError extends Error {
     this.name = 'McpAuthError';
     const status = (cause as { status?: unknown } | null)?.status;
     this.status =
-      typeof status === 'number' && Number.isInteger(status) && status >= 500 && status <= 599
+      typeof status === 'number' &&
+      Number.isInteger(status) &&
+      (status === 429 || (status >= 500 && status <= 599))
         ? status
         : undefined;
   }

@@ -919,20 +919,35 @@ export async function authenticateBearer({
 }
 
 // The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret
-// key, as opposed to when it rejected the token. A JWT access token whose JWKS cannot be fetched gets
-// `token-verification-failed` instead, the reason an invalid signature gets, so that case still resolves as rejected.
+// key, as opposed to when it rejected the token.
 const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerificationErrorCode>([
   'unexpected-error',
   'secret-key-invalid',
 ]);
 
+// Clerk keeps the Backend API's status only in the message, as `Unexpected error (code=unexpected-error, status=503)`
+function clerkStatus(message: string | undefined): number | undefined {
+  const status = /\(code=[^,()]*, status=(\d{3})\)$/.exec(message ?? '')?.[1];
+  return status === undefined ? undefined : Number(status);
+}
+
+// Whether Clerk could not verify the token at all, so the client must keep it. A Backend API 4xx other than 401
+// (an invalid secret key) and 429 (rate limiting) is Clerk refusing the token. A JWT access token whose JWKS can't be
+// fetched gets the reason an invalid signature gets, so only the message tells the two apart.
+function isVerificationUnavailable(reason: string, message: string, status: number | undefined) {
+  if (reason === 'token-verification-failed') return message.startsWith('Error loading Clerk JWKS');
+  if (!verificationUnavailable.has(reason)) return false;
+  return status === undefined || status < 400 || status >= 500 || status === 401 || status === 429;
+}
+
 /**
  * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. For a token Clerk rejects, this
  * throws an `McpTokenVerificationError` with the reason and message Clerk gave, so that the token reaches the client
- * as an `invalid_token` challenge. When Clerk could not verify an opaque token at all, this throws an `McpAuthError`
- * around that error instead and the framework answers with a server error: an `invalid_token` challenge would make
- * the client discard a valid token and restart authorization. Clerk does not report a JWKS failure on a JWT access
- * token separately from an invalid signature, so that case is still a rejection.
+ * as an `invalid_token` challenge. When Clerk could not verify the token at all, this throws an `McpAuthError` around
+ * that error instead and the framework answers with a server error: an `invalid_token` challenge would make the
+ * client discard a valid token and restart authorization. That covers an opaque token whose Backend API check failed
+ * with a 429, a 5xx, or no response, which the answer keeps as its status (500 without one), an invalid secret key,
+ * and a JWT access token whose JWKS Clerk could not load. A Backend API 4xx other than 401 and 429 is a rejection.
  */
 export async function verifyClerkOAuthToken(
   client: ClerkOAuthClient,
@@ -955,12 +970,14 @@ export async function verifyClerkOAuthToken(
   );
   if (!requestState.isAuthenticated) {
     const { reason, message } = requestState;
+    const status = clerkStatus(message);
     // Clerk leaves the message empty for some reasons, such as `token-type-mismatch`
     const error = new McpTokenVerificationError(
       reason,
       message || `Clerk did not accept the token (${reason})`,
+      { status },
     );
-    if (verificationUnavailable.has(reason)) throw new McpAuthError(error);
+    if (isVerificationUnavailable(reason, message ?? '', status)) throw new McpAuthError(error);
     throw error;
   }
 
