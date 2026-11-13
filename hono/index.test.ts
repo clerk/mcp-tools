@@ -431,6 +431,62 @@ describe('mcpAuth', () => {
     expect(errors[0]).toMatchObject({ reason: 'verification_failed', cause });
   });
 
+  test("answers an McpAuthError with a JSON server error under Hono's default error handler", async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = new Hono();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw Object.assign(new Error('unavailable'), { status: 503 });
+        },
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+    expect(await res.json()).toEqual({ error: 'server_error' });
+    // Hono's default handler logs errors without getResponse(); this keeps the outage visible the same way
+    expect(consoleError).toHaveBeenCalledWith(expect.any(McpAuthError));
+    consoleError.mockRestore();
+  });
+
+  test('gives a custom onError the McpAuthError itself, with getResponse() for the JSON answer', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errors: unknown[] = [];
+    const app = new Hono();
+    app.onError((err) => {
+      errors.push(err);
+      return (err as McpAuthError & { getResponse(): Response }).getResponse();
+    });
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw new Error('network down');
+        },
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'server_error' });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(McpAuthError);
+    consoleError.mockRestore();
+  });
+
   test('rejects a token whose verifier throws an McpTokenVerificationError, with it as the cause', async () => {
     const cause = new McpTokenVerificationError('token-revoked', 'The token was revoked');
     const failures: unknown[] = [];

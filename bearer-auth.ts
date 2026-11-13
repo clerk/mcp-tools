@@ -640,6 +640,15 @@ export function assertServerFactory(createServer: unknown, transportClassName: s
 }
 
 /**
+ * The JSON answer to a request whose token Clerk or `verifyToken` could not verify at all, such as during an outage or
+ * with an invalid secret key. It is a server error, not a challenge, so the client keeps a token that may be valid. The
+ * status is the `McpAuthError`'s 5xx `status` when it has one, otherwise 500.
+ */
+export function serverErrorAnswer(error: McpAuthError) {
+  return { status: error.status ?? 500, body: { error: 'server_error' } } as const;
+}
+
+/**
  * The answer `streamableHttpHandler` gives a request that isn't a POST. It serves each POST on a new stateless
  * transport, so it has no session for a GET to stream on or a DELETE to end. It answers both with the 405 and JSON-RPC
  * error that MCP SDK 2's stateless serving sends, rather than letting an SDK 1 transport open a stream that nothing

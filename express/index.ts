@@ -15,10 +15,12 @@ import {
   failureHeaders,
   methodNotAllowed,
   requirePublishableKey,
+  serverErrorAnswer,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
+  McpAuthError,
   fetchAuthorizationServerMetadata,
 } from '../server';
 
@@ -138,17 +140,28 @@ export function mcpAuth(options: McpAuthOptions) {
       return;
     }
 
-    const result = await authenticateBearer({
-      authorization: req.headers.authorization,
-      requestUrl,
-      resourceUrl: options.resourceUrl,
-      requiredScopes: options.requiredScopes,
-      challengeScopes: options.challengeScopes,
-      publicAccess: options.publicAccess,
-      method: req.method,
-      body: () => parsedJsonBody(req),
-      verifyToken: (token) => verifyToken(token, req),
-    });
+    let result: Awaited<ReturnType<typeof authenticateBearer>>;
+    try {
+      result = await authenticateBearer({
+        authorization: req.headers.authorization,
+        requestUrl,
+        resourceUrl: options.resourceUrl,
+        requiredScopes: options.requiredScopes,
+        challengeScopes: options.challengeScopes,
+        publicAccess: options.publicAccess,
+        method: req.method,
+        body: () => parsedJsonBody(req),
+        verifyToken: (token) => verifyToken(token, req),
+      });
+    } catch (error) {
+      if (!(error instanceof McpAuthError)) throw error;
+      // The client gets JSON, never Express's HTML error page, and error middleware still sees the error once the
+      // answer is out. Express's default error handler then logs it and closes the finished connection.
+      const answer = serverErrorAnswer(error);
+      res.on('finish', () => next(error));
+      res.status(answer.status).json(answer.body);
+      return;
+    }
 
     if (!result.ok) {
       if (result.failure) res.locals.mcpAuthFailure = result.failure;

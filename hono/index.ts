@@ -16,10 +16,12 @@ import {
   methodNotAllowed,
   readJsonBody,
   requirePublishableKey,
+  serverErrorAnswer,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
+  McpAuthError,
   fetchAuthorizationServerMetadata,
 } from '../server';
 
@@ -181,6 +183,23 @@ export function authorizationServerMetadataHandler() {
 }
 
 /**
+ * Gives an `McpAuthError` the `getResponse()` that Hono's default error handler answers with for any error that has
+ * one, so a request whose token could not be verified at all gets a JSON server error instead of `Internal Server
+ * Error` text. A custom `app.onError` still receives the `McpAuthError` and can return `err.getResponse()`. That
+ * handler logs only errors without `getResponse()`, so `getResponse()` logs the error with `console.error` itself, and
+ * an outage stays as visible as it was.
+ */
+function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): Response } {
+  return Object.assign(error, {
+    getResponse() {
+      console.error(error);
+      const answer = serverErrorAnswer(error);
+      return Response.json(answer.body, { status: answer.status });
+    },
+  });
+}
+
+/**
  * Hono middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
@@ -224,18 +243,24 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
     // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
     if (!options.verifyToken) await clerkClientFor(c);
 
-    const result = await authenticateBearer({
-      authorization: c.req.header('authorization'),
-      requestUrl: c.req.url,
-      resourceUrl: options.resourceUrl,
-      requiredScopes: options.requiredScopes,
-      challengeScopes: options.challengeScopes,
-      publicAccess: options.publicAccess,
-      method: c.req.method,
-      // A clone, so the MCP transport can still read the request
-      body: async () => readJsonBody(await requestWithBody(c)),
-      verifyToken: (token) => verifyToken(token, c),
-    });
+    let result: Awaited<ReturnType<typeof authenticateBearer>>;
+    try {
+      result = await authenticateBearer({
+        authorization: c.req.header('authorization'),
+        requestUrl: c.req.url,
+        resourceUrl: options.resourceUrl,
+        requiredScopes: options.requiredScopes,
+        challengeScopes: options.challengeScopes,
+        publicAccess: options.publicAccess,
+        method: c.req.method,
+        // A clone, so the MCP transport can still read the request
+        body: async () => readJsonBody(await requestWithBody(c)),
+        verifyToken: (token) => verifyToken(token, c),
+      });
+    } catch (error) {
+      if (!(error instanceof McpAuthError)) throw error;
+      throw withJsonResponse(error);
+    }
 
     if (!result.ok) {
       if (result.failure) c.set('mcpAuthFailure', result.failure);

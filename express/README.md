@@ -221,16 +221,16 @@ The middleware will:
 
 The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware passes an error to Express, which answers with a `500`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware answers with a JSON `500`, `{"error":"server_error"}`, so clients keep their tokens instead of restarting authorization. It never sends Express's HTML error page, which shows the stack trace outside production. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
-A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, the middleware passes an `McpAuthError` to Express instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
+A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, or Clerk cannot verify the token, the middleware sends that JSON `500` and then passes an `McpAuthError` to your error middleware, with `reason: 'verification_failed'` and the thrown error as its `cause`. The response has already been sent by then, so `res.headersSent` is `true`: log the error, but don't answer again. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
 ```ts
 import { McpAuthError } from '@clerk/mcp-tools/express';
 
 app.use((err, req, res, next) => {
-  if (err instanceof McpAuthError) console.error('MCP auth failed', err.cause);
-  next(err);
+  if (!(err instanceof McpAuthError)) return next(err);
+  console.error('MCP auth failed', err.reason, err.cause);
 });
 ```
 
@@ -387,6 +387,7 @@ The middleware automatically handles common authentication errors:
 - **Invalid token format**: Returns 401 with the same challenge
 - **Token verification failure**: Returns 401 with the same challenge plus `error="invalid_token"`
 - **Missing required scopes**: Returns 403 with the same challenge plus `error="insufficient_scope"` and `scope`
+- **Verification unavailable**: Returns a JSON 500, `{"error":"server_error"}`, then passes an `McpAuthError` to your error middleware
 
 ## Integration with Existing Express Apps
 
