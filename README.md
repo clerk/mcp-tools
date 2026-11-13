@@ -61,7 +61,7 @@ const result = generateProtectedResourceMetadata({
 
 Return this result from `/.well-known/oauth-protected-resource` followed by your MCP endpoint's path, such as `/.well-known/oauth-protected-resource/mcp` for an endpoint at `/mcp` (RFC 9728 section 3). This is the URL the `401` challenge's `resource_metadata` points to. A route at the bare `/.well-known/oauth-protected-resource` describes only the origin, so its `resource` doesn't match an endpoint with a path.
 
-If you are using [Clerk](https://clerk.com) for authentication in your app, pass your publishable key instead of `authServerUrl`. The authorization server is derived from the key, and Clerk's documentation is added as `resource_documentation`:
+If you are using [Clerk](https://clerk.com) for authentication in your app, pass your publishable key instead of `authServerUrl`. The authorization server is derived from the key. A key that isn't a Clerk publishable key throws a `Clerk error:`. Add `resource_documentation`, a page about your own MCP server, in `properties` if you have one:
 
 ```ts
 import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
@@ -69,6 +69,7 @@ import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 const result = generateProtectedResourceMetadata({
   publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
   resourceUrl: 'https://myapp.com/current-route',
+  properties: { resource_documentation: 'https://myapp.com/docs/mcp' },
 });
 ```
 
@@ -169,9 +170,9 @@ The example uses `challengeScopes`, not `requiredScopes`. `requiredScopes` makes
 Nothing is open unless it is listed, and without `publicAccess` every request without a token still gets the `401`.
 
 - A request that carries a token is verified as usual, even for an open method, and a token that does not verify gets its `401`.
-- A `POST` without a token passes only when every JSON-RPC message in its body is open. A batch with one protected message, a body that is not sent as `application/json`, and a body over 1 MiB all get the `401`. In Express, `express.json()` reads the body before `mcpAuth`, so its `limit` (100kb by default) is what bounds how much a request without a token makes the server buffer. A body whose `Content-Length` is over 1 MiB still gets the `401`.
+- A `POST` without a token passes only when every JSON-RPC message in its body is open. A batch with one protected message, a body that is not sent as `application/json`, and a body over 1 MiB all get the `401`. In Express, `express.json()` reads the body before `mcpAuth`, so its `limit` (100kb by default) is what bounds how much a request without a token makes the server buffer. A body over 1 MiB still gets the `401`, whether it declares a `Content-Length` or is chunked.
 - The `401` for a protected call is the usual challenge, with `resource_metadata` and the `scope` from `requiredScopes` and `challengeScopes`. It is sent before the MCP SDK runs, which is what makes a client start authorization. A tool cannot send it: the SDK turns an error from a tool into a `200` result, which no client treats as a reason to sign in.
-- A `GET` without a token gets a `405` with `Allow: POST` when `methods` opens `initialize` or `server/discover`. MCP clients open a `GET` stream once they have connected, and a `401` there would start authorization before the client reached anything protected. The `GET` has to reach `mcpAuth` for this, so route every method of the endpoint through it, as in `app.all('/mcp', ...)` in Express and Hono. In Next.js, export the wrapped handler as `GET` and `DELETE` as well as `POST`.
+- A `GET` without a token gets a `405` with `Allow: POST` when `methods` opens `initialize` or `server/discover`. MCP clients open a `GET` stream once they have connected, and a `401` there would start authorization before the client reached anything protected. The `GET` has to reach `mcpAuth` for this, so route every method of the endpoint through it, as in `app.all('/mcp', ...)` in Express and Hono. In Next.js, export the wrapped handler as `GET` and `DELETE` as well as `POST`. From protocol revision 2026-07-28, clients open a `subscriptions/listen` `POST` instead, and the same condition opens it without a token, as long as every URI in its `resourceSubscriptions` is one `resources` opens. A listen that subscribes to any other resource gets the `401`.
 - A `DELETE` without a token gets the `401`, as does any other request that isn't open. MCP clients send a `DELETE` only to end a session, and the stateless handlers never start one.
 - `tasks/get`, `tasks/result`, and `tasks/cancel` always need a token, even for a task that a public tool started: a task ID alone doesn't show who may read or cancel the task. A client without a token gets the `401` for them.
 - The `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed` messages pass whenever `publicAccess` opens anything. A client sends them about work already under way, for example when a call is cancelled or times out, and a `401` there would ask the user to sign in although they reached nothing protected. Any other notification from a client without a token still gets the `401`. `publicAccess` assumes a stateless server, as `streamableHttpHandler`, `createMcpHandler`, and `mcp-handler` run: these notifications are not checked against the caller, so on a stateful server a client without a token that knows a session ID and a request ID could cancel another user's request or report progress on it.
@@ -532,9 +533,9 @@ The above examples are more of a _guide_ for how to implement the tools, but for
        */
       sessionId: string;
       /**
-       * Calling this function will initialize a connect to the MCP service.
+       * Connects to the MCP service. Resolves once the connection is initialized.
        */
-      connect: () => void;
+      connect: () => Promise<void>;
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -616,9 +617,9 @@ The above examples are more of a _guide_ for how to implement the tools, but for
        */
       sessionId: string;
       /**
-       * Calling this function will initialize a connect to the MCP service.
+       * Connects to the MCP service. Resolves once the connection is initialized.
        */
-      connect: () => void;
+      connect: () => Promise<void>;
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -669,7 +670,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
        */
       sessionId: string;
       /**
-       * Calling this function will initialize a connect to the MCP service.
+       * Connects to the MCP service. Resolves once the connection is initialized.
        */
       connect: () => Promise<void>;
       /**
@@ -741,7 +742,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       | {
           /**
            * Your Clerk publishable key (e.g., pk_test_... or pk_live_...).
-           * Also adds Clerk's documentation as `resource_documentation`.
            */
           publishableKey: string;
           /**
@@ -776,7 +776,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       resource: string;
       authorization_servers: string[];
       bearer_methods_supported: ['header'];
-      resource_documentation?: string; // 'https://clerk.com/docs' with a publishable key
       [key: string]: any; // Additional properties if provided, such as resource_name
     }
     ```
@@ -838,7 +837,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Returns:** `string | undefined`
 
 - `McpAuthError`
-  - **Description:** What `mcpAuth` and `withMcpAuth` throw to the framework's error handler when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the status the adapters answer with when the cause reported one they forward. See your framework's guide for the answer it sends.
+  - **Description:** The error `mcpAuth` and `withMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express answers JSON with that status, or `500`, and logs the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers the same way, and Next.js throws it to `onRequestError` and answers an empty `500`.
 
 - `McpTokenVerificationError`
   - **Description:** What a verifier reported for a token it did not accept. Clerk verification creates one from Clerk's `reason` (its `code`, such as `token-invalid`) and `message`, and it is the `cause` of an `invalid_token` failure (`McpAuthFailure`) or of an `McpAuthError`. A `verifyToken` function can throw one to reject a token with its own code. It is never sent to the client.

@@ -169,7 +169,7 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 - `requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `publicAccess` (optional) - What a request without a token may do: `methods` (`true`, or a list of protocol methods), `tools` (tool names), and `resources` and `prompts` (`true`, or a list of resource URIs or prompt names). Without it, every such request gets the `401`. See [Public access](#public-access).
-- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `mcpAuth` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
+- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `mcpAuth` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here. Create it with both `secretKey` and `publishableKey`. Without this option, a missing `CLERK_SECRET_KEY` or `CLERK_PUBLISHABLE_KEY` makes every request throw a `Clerk error:` naming it, as in the Hono adapter. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
 - `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
 
 **Example:**
@@ -225,21 +225,9 @@ The middleware will:
 
 The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware answers with a JSON `500`, `{"error":"server_error"}`, or the `5xx` status Clerk reported, so clients keep their tokens instead of restarting authorization. It never sends Express's HTML error page, which shows the stack trace outside production. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify a token at all, for example during an outage, when Clerk rate-limits the server, with an invalid secret key, or when Clerk cannot load the signing keys for a JWT access token, the middleware answers with a JSON `{"error":"server_error"}` and the `429` or `5xx` status Clerk's Backend API answered with, or `500`, so clients keep their tokens instead of restarting authorization. It never sends Express's HTML error page, which shows the stack trace outside production. A Backend API `4xx` other than `401` and `429` means Clerk refused the token, so it gets the `401` challenge.
 
-A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, or Clerk cannot verify the token, the middleware sends that JSON `500` and then passes an `McpAuthError` to your error middleware, with `reason: 'verification_failed'` and the thrown error as its `cause`. The response has already been sent by then, so `res.headersSent` is `true`: log the error, but don't answer again. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
-
-```ts
-import type { ErrorRequestHandler } from 'express';
-import { McpAuthError } from '@clerk/mcp-tools/express';
-
-const logMcpAuthErrors: ErrorRequestHandler = (err, _req, _res, next) => {
-  if (!(err instanceof McpAuthError)) return next(err);
-  console.error('MCP auth failed', err.reason, err.cause);
-};
-
-app.use(logMcpAuthErrors);
-```
+A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, or Clerk cannot verify the token, the middleware sends that JSON answer and logs an `McpAuthError` with `console.error`, with `reason: 'verification_failed'` and the thrown error as its `cause`. It does not pass the error to your error middleware: Express's default error handler would then close a connection whose request body is still uploading, and the client would get a reset instead of the answer. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client.
 
 Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add your first MCP server to the instance in the Clerk Dashboard; see [Build an MCP server](https://clerk.com/docs/guides/ai/mcp/build-mcp-server). Require `@clerk/express` 2.1.70 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
@@ -271,7 +259,7 @@ Express handler that returns OAuth protected resource metadata for Clerk integra
 
 - `resourceUrl` (optional) - The same value you pass to `mcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
 - `requiredScopes` and `challengeScopes` (optional) - The same values you pass to `mcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
-- `properties` (optional) - Additional metadata, such as `resource_name`. It overrides the generated metadata. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
+- `properties` (optional) - Additional metadata, such as `resource_name`. It overrides the generated metadata, except `resource`, which it can't set: pass the URL as `resourceUrl`, so `resource` is the URL `mcpAuth` checks (RFC 9728 section 3.3). Setting it throws a `Clerk error:` when the handler is created. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
 
 **Example:**
 
@@ -303,7 +291,7 @@ import { authorizationServerMetadataHandler } from '@clerk/mcp-tools/express';
 app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 ```
 
-**Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata.
+**Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable.
 
 ## MCP Request Handler
 
@@ -408,7 +396,7 @@ The middleware automatically handles common authentication errors:
 - **Invalid token format**: Returns 401 with the same challenge
 - **Token verification failure**: Returns 401 with the same challenge plus `error="invalid_token"`
 - **Missing required scopes**: Returns 403 with the same challenge plus `error="insufficient_scope"` and `scope`
-- **Verification unavailable**: Returns a JSON 500 (or the 5xx status Clerk reported), `{"error":"server_error"}`, then passes an `McpAuthError` to your error middleware
+- **Verification unavailable**: Returns `{"error":"server_error"}` with the `429` or `5xx` status Clerk reported, or `500`, and logs the `McpAuthError` with `console.error`
 
 ## Integration with Existing Express Apps
 
