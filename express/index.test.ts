@@ -46,7 +46,7 @@ async function withApp(
   app.post('/mcp', handler);
 
   const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, () => resolve(s));
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const { port } = server.address() as AddressInfo;
 
@@ -75,7 +75,7 @@ async function request(
   });
 
   const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, () => resolve(s));
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const { port } = server.address() as AddressInfo;
 
@@ -513,7 +513,7 @@ describe('mcpAuth', () => {
 
 async function withListening<T>(app: express.Express, fn: (baseUrl: string) => Promise<T>) {
   const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, () => resolve(s));
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const { port } = server.address() as AddressInfo;
   try {
@@ -549,7 +549,7 @@ describe('mcpAuth with Clerk', () => {
       res.json({ ok: true });
     });
     const server: Server = await new Promise((resolve) => {
-      const s = app.listen(0, () => resolve(s));
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
     const { port } = server.address() as AddressInfo;
 
