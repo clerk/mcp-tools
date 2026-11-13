@@ -26,7 +26,7 @@ type Send = (
 
 async function sendExpress(app: express.Express, path: string, init: Parameters<Send>[1] = {}) {
   const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, () => resolve(s));
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
