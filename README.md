@@ -31,6 +31,8 @@ For detailed implementation guides and examples specific to your framework, see:
 - **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono and edge runtimes
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
 
+Upgrading from 0.9.x? Every entry point was renamed in 0.10.0, with no deprecated aliases. The [changelog](./CHANGELOG.md) maps each old name, such as `mcpAuthClerk`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`, `verifyClerkToken`, `@clerk/mcp-tools/feedback`, and `@clerk/mcp-tools/create-browser-session`, to its replacement.
+
 ### Table of Contents
 
 - [Guide: building a server](#guide-building-a-server)
@@ -57,7 +59,7 @@ const result = generateProtectedResourceMetadata({
 });
 ```
 
-You will want to set up a route at `.well-known/oauth-protected-resource` and make sure to return this result from that route on your server.
+Return this result from `/.well-known/oauth-protected-resource` followed by your MCP endpoint's path, such as `/.well-known/oauth-protected-resource/mcp` for an endpoint at `/mcp` (RFC 9728 section 3). This is the URL the `401` challenge's `resource_metadata` points to. A route at the bare `/.well-known/oauth-protected-resource` describes only the origin, so its `resource` doesn't match an endpoint with a path.
 
 If you are using [Clerk](https://clerk.com) for authentication in your app, pass your publishable key instead of `authServerUrl`. The authorization server is derived from the key, and Clerk's documentation is added as `resource_documentation`:
 
@@ -74,7 +76,7 @@ For framework-specific implementations of protected resource metadata handlers, 
 
 - [Express.js implementation](./express/README.md#protected-resource-metadata)
 - [Hono implementation](./hono/README.md)
-- [Next.js implementation](./next/README.md#protectedresourcehandler)
+- [Next.js implementation](./next/README.md#protectedresourcemetadatahandler)
 
 #### Authorization server metadata
 
@@ -95,9 +97,9 @@ const result = await fetchAuthorizationServerMetadata({
 
 For framework-specific implementations, see:
 
-- [Express.js implementation](./express/README.md)
-- [Hono implementation](./hono/README.md)
-- [Next.js implementation](./next/README.md#authservermetadatahandlerclerk)
+- [Express.js implementation](./express/README.md#authorizationservermetadatahandler)
+- [Hono implementation](./hono/README.md#authorizationservermetadatahandler)
+- [Next.js implementation](./next/README.md#authorizationservermetadatahandler)
 
 #### Creating an MCP endpoint
 
@@ -143,6 +145,9 @@ server.registerTool(
 By default every request without a token gets the `401` challenge, so an MCP client signs in before it can connect. `publicAccess` names what a request without a token may do instead. A client can then connect, list tools, and call the tools you list without an account, and it is asked to sign in the first time it reaches anything else. Claude calls this "Sign in when needed" for a custom connector.
 
 ```ts
+// Or from @clerk/mcp-tools/hono or @clerk/mcp-tools/next
+import type { McpAuthOptions } from '@clerk/mcp-tools/express';
+
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
   // Asked for in the 401, so the first sign-in covers the protected tools
@@ -286,7 +291,7 @@ export { handler as GET, handler as POST, handler as DELETE };
 ```
 
 - Pass `browserSessionInstructions(destinationUrl)` as the server `instructions`. Some MCP clients, such as Codex, show agents only the server instructions until the agent searches for a tool, so without them an agent may open your app in a browser and stop at the sign-in page.
-- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. Require `@clerk/backend` 3.19.0 (`@clerk/nextjs` 7.9.5, `@clerk/express` 2.1.70) or later (see [clerk/javascript#9724](https://github.com/clerk/javascript/pull/9724)). Before those versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the `audience` check, and only a JWT with a different `aud` is rejected. `mcpAuth` in the Express and Hono adapters and `withMcpAuth` in the Next.js adapter, without `verifyToken`, check the audience against their `resourceUrl` option. To confirm that the check works, send a token that was issued to another OAuth application of the same instance, or for another resource: the MCP route must answer `401`.
+- Check the audience. Without an `audience` check, any OAuth access token that your Clerk instance issued, to any OAuth application and for any purpose, can call this tool. Your Clerk instance must issue the `aud` claim in its OAuth access tokens. Clerk turns it on when you add your first MCP server to the instance in the Clerk Dashboard; see [Build an MCP server](https://clerk.com/docs/guides/ai/mcp/build-mcp-server). Require `@clerk/backend` 3.19.0 (`@clerk/nextjs` 7.9.5, `@clerk/express` 2.1.70) or later (see [clerk/javascript#9724](https://github.com/clerk/javascript/pull/9724)). Before those versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the `audience` check, and only a JWT with a different `aud` is rejected. `mcpAuth` in the Express and Hono adapters and `withMcpAuth` in the Next.js adapter, without `verifyToken`, check the audience against their `resourceUrl` option. To confirm that the check works, send a token that was issued to another OAuth application of the same instance, or for another resource: the MCP route must answer `401`.
 - Authenticate requests with `authenticateRequest`, convert the result with `toClerkAuthInfo`, and set `requiredScopes` to the OAuth scopes the access token must carry. `requiredScopes` is required. `[]` is accepted, but then every token that passes the audience check can create a link.
 - Require a dedicated scope for this tool, such as a custom scope named `browser_session`, not a scope that nearly every client gets, such as `profile` or `email`. The link signs a browser in to your app as the user, so the scope is how the user approves that for a given MCP client. With a common scope, every MCP client the user connects can open your app as them. `restricted` does not narrow this for your own backend: only Clerk's Frontend API enforces it, and your backend sees an ordinary signed-in session unless it checks for an agent session itself. Create the scope as a custom OAuth scope on your Clerk instance, enable it for the OAuth applications that may use the tool, and keep it out of the scopes that clients get by default, so a client gets it only when the user approves it, for example through the step-up challenge.
 - Step-up authorization (a `403` challenge that makes the MCP client ask the user to approve more scopes) needs `@modelcontextprotocol/server` 2.1 or later. The tool sets the SDK's `scopeChallenge` registration option, and you must pass `resourceMetadataUrl` on `authInfo`, as above; without it the challenge has no `resource_metadata`. The challenge asks for the token's granted scopes plus the missing ones, so the new grant does not drop access that other tools need. The SDK's own `requireScopes` helper challenges for the listed scopes only.

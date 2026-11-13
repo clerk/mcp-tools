@@ -22,7 +22,10 @@
   },
   "files": [
     "dist",
+    "express/README.md",
     "hono/README.md",
+    "next/README.md",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
