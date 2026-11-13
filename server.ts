@@ -302,9 +302,8 @@ export function toClerkAuthInfo(
 
 /**
  * Clerk's auth object for a verified OAuth access token, as `toClerkAuthInfo` stores it on `extra.auth`. At runtime it
- * is the object Clerk returned, with every field Clerk sets, such as `has()`. The fields `toClerkAuthInfo` checks are
- * typed here, so that this package's types do not need `@clerk/backend`; cast it to Clerk's
- * `MachineAuthObject<'oauth_token'>` for the rest.
+ * is the object Clerk returned. Declared here so that this package's types do not need `@clerk/backend`. Clerk's `has()`
+ * and `debug` are left out: for an OAuth token, `has()` always returns `false`, so check `scopes` instead.
  */
 export type ClerkOAuthAuth = {
   isAuthenticated: true;
