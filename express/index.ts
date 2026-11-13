@@ -81,14 +81,16 @@ interface NodeStreamableHttpTransport {
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
  * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
  * `verifyToken` function. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
- * `CLERK_SECRET_KEY`; pass your own when the secret key comes from elsewhere. The route doesn't need
+ * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`; pass your own when the keys come from elsewhere. The route doesn't need
  * `clerkMiddleware()`: this middleware verifies the token itself. Create the client with both `secretKey` and
  * `publishableKey`: without a publishable key, every request fails. A client from `@clerk/backend` must be version
  * 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called with the token and the request,
  * and returns the auth data, or `undefined` to reject it.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
  * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded on
- * `res.locals.mcpAuthFailure`.
+ * `res.locals.mcpAuthFailure`. A token that could not be verified at all gets a JSON server error, and the
+ * `McpAuthError` is logged with `console.error`. Without a `clerkClient` option, every request throws a
+ * `Clerk error:` naming a missing key, or asking to install `@clerk/express` when it can't be loaded.
  * @example
  * ```ts
  * // Every method, so a GET without a token gets the 401 (or the 405 with publicAccess) rather than a 404
@@ -158,10 +160,10 @@ export function mcpAuth(options: McpAuthOptions) {
       });
     } catch (error) {
       if (!(error instanceof McpAuthError)) throw error;
-      // The client gets JSON, never Express's HTML error page, and error middleware still sees the error once the
-      // answer is out. Express's default error handler then logs it and closes the finished connection.
+      // Logged here, not passed to `next`: Express's default error handler destroys the socket of a sent response,
+      // which resets a client still uploading its body, and `finish` never fires when the client disconnects
       const answer = serverErrorAnswer(error);
-      res.on('finish', () => next(error));
+      console.error(error);
       res.status(answer.status).json(answer.body);
       return;
     }
@@ -185,7 +187,7 @@ export function mcpAuth(options: McpAuthOptions) {
  * `clerkClient` from `@clerk/express`. The package is an optional peer that only this path needs, so it is loaded with
  * `import()` inside `try`, and an app that passes `verifyToken` or its own `clerkClient` does not need it installed.
  * @returns The client. It throws a `Clerk error:` asking to install `@clerk/express` when the package can't be loaded,
- * with the load error as the `cause`.
+ * with the load error as the `cause`, or naming `CLERK_SECRET_KEY` or `CLERK_PUBLISHABLE_KEY` when it is not set.
  */
 async function expressClerkClient(): Promise<ClerkOAuthClient> {
   let clerkExpress: typeof import('@clerk/express');
@@ -196,6 +198,15 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
       cause: error,
     });
   }
+  // `@clerk/express` reads both keys from the environment only when a token is verified, and a missing one would then
+  // look like a Clerk outage, so they are checked here as Hono's adapter checks its own
+  for (const name of ['CLERK_SECRET_KEY', 'CLERK_PUBLISHABLE_KEY']) {
+    if (!process.env[name]) {
+      throw new Error(
+        `Clerk error: mcpAuth needs the ${name} environment variable or a clerkClient option`,
+      );
+    }
+  }
   return clerkExpress.clerkClient;
 }
 
@@ -203,10 +214,11 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
  * The JSON body `express.json()` parsed, which `publicAccess` checks. Without that middleware a JSON request has no
  * parsed body, and every request without a token would get a 401 with nothing to say why, so that case throws.
  * `express.json()` has already buffered the body by then, up to its own `limit`, so the `PUBLIC_BODY_LIMIT` check here
- * only keeps the rule the other adapters follow: a body declared larger than that is not public.
+ * only keeps the rule the other adapters follow: a body larger than that is not public. Without a `Content-Length`,
+ * as for a chunked body, the size is that of the parsed body serialized again, which differs from the body sent only
+ * by its whitespace and number formatting.
  * @param req - The incoming request
- * @returns The parsed body, or `undefined` when the request has no JSON body or its `Content-Length` is over
- * `PUBLIC_BODY_LIMIT`
+ * @returns The parsed body, or `undefined` when the request has no JSON body or is over `PUBLIC_BODY_LIMIT`
  */
 function parsedJsonBody(req: express.Request): unknown {
   if (req.body === undefined && req.is('application/json')) {
@@ -214,9 +226,10 @@ function parsedJsonBody(req: express.Request): unknown {
       'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
     );
   }
-  // `Number(undefined)` is NaN, so a request without the header keeps its parsed body
-  if (Number(req.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
-  return req.body;
+  const declared = req.get('content-length');
+  if (declared !== undefined) return Number(declared) > PUBLIC_BODY_LIMIT ? undefined : req.body;
+  if (req.body === undefined) return undefined;
+  return Buffer.byteLength(JSON.stringify(req.body)) > PUBLIC_BODY_LIMIT ? undefined : req.body;
 }
 
 /**

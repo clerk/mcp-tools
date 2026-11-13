@@ -869,7 +869,8 @@ describe('express publicAccess without express.json()', () => {
 describe('express publicAccess behind express.json() with a limit over 1 MiB', () => {
   const publicAccess = { methods: ['initialize'] } as const;
 
-  async function post(body: unknown) {
+  // `chunked` sends the body as a stream, without a `Content-Length`
+  async function post(body: unknown, { chunked = false } = {}) {
     const app = express();
     app.use(express.json({ limit: '5mb' }));
     app.post('/mcp', expressAdapter.mcpAuth({ verifyToken, publicAccess }), (_req, res) => {
@@ -880,11 +881,16 @@ describe('express publicAccess behind express.json() with a limit over 1 MiB', (
     });
     try {
       const { port } = server.address() as AddressInfo;
+      const init = publicRequestInit({ body });
       return await publicAnswer(
         await fetch(`http://127.0.0.1:${port}/mcp`, {
-          ...publicRequestInit({ body }),
+          ...init,
+          ...(chunked && {
+            body: new Blob([init.body ?? '']).stream(),
+            duplex: 'half',
+          }),
           signal: AbortSignal.timeout(5000),
-        }),
+        } as RequestInit),
       );
     } finally {
       server.closeAllConnections();
@@ -892,18 +898,29 @@ describe('express publicAccess behind express.json() with a limit over 1 MiB', (
     }
   }
 
-  test('challenges an open method whose body is over 1 MiB, as the other adapters do', async () => {
-    const res = await post(rpc('initialize', { padding: 'x'.repeat(2 * 1024 * 1024) }));
+  test.each([
+    ['a Content-Length', false],
+    ['a chunked body', true],
+  ])(
+    'challenges an open method whose body is over 1 MiB, with %s, as the other adapters do',
+    async (_case, chunked) => {
+      const res = await post(rpc('initialize', { padding: 'x'.repeat(2 * 1024 * 1024) }), {
+        chunked,
+      });
 
-    expect(res.status).toBe(401);
-    expect(res.challenge).toMatch(
-      /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"$/,
-    );
-    expect(res.body).toEqual({ error: 'Unauthorized' });
-  });
+      expect(res.status).toBe(401);
+      expect(res.challenge).toMatch(
+        /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"$/,
+      );
+      expect(res.body).toEqual({ error: 'Unauthorized' });
+    },
+  );
 
-  test('lets the same open method through with a small body', async () => {
-    const res = await post(rpc('initialize'));
+  test.each([
+    ['a Content-Length', false],
+    ['a chunked body', true],
+  ])('lets the same open method through with a small body, with %s', async (_case, chunked) => {
+    const res = await post(rpc('initialize'), { chunked });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ reached: true });

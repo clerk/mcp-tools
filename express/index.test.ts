@@ -2,17 +2,23 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
 import { type AddressInfo, connect } from 'node:net';
-import type { Server } from 'node:http';
+import { type Server, request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // The default client, which `mcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
 // `clerkExpressLoad.error` to make that load fail. Every registration of the mock uses this one factory: Vitest
 // registers the `vi.doMock` calls queued for one path in parallel, so with different factories a later call would
-// not reliably replace an earlier one.
+// not reliably replace an earlier one. Like the real client, it throws when the keys it reads from the environment
+// are not set, and a test mocks what Clerk answered otherwise.
 const clerkExpressLoad = vi.hoisted(() => {
   const load = {
     error: undefined as Error | undefined,
-    clerkClient: { authenticateRequest: vi.fn() },
+    clerkClient: {
+      authenticateRequest: vi.fn(async (): Promise<unknown> => {
+        if (!process.env.CLERK_PUBLISHABLE_KEY) throw new Error('Publishable key is missing.');
+        throw new Error('authenticateRequest is not mocked for this test');
+      }),
+    },
     factory: () => {
       if (load.error) throw load.error;
       return { clerkClient: load.clerkClient };
@@ -22,6 +28,7 @@ const clerkExpressLoad = vi.hoisted(() => {
 });
 vi.mock('@clerk/express', () => clerkExpressLoad.factory());
 
+import { createClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
 import {
   McpAuthError,
@@ -395,7 +402,8 @@ describe('mcpAuth', () => {
     expect(failures).toEqual([{ reason }]);
   });
 
-  test('passes an McpAuthError with the verifier error as its cause to the error handler', async () => {
+  test('logs an McpAuthError with the verifier error as its cause instead of passing it to error middleware', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const cause = new Error('network down');
     const errors: unknown[] = [];
     const app = express();
@@ -417,11 +425,14 @@ describe('mcpAuth', () => {
     const res = await withListening(app, (baseUrl) =>
       fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
     );
+    const logged = consoleError.mock.calls.map(([error]) => error);
+    consoleError.mockRestore();
 
     expect(res.status).toBe(500);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toBeInstanceOf(McpAuthError);
-    expect(errors[0]).toMatchObject({ reason: 'verification_failed', cause });
+    expect(errors).toEqual([]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toBeInstanceOf(McpAuthError);
+    expect(logged[0]).toMatchObject({ reason: 'verification_failed', cause });
   });
 
   test("keeps the verifier error's status for Express's default error handler", async () => {
@@ -554,8 +565,9 @@ describe('mcpAuth', () => {
     expect(JSON.parse(res.body)).toEqual({ error: 'server_error' });
   });
 
-  test('passes the McpAuthError to error middleware once the JSON answer has been sent', async () => {
-    const seen: { err: unknown; headersSent: boolean }[] = [];
+  // Express's default error handler destroys the socket of a sent response, which resets a client still uploading
+  test('answers an McpAuthError for a large unread body without resetting the connection', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const app = express();
     app.post(
       '/mcp',
@@ -565,26 +577,78 @@ describe('mcpAuth', () => {
         },
       }),
     );
-    app.use(
-      (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-        seen.push({ err, headersSent: res.headersSent });
-        if (!res.headersSent) next(err);
-      },
+
+    const answers = await withListening(app, async (baseUrl) => {
+      const { port } = new URL(baseUrl);
+      const results: { status?: number | undefined; body?: string; error?: string }[] = [];
+      for (const size of [1_000_000, 2_000_000, 5_000_000]) {
+        results.push(
+          await new Promise((resolve) => {
+            const body = 'x'.repeat(size);
+            const req = httpRequest(
+              {
+                host: '127.0.0.1',
+                port: Number(port),
+                method: 'POST',
+                path: '/mcp',
+                headers: {
+                  authorization: 'Bearer t',
+                  'content-type': 'application/json',
+                  'content-length': String(size),
+                },
+              },
+              (res) => {
+                let text = '';
+                res.on('data', (chunk) => (text += chunk));
+                res.on('end', () => resolve({ status: res.statusCode, body: text }));
+              },
+            );
+            req.on('error', (error) => resolve({ error: error.message }));
+            req.end(body);
+          }),
+        );
+      }
+      return results;
+    });
+    consoleError.mockRestore();
+
+    expect(answers).toEqual(
+      Array.from({ length: 3 }, () => ({ status: 500, body: '{"error":"server_error"}' })),
+    );
+  });
+
+  test('logs the McpAuthError even when the client disconnects before the answer', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let disconnected: () => void = () => undefined;
+    const clientGone = new Promise<void>((resolve) => (disconnected = resolve));
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async (_token, req) => {
+          await new Promise((resolve) => req.socket.once('close', resolve));
+          disconnected();
+          throw new Error('network down');
+        },
+      }),
     );
 
-    const res = await withListening(app, async (baseUrl) => {
-      const answer = await fetch(`${baseUrl}/mcp`, {
+    await withListening(app, async (baseUrl) => {
+      const abort = new AbortController();
+      const answer = fetch(`${baseUrl}/mcp`, {
         method: 'POST',
         headers: { Authorization: 'Bearer t' },
-      });
-      const body = await answer.json();
-      await vi.waitFor(() => expect(seen).toHaveLength(1));
-      return { status: answer.status, body };
+        signal: abort.signal,
+      }).catch(() => undefined);
+      setTimeout(() => abort.abort(), 50);
+      await clientGone;
+      await answer;
+      await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
     });
+    const [[logged]] = consoleError.mock.calls as [[unknown]];
+    consoleError.mockRestore();
 
-    expect(res).toEqual({ status: 500, body: { error: 'server_error' } });
-    expect(seen[0]!.err).toBeInstanceOf(McpAuthError);
-    expect(seen[0]!.headersSent).toBe(true);
+    expect(logged).toBeInstanceOf(McpAuthError);
   });
 
   test.each([undefined, ['https://mcp.example.com/mcp']])(
@@ -676,7 +740,50 @@ describe('mcpAuth with Clerk', () => {
 
   beforeEach(() => {
     authenticateRequest.mockReset();
+    vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_express');
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k');
   });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives, as in Hono
+  test.each([
+    ['CLERK_SECRET_KEY', 'with a token', 'Bearer token-1'],
+    ['CLERK_SECRET_KEY', 'without a token', undefined],
+    ['CLERK_PUBLISHABLE_KEY', 'with a token', 'Bearer token-1'],
+    ['CLERK_PUBLISHABLE_KEY', 'without a token', undefined],
+  ])(
+    'throws a Clerk error naming %s when it is not set, %s',
+    async (name, _case, authorization) => {
+      vi.stubEnv(name, '');
+      const errors: unknown[] = [];
+      const app = express();
+      app.post('/mcp', mcpAuth({ resourceUrl }), (_req, res) => {
+        res.json({ reached: true });
+      });
+      app.use(((error, _req, res, _next) => {
+        errors.push(error);
+        res.status(500).json({});
+      }) satisfies express.ErrorRequestHandler);
+
+      const res = await withListening(app, (baseUrl) =>
+        fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: authorization === undefined ? {} : { Authorization: authorization },
+        }),
+      );
+
+      expect(res.status).toBe(500);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).not.toBeInstanceOf(McpAuthError);
+      expect((errors[0] as Error).message).toBe(
+        `Clerk error: mcpAuth needs the ${name} environment variable or a clerkClient option`,
+      );
+      expect(authenticateRequest).not.toHaveBeenCalled();
+    },
+  );
 
   test('fails loudly instead of hanging when passed to a route without being called', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -735,7 +842,11 @@ describe('mcpAuth with Clerk', () => {
   });
 
   test('answers a rejected token with the invalid_token challenge', async () => {
-    authenticateRequest.mockResolvedValue({ isAuthenticated: false } as never);
+    authenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'token-invalid',
+      message: 'OAuth token not found (code=token-invalid, status=404)',
+    } as never);
 
     const res = await request(mcpAuth({ resourceUrl }), { authorization: 'Bearer bad' });
 
@@ -775,49 +886,70 @@ describe('mcpAuth with Clerk', () => {
     );
   });
 
-  test.each(['unexpected-error', 'secret-key-invalid'])(
-    'answers a %s verification failure with a 500 instead of a challenge',
-    async (reason) => {
-      authenticateRequest.mockResolvedValue({
-        isAuthenticated: false,
-        reason,
-        message: 'Unexpected error',
-      } as never);
-      const errors: unknown[] = [];
+  test.each([
+    ['unexpected-error', 'Unexpected error (code=unexpected-error, status=503)', 503],
+    ['unexpected-error', 'Unexpected error (code=unexpected-error, status=429)', 429],
+    ['unexpected-error', 'Unexpected error (code=unexpected-error, status=n/a)', 500],
+    ['secret-key-invalid', 'Invalid secret key (code=secret-key-invalid, status=401)', 500],
+  ])(
+    'answers a %s verification failure (%s) with a JSON %i instead of a challenge',
+    async (reason, message, status) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      authenticateRequest.mockResolvedValue({ isAuthenticated: false, reason, message } as never);
       const app = express();
       app.post('/mcp', mcpAuth({ resourceUrl }));
-      app.use(
-        (
-          err: unknown,
-          _req: express.Request,
-          res: express.Response,
-          _next: express.NextFunction,
-        ) => {
-          errors.push(err);
-          res.status(500).end();
-        },
-      );
 
-      const res = await withListening(app, (baseUrl) =>
-        fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
-      );
+      const res = await withListening(app, async (baseUrl) => {
+        const answer = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: { Authorization: 'Bearer t' },
+        });
+        return { answer, body: await answer.json() };
+      });
+      const logged = consoleError.mock.calls.map(([error]) => error);
+      consoleError.mockRestore();
 
-      expect(res.status).toBe(500);
-      expect(res.headers.get('WWW-Authenticate')).toBeNull();
-      expect(errors[0]).toBeInstanceOf(McpAuthError);
-      const { cause } = errors[0] as McpAuthError;
+      expect(res.answer.status).toBe(status);
+      expect(res.body).toEqual({ error: 'server_error' });
+      expect(res.answer.headers.get('WWW-Authenticate')).toBeNull();
+      expect(logged[0]).toBeInstanceOf(McpAuthError);
+      const { cause } = logged[0] as McpAuthError;
       expect(cause).toBeInstanceOf(McpTokenVerificationError);
-      expect(cause).toMatchObject({ code: reason, message: 'Unexpected error' });
+      expect(cause).toMatchObject({ code: reason, message });
     },
   );
 
-  test('answers a thrown verification error with a 500 instead of a challenge', async () => {
-    authenticateRequest.mockRejectedValue(new Error('network down'));
+  test('answers a Backend API 400 with the invalid_token challenge', async () => {
+    authenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'unexpected-error',
+      message: 'Unexpected error (code=unexpected-error, status=400)',
+    } as never);
 
     const res = await request(mcpAuth({ resourceUrl }), { authorization: 'Bearer t' });
 
+    expect(res.status).toBe(401);
+    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
+  });
+
+  // The real client throws for a setup mistake, such as a clerkClient created without a publishable key
+  test('answers a verification error the client threw with a 500 instead of a challenge', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', '');
+    const client = createClerkClient({ secretKey: 'sk_test_express' });
+
+    const res = await request(mcpAuth({ resourceUrl, clerkClient: client }), {
+      authorization: 'Bearer t',
+    });
+    const logged = consoleError.mock.calls.map(([error]) => error);
+    consoleError.mockRestore();
+
     expect(res.status).toBe(500);
     expect(res.challenge).toBeNull();
+    expect(logged[0]).toBeInstanceOf(McpAuthError);
+    expect((logged[0] as McpAuthError).cause).toMatchObject({
+      message: expect.stringMatching(/^Publishable key is missing/),
+    });
   });
 
   test('verifies with the clerkClient option instead of the default client', async () => {
@@ -920,7 +1052,11 @@ describe('mcpAuth without @clerk/express installed', () => {
   });
 
   test('verifies with the clerkClient option without loading @clerk/express', async () => {
-    const authenticateRequest = vi.fn().mockResolvedValue({ isAuthenticated: false });
+    const authenticateRequest = vi.fn().mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'token-invalid',
+      message: 'OAuth token not found (code=token-invalid, status=404)',
+    });
 
     const res = await post({ resourceUrl, clerkClient: { authenticateRequest } }, 'Bearer token-1');
 
