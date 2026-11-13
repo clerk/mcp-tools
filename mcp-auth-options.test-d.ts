@@ -161,6 +161,34 @@ describe('the mcpAuth options', () => {
     nextMetadataHandler({ verifyToken: async (_token: string, _c: Context) => undefined });
   });
 
+  test('accept publicAccess with readonly lists, as const', () => {
+    const tools = ['search_docs'] as const;
+    const methods = ['initialize', 'server/discover', 'tools/list'] as const;
+    expressMcpAuth({
+      resourceUrl,
+      publicAccess: { methods: true, resources: true, prompts: ['x'] },
+    });
+    honoMcpAuth({ verifyToken, publicAccess: { methods, tools } });
+    nextWithMcpAuth(handler, {
+      resourceUrl,
+      publicAccess: { methods: false, tools: [], resources: ['docs://index'], prompts: false },
+    });
+    expressMetadataHandler({ resourceUrl, publicAccess: { methods: true, tools } });
+  });
+
+  test('reject publicAccess options that would open every call or do nothing', () => {
+    // @ts-expect-error each tool is listed by name
+    expressMcpAuth({ resourceUrl, publicAccess: { tools: true } });
+    // @ts-expect-error a call method is opened by tools, resources, or prompts
+    honoMcpAuth({ resourceUrl, publicAccess: { methods: ['tools/call'] } });
+    // @ts-expect-error a call method is opened by tools, resources, or prompts
+    nextWithMcpAuth(handler, { resourceUrl, publicAccess: { methods: ['resources/read'] } });
+    // @ts-expect-error not a method publicAccess can open
+    expressMcpAuth({ resourceUrl, publicAccess: { methods: ['tasks/get'] } });
+    // @ts-expect-error a misspelled key
+    honoMcpAuth({ resourceUrl, publicAccess: { method: true } });
+  });
+
   test('name one options type per adapter', () => {
     const express: ExpressMcpAuthOptions = { resourceUrl };
     const hono: HonoMcpAuthOptions = { verifyToken };
