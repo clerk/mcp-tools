@@ -349,7 +349,7 @@ export type ClerkOAuthAuth = {
  * and `extra.auth` missing, when the `AuthInfo` was built by hand.
  */
 export type ClerkAuthInfo = AuthInfo & {
-  extra: { userId: string; verifiedBy: 'clerk'; auth: ClerkOAuthAuth | undefined };
+  extra: { userId: string; verifiedBy: 'clerk'; auth?: ClerkOAuthAuth | undefined };
 };
 
 /**
