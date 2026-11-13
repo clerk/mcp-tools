@@ -297,6 +297,9 @@ describe('withMcpAuth with Clerk', () => {
     toAuth: () => ({
       isAuthenticated: true,
       tokenType: 'oauth_token',
+      id: 'oat_1',
+      subject: 'user-1',
+      getToken: async () => 'token',
       clientId: 'client-1',
       scopes,
       userId: 'user-1',

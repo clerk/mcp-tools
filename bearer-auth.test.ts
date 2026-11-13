@@ -224,6 +224,9 @@ describe('verifyClerkOAuthToken', () => {
     toAuth: () => ({
       isAuthenticated: true,
       tokenType: 'oauth_token',
+      id: 'oat_1',
+      subject: 'user-1',
+      getToken: async () => 'token',
       clientId: 'client-1',
       scopes: ['profile'],
       userId: 'user-1',
@@ -280,6 +283,38 @@ describe('verifyClerkOAuthToken', () => {
 
     expect(authInfo.extra.auth).toBe(auth);
     expect(authInfo.extra).toMatchObject({ userId: 'user-1', verifiedBy: 'clerk' });
+  });
+
+  test('accepts the empty id Clerk gives a JWT access token without a jti', async () => {
+    const auth = { ...authenticated.toAuth(), id: '' };
+    const authenticateRequest = vi
+      .fn()
+      .mockResolvedValue({ isAuthenticated: true, toAuth: () => auth });
+
+    const authInfo = await verifyClerkOAuthToken(
+      { authenticateRequest },
+      't',
+      'https://mcp.example.com/mcp',
+    );
+
+    expect(authInfo.extra.auth?.id).toBe('');
+  });
+
+  test('rejects a token whose auth object has no getToken, with a cause', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const auth = { ...authenticated.toAuth(), getToken: undefined };
+    const authenticateRequest = vi
+      .fn()
+      .mockResolvedValue({ isAuthenticated: true, toAuth: () => auth });
+
+    const error = await verifyClerkOAuthToken(
+      { authenticateRequest },
+      't',
+      'https://mcp.example.com/mcp',
+    ).catch((thrown: unknown) => thrown);
+    consoleError.mockRestore();
+
+    expect(error).toMatchObject({ code: 'token-claims-missing' });
   });
 
   test('rejects a token Clerk accepted without a user, client, or scopes, with a cause', async () => {

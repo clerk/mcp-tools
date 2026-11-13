@@ -920,7 +920,7 @@ export async function verifyClerkOAuthToken(
   if (!authInfo) {
     throw new McpTokenVerificationError(
       'token-claims-missing',
-      'Clerk verified the token, but it has no user ID, client ID, or scopes',
+      'Clerk verified the token, but its auth object has no user ID, client ID, scopes, id, subject, or getToken',
     );
   }
   return authInfo;
