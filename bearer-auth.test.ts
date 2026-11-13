@@ -848,4 +848,13 @@ describe('readJsonBody', () => {
     const padding = ' '.repeat(PUBLIC_BODY_LIMIT - 2);
     await expect(readJsonBody(post(`{}${padding}`))).resolves.toEqual({});
   });
+
+  test('throws a setup error for a body that was already read', async () => {
+    const request = post('{"jsonrpc":"2.0","id":1,"method":"ping"}');
+    await request.json();
+
+    await expect(readJsonBody(request)).rejects.toThrow(
+      'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+    );
+  });
 });
