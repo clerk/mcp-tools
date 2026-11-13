@@ -404,6 +404,29 @@ describe('metadata handler headers', () => {
     if (handler === 'authorizationServerMetadataHandler') expect(res.body).toEqual(clerkMetadata);
   });
 
+  test.each(
+    metadataHeaderCases.filter(([, handler]) => handler === 'authorizationServerMetadataHandler'),
+  )(
+    '%s %s answers a JSON 502 when Clerk metadata cannot be fetched',
+    async (adapter, _handler, send) => {
+      vi.mocked(globalThis.fetch).mockImplementation((input, init) =>
+        String(input).startsWith('https://clerk.example.com/')
+          ? Promise.resolve(new Response('nope', { status: 400 }))
+          : realFetch(input, init),
+      );
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const res = await send(AUTH_SERVER_PATH);
+
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual({ error: 'server_error' });
+      // A failure must not be cached like the metadata is
+      expect(res.headers.get('cache-control')).toBeNull();
+      if (adapter === 'next') expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(String(log.mock.calls[0]?.[0])).toContain('failed with status 400');
+    },
+  );
+
   test('next metadataCorsHandler answers a preflight with the CORS headers', () => {
     const res = nextAdapter.metadataCorsHandler()();
 

@@ -14,6 +14,7 @@ import {
   clerkTokenVerifier,
   failureBody,
   failureHeaders,
+  metadataUnavailableAnswer,
   methodNotAllowed,
   requirePublishableKey,
   serverErrorAnswer,
@@ -238,9 +239,14 @@ export function authorizationServerMetadataHandler() {
   return async (_: express.Request, res: express.Response) => {
     const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 
-    const metadata = await fetchAuthorizationServerMetadata({
-      publishableKey,
-    });
+    let metadata: unknown;
+    try {
+      metadata = await fetchAuthorizationServerMetadata({ publishableKey });
+    } catch (error) {
+      const answer = metadataUnavailableAnswer(error);
+      res.status(answer.status).json(answer.body);
+      return;
+    }
 
     res.json(metadata);
   };

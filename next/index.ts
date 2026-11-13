@@ -12,6 +12,7 @@ import {
   clerkTokenVerifier,
   failureBody,
   failureHeaders,
+  metadataUnavailableAnswer,
   readJsonBody,
   requirePublishableKey,
 } from '../bearer-auth';
@@ -102,11 +103,14 @@ export function authorizationServerMetadataHandler(): () => Promise<Response> {
       'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
     );
 
-    const metadata = await fetchAuthorizationServerMetadata({
-      publishableKey,
-    });
-
-    return Response.json(metadata, { headers: metadataResponseHeaders });
+    try {
+      const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
+      return Response.json(metadata, { headers: metadataResponseHeaders });
+    } catch (error) {
+      // The CORS headers, so a browser client can read the error, but not the caching ones metadata gets
+      const answer = metadataUnavailableAnswer(error);
+      return Response.json(answer.body, { status: answer.status, headers: metadataCorsHeaders });
+    }
   };
 }
 
