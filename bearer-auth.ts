@@ -210,7 +210,7 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
   const unknownKey = Object.keys(publicAccess).find((key) => !publicAccessKeys.has(key));
   if (unknownKey !== undefined) {
     throw new Error(
-      `Clerk error: ${caller} publicAccess has no ${unknownKey} option. It takes methods, tools, resources, and prompts`,
+      `Clerk error: ${caller} publicAccess has no ${unknownKey} option. It takes any of ${[...publicAccessKeys].join(', ')}`,
     );
   }
 
