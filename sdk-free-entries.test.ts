@@ -74,10 +74,11 @@ describe('server entry points', () => {
   });
 });
 
-// Every Clerk package is an optional peer of the Hono and Next.js entries: an app that verifies tokens with
+// Every Clerk package is an optional peer of the Express, Hono, and Next.js entries: an app that verifies tokens with
 // `verifyToken` may have none. So the entries only import types from them, and load their default client's package
-// (`@clerk/backend` in Hono, `@clerk/nextjs` in Next.js) with `import()` inside `try`, which webpack, Turbopack, and
-// esbuild leave to fail at run time with at most a warning, where a bare reference would fail the build.
+// (`@clerk/express` in Express, `@clerk/backend` in Hono, `@clerk/nextjs` in Next.js) with `import()` inside `try`,
+// which webpack, Turbopack, and esbuild leave to fail at run time with at most a warning, where a bare reference would
+// fail the build.
 function runtimeClerkImports(entry: string) {
   const found: string[] = [];
   const seen = new Set<string>();
@@ -130,10 +131,14 @@ describe('hono/index.ts without Clerk packages', () => {
     expect(runtimeClerkImports('next/index.ts')).toEqual([]);
   });
 
+  test('express/index.ts has no top-level runtime import from a Clerk package', () => {
+    expect(runtimeClerkImports('express/index.ts')).toEqual([]);
+  });
+
   test('the runtime import scan finds a Clerk import where there is one', () => {
-    expect(runtimeClerkImports('express/index.ts')).toEqual([
-      'express/index.ts imports @clerk/express',
-    ]);
+    expect(runtimeClerkImports('clerk-verification.test.ts')).toContain(
+      'clerk-verification.test.ts imports @clerk/backend',
+    );
   });
 
   test('loads, and serves a request with mcpAuth({ verifyToken }), without loading a Clerk package', async () => {
