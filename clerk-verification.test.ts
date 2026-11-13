@@ -66,9 +66,7 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
         }),
       },
     });
-    await expect(
-      (authInfo.extra.auth as unknown as { getToken(): Promise<string> }).getToken(),
-    ).resolves.toBe(token);
+    await expect(authInfo.extra.auth?.getToken()).resolves.toBe(token);
   });
 
   test('accepts the normalized form of a resource URL that is not written that way', async () => {

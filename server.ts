@@ -9,9 +9,12 @@ import type { AuthInfo } from './mcp-types';
 type ClerkOAuthAuthObject = {
   isAuthenticated: boolean;
   tokenType: string | null;
+  id?: string | null | undefined;
+  subject?: string | null | undefined;
   userId?: string | null | undefined;
   clientId?: string | null | undefined;
   scopes?: string[] | null | undefined;
+  getToken?: (() => Promise<string | null>) | undefined;
 };
 
 /**
@@ -278,27 +281,49 @@ export function toClerkAuthInfo(
     return undefined;
   }
 
+  // Clerk sets `id` to an empty string for a JWT access token without a `jti`, so only the type is checked
+  if (
+    typeof auth.id !== 'string' ||
+    typeof auth.subject !== 'string' ||
+    typeof auth.getToken !== 'function'
+  ) {
+    console.error('Clerk error: No id, subject, or getToken returned from auth()');
+    return undefined;
+  }
+
   return {
     token,
     scopes: auth.scopes,
     clientId: auth.clientId,
-    // The checks above guarantee the fields `ClerkOAuthAuth` types; the object stored is still the one Clerk returned
+    // The checks above guarantee every field `ClerkOAuthAuth` types; the object stored is still the one Clerk returned
     extra: { userId: auth.userId, verifiedBy: 'clerk', auth: auth as ClerkOAuthAuth },
   };
 }
 
 /**
  * Clerk's auth object for a verified OAuth access token, as `toClerkAuthInfo` stores it on `extra.auth`. At runtime it
- * is the object Clerk returned, with every field Clerk sets, such as `id`, `subject`, `getToken()`, and `has()`. Only
- * the fields `toClerkAuthInfo` checks are typed here, so that this package's types do not need `@clerk/backend`; cast
- * it to Clerk's `MachineAuthObject<'oauth_token'>` for the rest.
+ * is the object Clerk returned, with every field Clerk sets, such as `has()`. The fields `toClerkAuthInfo` checks are
+ * typed here, so that this package's types do not need `@clerk/backend`; cast it to Clerk's
+ * `MachineAuthObject<'oauth_token'>` for the rest.
  */
 export type ClerkOAuthAuth = {
   isAuthenticated: true;
   tokenType: 'oauth_token';
+  /**
+   * The token's id. Empty for a JWT access token without a `jti` claim.
+   */
+  id: string;
+  /**
+   * The token's subject, the signed-in user.
+   */
+  subject: string;
   userId: string;
   clientId: string;
   scopes: string[];
+  /**
+   * Resolves to the access token.
+   */
+  getToken: () => Promise<string>;
 };
 
 /**

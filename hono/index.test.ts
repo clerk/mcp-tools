@@ -564,6 +564,9 @@ describe('mcpAuth with Clerk', () => {
       toAuth: () => ({
         isAuthenticated: true,
         tokenType: 'oauth_token',
+        id: 'oat_1',
+        subject: 'user-1',
+        getToken: async () => 'token',
         clientId: 'client-1',
         scopes: ['profile'],
         userId: 'user-1',
@@ -741,6 +744,9 @@ describe('mcpAuth with Clerk', () => {
       toAuth: () => ({
         isAuthenticated: true,
         tokenType: 'oauth_token',
+        id: 'oat_1',
+        subject: 'user-1',
+        getToken: async () => 'token',
         clientId: 'client-1',
         scopes: [],
         userId: 'user-1',
@@ -804,6 +810,9 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
     toAuth: () => ({
       isAuthenticated: true,
       tokenType: 'oauth_token',
+      id: 'oat_1',
+      subject: 'user-1',
+      getToken: async () => 'token',
       clientId: 'client-1',
       scopes: [],
       userId: 'user-1',
