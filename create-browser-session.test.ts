@@ -13,6 +13,7 @@ import {
   BrowserSessionError,
   createBrowserSessionTool,
   browserSessionInstructions,
+  ERROR_CODE_META_KEY,
   type CreateBrowserSessionOptions,
   type CreateBrowserSessionToolOptions,
 } from './tools';
@@ -971,11 +972,12 @@ describe('createBrowserSessionTool', () => {
     expect(result._meta).toEqual({ 'clerk.com/error_code': 'insufficient_scope' });
   });
 
-  test('leaves the error code out of an unexpected error', async () => {
+  test('names an unexpected error with the unexpected_error code', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     const client = await connect(vi.fn<typeof fetch>(async () => undefined as never));
     const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
     expect(result.isError).toBe(true);
-    expect(result._meta).toBeUndefined();
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'unexpected_error' });
   });
 
   describe('organizationId', () => {
@@ -1030,18 +1032,86 @@ describe('createBrowserSessionTool', () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
-    test('answers with the generic error when the function throws', async () => {
-      vi.spyOn(console, 'error').mockImplementation(() => {});
-      const fetchImpl = okFetch();
-      const client = await connectWithOrg(fetchImpl, async () => {
-        throw new Error('lookup failed');
-      });
+    async function callWithOrg(
+      organizationId: CreateBrowserSessionToolOptions['organizationId'],
+      fetchImpl: typeof fetch = okFetch(),
+    ) {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const client = await connectWithOrg(fetchImpl, organizationId);
       const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+      return { result, logs: consoleError.mock.calls.map(([message]) => String(message)) };
+    }
+
+    test('refuses with organization_lookup_failed when the function throws', async () => {
+      const fetchImpl = okFetch();
+      const { result, logs } = await callWithOrg(async () => {
+        throw Object.assign(new Error(`lookup failed ${SECRET} ${LINK}`), { code: 'ECONNREFUSED' });
+      }, fetchImpl);
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toBe(
-        'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
-      );
+      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+      expect(textOf(result)).toContain('which workspace');
+      expect(textOf(result)).not.toContain('sign in');
+      expect(logs).toEqual([
+        'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw Error, code ECONNREFUSED)',
+      ]);
+      expect(JSON.stringify(logs)).not.toMatch(LEAKS);
+      expect(JSON.stringify(logs)).not.toContain('lookup failed');
       expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test('leaves an error code that is not an identifier out of the log', async () => {
+      const { logs } = await callWithOrg(() => {
+        throw Object.assign(new Error('x'), { code: `${SECRET} ${LINK}` });
+      });
+      expect(logs).toEqual([
+        'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw Error)',
+      ]);
+    });
+
+    test('keeps the code of a BrowserSessionError the function throws', async () => {
+      const { result, logs } = await callWithOrg(async () => {
+        throw new BrowserSessionError('organization_rejected', 'no workspace');
+      });
+      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_rejected' });
+      expect(textOf(result)).toContain('choose a workspace');
+      expect(logs).toEqual(['Clerk error: createBrowserSession failed (organization_rejected)']);
+    });
+
+    test('treats a BrowserSessionError with an unknown code as a failed lookup', async () => {
+      const { result, logs } = await callWithOrg(async () => {
+        throw new BrowserSessionError('made_up' as never, 'cast');
+      });
+      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+      expect(logs).toEqual([
+        'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw BrowserSessionError, code made_up)',
+      ]);
+    });
+
+    test.each([
+      ['null', null],
+      ['an empty string', ''],
+      ['number', 42],
+    ])('refuses a function that returns %s', async (kind, value) => {
+      const fetchImpl = okFetch();
+      const { result, logs } = await callWithOrg(async () => value as never, fetchImpl);
+      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+      expect(logs).toEqual([
+        `Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId returned ${kind})`,
+      ]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test('accepts a synchronous function', async () => {
+      const fetchImpl = okFetch({ session_organization_id: 'org_1' });
+      const { result } = await callWithOrg(() => 'org_1', fetchImpl);
+      expect(result.isError).toBeFalsy();
+      expect(sentBody(fetchImpl).session_organization_id).toBe('org_1');
+    });
+
+    test('refuses an empty organization ID when built', () => {
+      expect(() => createBrowserSessionTool({ ...options(okFetch()), organizationId: '' })).toThrow(
+        'Clerk error: createBrowserSessionTool organizationId',
+      );
     });
 
     test('refuses a value that is neither a string nor a function when built', () => {
@@ -1096,7 +1166,10 @@ describe('createBrowserSessionTool on MCP SDK v2', () => {
   test('refuses without auth info', async () => {
     const fetchImpl = okFetch();
     const response = await callTool(fetchImpl);
-    expect(await response.text()).toContain('reconnect this MCP server');
+    const text = await response.text();
+    expect(text).toContain('reconnect this MCP server');
+    // SDK 2.x passes the result's `_meta` through to the client.
+    expect(text).toContain(`"_meta":{"${ERROR_CODE_META_KEY}":"not_authenticated"}`);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

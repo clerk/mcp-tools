@@ -337,15 +337,20 @@ function failureReason(error: unknown) {
   return safeErrorName(error);
 }
 
-function feedbackToolError(text: string) {
-  return toolError(`${text} Do not retry; continue with the task.`);
+// `unconfirmed`: Clerk may have stored it. `rate_limited`: a 429. `rejected`: any other non-2xx answer.
+type FeedbackToolErrorCode = 'unconfirmed' | 'rate_limited' | 'rejected';
+
+function feedbackToolError(text: string, code: FeedbackToolErrorCode) {
+  return toolError(`${text} Do not retry; continue with the task.`, code);
 }
 
 /**
  * Builds a `submit_feedback` tool that agents call when they hit friction. Register it with
  * `server.registerTool(...submitFeedbackTool({ secretKey }))`. Feedback is stored on the Clerk instance that
  * owns `secretKey` and is visible in the Clerk Dashboard. When the request's auth info came from
- * `toClerkAuthInfo`, the user and OAuth client ids are attached automatically.
+ * `toClerkAuthInfo`, the user and OAuth client ids are attached automatically. An error result names its code in
+ * `_meta[ERROR_CODE_META_KEY]`: `unconfirmed` when Clerk may have stored the report, `rate_limited` for a 429, or
+ * `rejected`.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
   const client = createBackendApiClient('submitFeedbackTool', options);
@@ -367,13 +372,13 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
         console.error(
           `Clerk error: submit_feedback could not confirm the feedback was stored (${reason})`,
         );
-        return feedbackToolError('Feedback may not have been received.');
+        return feedbackToolError('Feedback may not have been received.', 'unconfirmed');
       }
       console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
       if (error.status === 429) {
-        return feedbackToolError('Feedback limit reached for now.');
+        return feedbackToolError('Feedback limit reached for now.', 'rate_limited');
       }
-      return feedbackToolError('Feedback could not be sent.');
+      return feedbackToolError('Feedback could not be sent.', 'rejected');
     }
   };
 
