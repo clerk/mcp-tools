@@ -44,8 +44,8 @@ export type BaseAuthOptions = {
   /**
    * What a request without an `Authorization` header may do. Without it, every such request gets the 401 challenge.
    * With it, a POST passes without auth info when every JSON-RPC message in its body is open: a protocol method in
-   * `methods`, a `tools/call` for a tool in `tools`, a `resources/read` with `resources`, or a `prompts/get` with
-   * `prompts`. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
+   * `methods`, a `tools/call` for a tool in `tools`, a `resources/read` that `resources` opens, or a `prompts/get`
+   * that `prompts` opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
    * when it reaches something protected. A request with a token is verified as usual.
    */
   publicAccess?: PublicAccess | undefined;
@@ -182,8 +182,8 @@ const publicAccessKeys: ReadonlySet<string> = new Set<keyof PublicAccess>([
 // listing one cannot open every tool, resource, or prompt at once.
 const callMethodHints: Readonly<Record<string, string>> = {
   'tools/call': 'name the tools in publicAccess.tools',
-  'resources/read': 'set publicAccess.resources to true',
-  'prompts/get': 'set publicAccess.prompts to true',
+  'resources/read': 'set publicAccess.resources to true or a list of resource URIs',
+  'prompts/get': 'set publicAccess.prompts to true or a list of prompt names',
 };
 
 /**
@@ -195,7 +195,8 @@ export const PUBLIC_BODY_LIMIT = 1024 * 1024;
 /**
  * Throws a `Clerk error:` message unless `publicAccess` is `undefined` or a valid `PublicAccess`: an object with
  * only its four keys, `methods` a boolean or a list of `McpPublicMethod`s, `tools` a list of tool names, and
- * `resources` and `prompts` booleans. A mistake here would otherwise only show as requests answered with a 401.
+ * `resources` and `prompts` each a boolean or a list of resource URIs or prompt names. A mistake here would
+ * otherwise only show as requests answered with a 401.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param publicAccess - The option's value, unchecked
  */
@@ -236,22 +237,31 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
       }
     }
   }
-  if (
-    tools !== undefined &&
-    !(Array.isArray(tools) && tools.every((tool) => typeof tool === 'string' && tool !== ''))
-  ) {
+  if (tools !== undefined && !isNameList(tools)) {
     throw new Error(
       `Clerk error: ${caller} publicAccess.tools must be a list of tool names, such as ['search_docs']`,
     );
   }
-  for (const [key, value] of [
-    ['resources', resources],
-    ['prompts', prompts],
+  for (const [key, value, example] of [
+    ['resources', resources, "resource URIs, such as ['docs://index']"],
+    ['prompts', prompts, "prompt names, such as ['summarize']"],
   ] as const) {
-    if (value !== undefined && typeof value !== 'boolean') {
-      throw new Error(`Clerk error: ${caller} publicAccess.${key} must be true or false`);
+    if (value !== undefined && typeof value !== 'boolean' && !isNameList(value)) {
+      throw new Error(
+        `Clerk error: ${caller} publicAccess.${key} must be true, false, or a list of ${example}`,
+      );
     }
   }
+}
+
+function isNameList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((name) => typeof name === 'string' && name !== '');
+}
+
+// Whether a `true`-or-list option opens a call for `value`, the resource URI or prompt name the call asks for
+function opensNamed(option: boolean | readonly string[] | undefined, value: unknown): boolean {
+  if (option === true) return true;
+  return typeof value === 'string' && Array.isArray(option) && option.includes(value);
 }
 
 function opensMethod({ methods }: PublicAccess, method: McpPublicMethod): boolean {
@@ -265,18 +275,20 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
   const { method, params } = message as { method?: unknown; params?: unknown };
   if (typeof method !== 'string') return false;
 
+  const param = (key: string): unknown =>
+    typeof params === 'object' && params !== null
+      ? (params as Record<string, unknown>)[key]
+      : undefined;
+
   switch (method) {
     case 'tools/call': {
-      const name =
-        typeof params === 'object' && params !== null
-          ? (params as { name?: unknown }).name
-          : undefined;
+      const name = param('name');
       return typeof name === 'string' && (publicAccess.tools ?? []).includes(name);
     }
     case 'resources/read':
-      return publicAccess.resources === true;
+      return opensNamed(publicAccess.resources, param('uri'));
     case 'prompts/get':
-      return publicAccess.prompts === true;
+      return opensNamed(publicAccess.prompts, param('name'));
     // The client sends this right after `initialize` succeeds, so it is part of that handshake
     case 'notifications/initialized':
       return opensMethod(publicAccess, 'initialize');

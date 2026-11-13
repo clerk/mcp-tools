@@ -158,7 +158,8 @@ Pass the same object to `mcpAuth` (`withMcpAuth` in Next.js) and to `protectedRe
 
 - `methods`: the protocol methods open without a token. `true` opens all of `initialize`, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`. A list opens only the ones it names. `initialize` covers the `notifications/initialized` notification that follows it. It never opens a call.
 - `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
-- `resources` and `prompts`: `true` opens `resources/read` and `prompts/get`.
+- `resources`: the resources a `resources/read` may ask for without a token. `true` opens every resource, and a list opens only the URIs it names. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
+- `prompts`: the prompts a `prompts/get` may ask for without a token. `true` opens every prompt, and a list opens only the prompts it names.
 
 Nothing is open unless it is listed, and without `publicAccess` every request without a token still gets the `401`.
 
