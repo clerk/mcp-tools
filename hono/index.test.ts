@@ -457,6 +457,31 @@ describe('mcpAuth', () => {
     consoleError.mockRestore();
   });
 
+  // `Response` truncates a fractional status, so without the integer check this would be a 503 here and Express's
+  // HTML error page there.
+  test('answers a JSON 500 when the verifier error has a fractional 5xx status, as Express does', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = new Hono();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw Object.assign(new Error('unavailable'), { status: 503.5 });
+        },
+      }),
+      (c) => c.json({ ok: true }),
+    );
+
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer t' },
+    });
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'server_error' });
+  });
+
   test('gives a custom onError the McpAuthError itself, with getResponse() for the JSON answer', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const errors: unknown[] = [];
