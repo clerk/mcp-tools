@@ -686,7 +686,10 @@ describe('assertPublicAccess', () => {
     [true, 'Clerk error: mcpAuth publicAccess must be an object'],
     [['initialize'], 'Clerk error: mcpAuth publicAccess must be an object'],
     [null, 'Clerk error: mcpAuth publicAccess must be an object'],
-    [{ method: true }, 'Clerk error: mcpAuth publicAccess has no method option'],
+    [
+      { method: true },
+      'Clerk error: mcpAuth publicAccess has no method option. It takes any of methods, tools, resources, prompts',
+    ],
     [{ methods: 'initialize' }, 'Clerk error: mcpAuth publicAccess.methods must be true or a list'],
     [
       { methods: ['tools/call'] },
