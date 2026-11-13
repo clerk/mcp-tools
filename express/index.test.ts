@@ -444,6 +444,30 @@ describe('mcpAuth', () => {
     expect(res.status).toBe(503);
   });
 
+  test('keeps a 5xx status from the verifier error in the JSON answer', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw Object.assign(new Error('unavailable'), { status: 503 });
+        },
+      }),
+    );
+
+    const res = await withListening(app, async (baseUrl) => {
+      const answer = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer t' },
+      });
+      return { status: answer.status, body: await answer.json() };
+    });
+    consoleError.mockRestore();
+
+    expect(res).toEqual({ status: 503, body: { error: 'server_error' } });
+  });
+
   test.each([401, 429])(
     "answers 500 when the verifier error's status is %i, which is not the client's to act on",
     async (status) => {
@@ -467,6 +491,69 @@ describe('mcpAuth', () => {
       expect(res.headers.get('WWW-Authenticate')).toBeNull();
     },
   );
+
+  test('answers an McpAuthError with a JSON server error, not the default HTML error page', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw new Error('network down');
+        },
+      }),
+    );
+
+    const res = await withListening(app, async (baseUrl) => {
+      const answer = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer t' },
+      });
+      return {
+        status: answer.status,
+        type: answer.headers.get('content-type'),
+        body: await answer.text(),
+      };
+    });
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(res.type).toMatch(/^application\/json/);
+    expect(JSON.parse(res.body)).toEqual({ error: 'server_error' });
+  });
+
+  test('passes the McpAuthError to error middleware once the JSON answer has been sent', async () => {
+    const seen: { err: unknown; headersSent: boolean }[] = [];
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw new Error('network down');
+        },
+      }),
+    );
+    app.use(
+      (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+        seen.push({ err, headersSent: res.headersSent });
+        if (!res.headersSent) next(err);
+      },
+    );
+
+    const res = await withListening(app, async (baseUrl) => {
+      const answer = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer t' },
+      });
+      const body = await answer.json();
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      return { status: answer.status, body };
+    });
+
+    expect(res).toEqual({ status: 500, body: { error: 'server_error' } });
+    expect(seen[0]!.err).toBeInstanceOf(McpAuthError);
+    expect(seen[0]!.headersSent).toBe(true);
+  });
 
   test.each([undefined, ['https://mcp.example.com/mcp']])(
     'answers a Host header that does not parse with a 400 (resourceUrl: %j)',
