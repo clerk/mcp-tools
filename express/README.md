@@ -169,7 +169,7 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 - `requiredScopes` (optional) - Scopes every request needs. The `401` challenge lists them in its `scope`.
 - `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them.
 - `publicAccess` (optional) - What a request without a token may do: `methods` (`true`, or a list of protocol methods), `tools` (tool names), and `resources` and `prompts` (`true`, or a list of resource URIs or prompt names). Without it, every such request gets the `401`. See [Public access](#public-access).
-- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `mcpAuth` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the secret key doesn't come from `CLERK_SECRET_KEY`, pass a client created with it here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
+- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `mcpAuth` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here. Create it with both `secretKey` and `publishableKey`. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
 - `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
 
 **Example:**
@@ -398,7 +398,7 @@ CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
 ```
 
-The publishable key is used for generating OAuth metadata, while the secret key is used for server-side API calls to fetch user data.
+The publishable key names the Clerk instance for the OAuth metadata routes and for the default Clerk client, and the secret key lets that client verify access tokens. The default client needs both.
 
 ## Error Handling
 
