@@ -61,17 +61,23 @@ export type McpToolTuple<
   }>,
 ];
 
-/** The `_meta` key of a tool error result that holds the error's code, for wrappers that log or route on it. */
+/**
+ * The `_meta` key of every error result the prebuilt tools return. It holds the error's code, for wrappers that log or
+ * route on it without reading the text.
+ */
 export const ERROR_CODE_META_KEY = 'clerk.com/error_code';
+
+/** The `_meta[ERROR_CODE_META_KEY]` code of a failure the tool cannot name. */
+export const UNEXPECTED_ERROR_CODE = 'unexpected_error';
 
 export function toolResult<T extends Record<string, unknown>>(text: string, structuredContent: T) {
   return { content: [{ type: 'text' as const, text }], structuredContent };
 }
 
-export function toolError(text: string, code?: string) {
+export function toolError(text: string, code: string) {
   return {
     isError: true,
     content: [{ type: 'text' as const, text }],
-    ...(code !== undefined && { _meta: { [ERROR_CODE_META_KEY]: code } }),
+    _meta: { [ERROR_CODE_META_KEY]: code },
   };
 }

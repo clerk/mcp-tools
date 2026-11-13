@@ -3,7 +3,12 @@ import type { RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './tools';
+import {
+  ERROR_CODE_META_KEY,
+  submitFeedback,
+  submitFeedbackTool,
+  type SubmitFeedbackToolOptions,
+} from './tools';
 import { connectTool, sentBody } from './test/mcp-harness';
 
 const input = {
@@ -386,6 +391,7 @@ describe('submitFeedbackTool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback limit reached for now.');
     expect(JSON.stringify(result.content)).toContain('Do not retry');
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'rate_limited' });
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('could not store feedback (status 429)'),
     );
@@ -401,6 +407,7 @@ describe('submitFeedbackTool', () => {
 
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback could not be sent.');
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'rejected' });
   });
 
   test('never logs the error message of a failed request', async () => {
@@ -428,6 +435,7 @@ describe('submitFeedbackTool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback may not have been received.');
     expect(JSON.stringify(result.content)).toContain('continue with the task');
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'unconfirmed' });
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('could not confirm the feedback was stored (TimeoutError)'),
     );

@@ -16,6 +16,7 @@ import {
   toolAuthInfo,
   toolError,
   toolResult,
+  UNEXPECTED_ERROR_CODE,
 } from './mcp-tool';
 import { assertScopeTokens, missingScopes, requireAdditionalScopes } from './scope-challenge';
 import { type ClerkAuthInfo, isClerkAuthInfo } from './server';
@@ -65,10 +66,14 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
 export type CreateBrowserSessionToolOptions = CreateBrowserSessionOptions & {
   /**
    * Organization the session starts in, as `CreateBrowserSessionRequest.organizationId`: an ID, or a function that
-   * returns one for each call from the request's verified auth info, after the auth and scope checks pass. Return
-   * `undefined` to leave it to Clerk. When the function throws, the tool answers with its generic error.
+   * returns one for each call from the request's verified auth info, after the auth, scope, and path checks pass. Return
+   * `undefined` to leave it to Clerk. When the function throws, or returns anything but a non-empty string or
+   * `undefined`, the tool refuses the call with `organization_lookup_failed`. To give the agent another reason, throw
+   * a `BrowserSessionError` with that code instead, such as `organization_rejected`.
    */
-  organizationId?: string | ((authInfo: ClerkAuthInfo) => Promise<string | undefined>);
+  organizationId?:
+    | string
+    | ((authInfo: ClerkAuthInfo) => string | undefined | Promise<string | undefined>);
 };
 
 /**
@@ -108,7 +113,8 @@ export type BrowserSession = {
  * `not_authenticated`, `invalid_path`, and `insufficient_scope` are refused before any API call. `rejected`,
  * `destination_rejected`, `unauthorized`, `rate_limited`, and `organization_rejected` come from Clerk's response, and
  * `unavailable` means Clerk could not be reached or its response could not be read. `restricted_not_applied` means
- * Clerk's response did not confirm the restriction or organization the request asked for.
+ * Clerk's response did not confirm the restriction or organization the request asked for. `organization_lookup_failed`
+ * means the tool's `organizationId` function threw or returned an invalid value.
  */
 export type BrowserSessionErrorCode =
   | 'not_authenticated'
@@ -120,7 +126,8 @@ export type BrowserSessionErrorCode =
   | 'rate_limited'
   | 'unavailable'
   | 'organization_rejected'
-  | 'restricted_not_applied';
+  | 'restricted_not_applied'
+  | 'organization_lookup_failed';
 
 /**
  * The error `createBrowserSession` throws when it cannot create a link. Its message and `detail` never include the link
@@ -197,10 +204,19 @@ const ERROR_COPY = {
     agent: () =>
       'The browser session could not be created with the required restrictions. Do not retry. Ask the user to contact the server operator.',
   },
+  organization_lookup_failed: {
+    message: 'The organization for the sign-in link could not be resolved',
+    agent: () =>
+      'The server could not work out which workspace to open the sign-in link in. Try again at most once, then tell the user the server owner must check the workspace lookup.',
+  },
 } satisfies Record<
   BrowserSessionErrorCode,
   { message: string; agent: (error: BrowserSessionError) => string }
 >;
+
+function isKnownCode(code: unknown): code is BrowserSessionErrorCode {
+  return typeof code === 'string' && Object.hasOwn(ERROR_COPY, code);
+}
 
 function sessionError(
   code: BrowserSessionErrorCode,
@@ -390,6 +406,34 @@ async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): P
   }
 }
 
+// The error's name and string `code` (such as `ECONNREFUSED`), when they are identifiers. Never its message, which
+// could carry anything the lookup touched.
+function lookupFailureDetail(error: unknown): string {
+  const code =
+    error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : undefined;
+  const safeCode = code !== undefined && IDENTIFIER_PATTERN.test(code) ? `, code ${code}` : '';
+  return `organizationId threw ${safeErrorName(error)}${safeCode}`;
+}
+
+async function lookUpOrganization(
+  lookup: (authInfo: ClerkAuthInfo) => string | undefined | Promise<string | undefined>,
+  authInfo: ClerkAuthInfo,
+): Promise<string | undefined> {
+  let value: unknown;
+  try {
+    value = await lookup(authInfo);
+  } catch (error) {
+    // A BrowserSessionError names its own reason; one with an unknown code (only through a cast) has no copy.
+    if (error instanceof BrowserSessionError && isKnownCode(error.code)) throw error;
+    throw sessionError('organization_lookup_failed', lookupFailureDetail(error));
+  }
+  if (value === undefined || (typeof value === 'string' && value !== '')) return value;
+  const kind = value === null ? 'null' : value === '' ? 'an empty string' : typeof value;
+  throw sessionError('organization_lookup_failed', `organizationId returned ${kind}`);
+}
+
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
  * The user comes from `authInfo` (set by `toClerkAuthInfo`), never from tool input.
@@ -421,7 +465,7 @@ async function requestBrowserSession(
   // Resolved after the checks, so a refused request never runs the caller's lookup.
   const organizationId =
     typeof request.organizationId === 'function'
-      ? await request.organizationId(authInfo)
+      ? await lookUpOrganization(request.organizationId, authInfo)
       : request.organizationId;
   const agentName =
     config.agentName?.trim() || (authInfo.clientId ? `mcp:${authInfo.clientId}` : 'mcp');
@@ -564,8 +608,8 @@ const warnStepUpUnsupported = once(() =>
 
 /**
  * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`,
- * or override parts of the returned config and wrap the callback to customise it. A failure the tool can name returns
- * an error result whose `_meta['clerk.com/error_code']` is the `BrowserSessionErrorCode`.
+ * or override parts of the returned config and wrap the callback to customise it. Every error result carries a code in
+ * `_meta[ERROR_CODE_META_KEY]`: the `BrowserSessionErrorCode`, or `unexpected_error` for a failure it cannot name.
  * Throws when the options cannot work.
  */
 export function createBrowserSessionTool(
@@ -575,11 +619,11 @@ export function createBrowserSessionTool(
   const { organizationId } = options;
   if (
     organizationId !== undefined &&
-    typeof organizationId !== 'string' &&
+    !(typeof organizationId === 'string' && organizationId !== '') &&
     typeof organizationId !== 'function'
   ) {
     throw new Error(
-      'Clerk error: createBrowserSessionTool organizationId must be a string or a function that returns one',
+      'Clerk error: createBrowserSessionTool organizationId must be a non-empty string or a function that returns one',
     );
   }
   const callback: CreateBrowserSessionTool[2] = async (input, extra) => {
@@ -599,7 +643,7 @@ export function createBrowserSessionTool(
         redirect_url: link.redirectUrl,
       });
     } catch (error) {
-      if (error instanceof BrowserSessionError) {
+      if (error instanceof BrowserSessionError && isKnownCode(error.code)) {
         if (error.code === 'insufficient_scope' && isSdkV2Extra(extra)) warnStepUpUnsupported();
         // The path is agent input and stays out of the log; `detail` holds only safe text.
         console.error(
@@ -613,6 +657,7 @@ export function createBrowserSessionTool(
       );
       return toolError(
         'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
+        UNEXPECTED_ERROR_CODE,
       );
     }
   };
