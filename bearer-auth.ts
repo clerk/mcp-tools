@@ -784,7 +784,8 @@ export async function authenticateBearer({
   });
 
   const parsed = parseAuthorization(authorization);
-  // Only a request with no header at all can be public. A malformed header is a failed attempt to authenticate.
+  // Only a request without an `Authorization` header, or with an empty one, can be public. A malformed header is a
+  // failed attempt to authenticate.
   if ('reason' in parsed && parsed.reason === 'missing_token' && publicAccess) {
     const httpMethod = method?.toUpperCase();
     if (httpMethod === 'POST' && isPublicRequest(publicAccess, await body?.())) {
