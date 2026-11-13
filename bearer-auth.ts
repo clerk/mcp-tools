@@ -831,10 +831,11 @@ export async function authenticateBearer({
     authInfo?.expiresAt !== undefined &&
     !(Number.isFinite(authInfo.expiresAt) && authInfo.expiresAt > Date.now() / 1000)
   ) {
+    const expiry = new Date(authInfo.expiresAt * 1000);
     rejection = new McpTokenVerificationError(
       'token-expired',
-      Number.isFinite(authInfo.expiresAt)
-        ? `The token expired at ${new Date(authInfo.expiresAt * 1000).toISOString()}`
+      Number.isFinite(expiry.getTime())
+        ? `The token expired at ${expiry.toISOString()}`
         : `The token has no valid expiry time (${authInfo.expiresAt})`,
     );
     authInfo = undefined;
