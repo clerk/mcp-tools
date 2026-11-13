@@ -152,9 +152,9 @@ export interface McpClientConnection {
    */
   sessionId: string;
   /**
-   * Calling this function will initialize a connect to the MCP service.
+   * Connects to the MCP service. Resolves once the connection is initialized.
    */
-  connect: () => void;
+  connect: () => Promise<void>;
   /**
    * Lower level primitive, likely not necessary for use
    * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
