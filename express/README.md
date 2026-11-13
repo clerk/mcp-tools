@@ -230,12 +230,15 @@ A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque a
 A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, or Clerk cannot verify the token, the middleware sends that JSON `500` and then passes an `McpAuthError` to your error middleware, with `reason: 'verification_failed'` and the thrown error as its `cause`. The response has already been sent by then, so `res.headersSent` is `true`: log the error, but don't answer again. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
 ```ts
+import type { ErrorRequestHandler } from 'express';
 import { McpAuthError } from '@clerk/mcp-tools/express';
 
-app.use((err, req, res, next) => {
+const logMcpAuthErrors: ErrorRequestHandler = (err, _req, _res, next) => {
   if (!(err instanceof McpAuthError)) return next(err);
   console.error('MCP auth failed', err.reason, err.cause);
-});
+};
+
+app.use(logMcpAuthErrors);
 ```
 
 Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add your first MCP server to the instance in the Clerk Dashboard; see [Build an MCP server](https://clerk.com/docs/guides/ai/mcp/build-mcp-server). Require `@clerk/express` 2.1.70 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.

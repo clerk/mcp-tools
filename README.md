@@ -80,9 +80,7 @@ For framework-specific implementations of protected resource metadata handlers, 
 
 #### Authorization server metadata
 
-> **NOTE:** This is not yet fully implemented
-
-An [older version of the MCP spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#2-5-authorization-flow-steps) required MCP servers to publish a separate "authorization server metadata" document, defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). Most deployments no longer need this endpoint when they publish protected resource metadata and use an authorization service with its own metadata endpoint. You may still need it for a custom or embedded authorization server or an older MCP client.
+An [older version of the MCP spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#2-5-authorization-flow-steps) required MCP servers to publish a separate "authorization server metadata" document, defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). Most deployments no longer need this endpoint when they publish protected resource metadata and use an authorization service with its own metadata endpoint. You may still need it for a custom or embedded authorization server or an older MCP client. With Clerk the route is optional: clients that follow RFC 9728 find Clerk's own metadata from the `authorization_servers` in your protected resource metadata. Mount it only to support clients that look for the metadata on your server's origin. Each adapter's `authorizationServerMetadataHandler()` relays Clerk's metadata, and answers with a JSON `502`, `{"error":"server_error"}`, when it can't be fetched.
 
 If you use [Clerk](https://clerk.com) for authentication, fetch the metadata from your Clerk Frontend API and return it from your authorization server metadata endpoint.
 
@@ -161,6 +159,8 @@ const mcpAuthOptions = {
 
 Pass the same object to `mcpAuth` (`withMcpAuth` in Next.js) and to `protectedResourceMetadataHandler`, which ignores `publicAccess`.
 
+The example uses `challengeScopes`, not `requiredScopes`. `requiredScopes` makes every request with a token need those scopes, and answers a token without them with a `403`. `challengeScopes` only adds them to the `401`, so the first sign-in asks for them without making them a condition of every request. Use `requiredScopes` for scopes no request may go without.
+
 - `methods`: the protocol methods open without a token. `true` opens all of `initialize`, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`. A list opens only the ones it names. `initialize` covers the `notifications/initialized` notification that follows it. It never opens a call.
 - `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
 - `resources`: the resources a `resources/read` may ask for without a token. `true` opens every resource, and a list opens only the URIs it names. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
@@ -172,6 +172,7 @@ Nothing is open unless it is listed, and without `publicAccess` every request wi
 - A `POST` without a token passes only when every JSON-RPC message in its body is open. A batch with one protected message, a body that is not sent as `application/json`, and a body over 1 MiB all get the `401`. In Express, `express.json()` reads the body before `mcpAuth`, so its `limit` (100kb by default) is what bounds how much a request without a token makes the server buffer. A body whose `Content-Length` is over 1 MiB still gets the `401`.
 - The `401` for a protected call is the usual challenge, with `resource_metadata` and the `scope` from `requiredScopes` and `challengeScopes`. It is sent before the MCP SDK runs, which is what makes a client start authorization. A tool cannot send it: the SDK turns an error from a tool into a `200` result, which no client treats as a reason to sign in.
 - A `GET` without a token gets a `405` with `Allow: POST` when `methods` opens `initialize` or `server/discover`. MCP clients open a `GET` stream once they have connected, and a `401` there would start authorization before the client reached anything protected. The `GET` has to reach `mcpAuth` for this, so route every method of the endpoint through it, as in `app.all('/mcp', ...)` in Express and Hono. In Next.js, export the wrapped handler as `GET` and `DELETE` as well as `POST`.
+- A `DELETE` without a token gets the `401`, as does any other request that isn't open. MCP clients send a `DELETE` only to end a session, and the stateless handlers never start one.
 - The `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed` messages pass whenever `publicAccess` opens anything. A client sends them about work already under way, for example when a call is cancelled or times out, and a `401` there would ask the user to sign in although they reached nothing protected. Any other notification from a client without a token still gets the `401`.
 - An open list method shows its whole list. With `tools/list` open, anyone can read the name, description, and input schema of every tool, the protected ones included.
 - A request that `publicAccess` lets through has no auth info, so a public tool cannot assume there is a user.
