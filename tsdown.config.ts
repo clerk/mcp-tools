@@ -17,6 +17,8 @@ export default defineConfig({
   format: ['esm'],
   dts: true,
   clean: true,
+  // Keep real names on exports between chunks, so editors and declarations show `McpAuthError`, not `i`
+  outputOptions: { minifyInternalExports: false },
   deps: {
     neverBundle: [
       'redis',
