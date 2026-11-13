@@ -468,6 +468,38 @@ describe('mcpAuth', () => {
     expect(res).toEqual({ status: 503, body: { error: 'server_error' } });
   });
 
+  // Express 5's `res.status()` throws on a status that is not an integer, which would lose the JSON answer to the
+  // default HTML error page.
+  test('answers a JSON 500 when the verifier error has a fractional 5xx status', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth({
+        verifyToken: async () => {
+          throw Object.assign(new Error('unavailable'), { status: 503.5 });
+        },
+      }),
+    );
+
+    const res = await withListening(app, async (baseUrl) => {
+      const answer = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer t' },
+      });
+      return {
+        status: answer.status,
+        type: answer.headers.get('content-type'),
+        body: await answer.text(),
+      };
+    });
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(res.type).toMatch(/^application\/json/);
+    expect(JSON.parse(res.body)).toEqual({ error: 'server_error' });
+  });
+
   test.each([401, 429])(
     "answers 500 when the verifier error's status is %i, which is not the client's to act on",
     async (status) => {

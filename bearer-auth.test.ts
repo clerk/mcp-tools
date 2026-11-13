@@ -211,11 +211,14 @@ describe('McpAuthError', () => {
     );
   });
 
-  test.each([400, 401, 403, 429, 600, '503'])('drops a %j status from the cause', (status) => {
-    expect(
-      new McpAuthError(Object.assign(new Error('rejected'), { status })).status,
-    ).toBeUndefined();
-  });
+  test.each([400, 401, 403, 429, 600, '503', 503.5, Number.NaN])(
+    'drops a %j status from the cause',
+    (status) => {
+      expect(
+        new McpAuthError(Object.assign(new Error('rejected'), { status })).status,
+      ).toBeUndefined();
+    },
+  );
 });
 
 describe('verifyClerkOAuthToken', () => {

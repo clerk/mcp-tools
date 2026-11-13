@@ -84,7 +84,8 @@ export class McpAuthError extends Error {
   /**
    * The `cause`'s `status` when it is a 5xx, so Express's default error handler still answers with it. Any other
    * status would become the answer to the client's own request, such as a 401 without the challenge a 401 must carry
-   * (RFC 9110 section 15.5.2).
+   * (RFC 9110 section 15.5.2). A status must be an integer, a three-digit code (RFC 9110 section 15): Express's
+   * `res.status()` throws on any other number, which would lose the JSON answer.
    */
   readonly status: number | undefined;
 
@@ -92,7 +93,10 @@ export class McpAuthError extends Error {
     super('Clerk error: MCP access token verification failed', { cause });
     this.name = 'McpAuthError';
     const status = (cause as { status?: unknown } | null)?.status;
-    this.status = typeof status === 'number' && status >= 500 && status <= 599 ? status : undefined;
+    this.status =
+      typeof status === 'number' && Number.isInteger(status) && status >= 500 && status <= 599
+        ? status
+        : undefined;
   }
 }
 
