@@ -830,9 +830,9 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `isClerkAuthInfo`
-  - **Description:** Returns `true` when an `AuthInfo` object came from `toClerkAuthInfo`, which marks its result with `extra.verifiedBy: 'clerk'` and a non-empty `extra.userId`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier. It is a type guard: after the check, TypeScript knows `authInfo.extra.userId` is a string.
+  - **Description:** Returns `true` when an `AuthInfo` object came from `toClerkAuthInfo`, which marks its result with `extra.verifiedBy: 'clerk'` and a non-empty `extra.userId`. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier. It is a type guard: after the check, TypeScript knows `authInfo.extra.userId` is a string. `toClerkAuthInfo` also keeps Clerk's own auth object for the token on `extra.auth`, typed `ClerkOAuthAuth | undefined` (it is missing from auth info built by hand). At runtime it is the object Clerk returned, with fields such as `id`, `subject`, and `getToken()`. Only `userId`, `clientId`, `scopes`, `tokenType`, and `isAuthenticated` are typed; cast it to `MachineAuthObject<'oauth_token'>` from `@clerk/backend` for the rest.
   - **Params:** `authInfo: AuthInfo | undefined`
-  - **Returns:** `authInfo is ClerkAuthInfo` (`ClerkAuthInfo` is also exported)
+  - **Returns:** `authInfo is ClerkAuthInfo` (`ClerkAuthInfo` and `ClerkOAuthAuth` are also exported)
 
 - `requireAdditionalScopes`
   - **Description:** Builds the `scopeChallenge` registration option of MCP SDK 2.1 or later for a tool that needs `requiredScopes`. Before the tool runs, the SDK answers a token that lacks some of them with a `403` step-up challenge for the granted scopes followed by the missing ones. A request without auth info is left to the tool. SDK 1.x has no such option. See [Step-up for your own tools](#step-up-for-your-own-tools).

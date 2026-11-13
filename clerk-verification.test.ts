@@ -50,8 +50,25 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
       token,
       clientId: 'client_123',
       scopes: ['profile', 'email'],
-      extra: { userId: 'user_123', verifiedBy: 'clerk' },
+      extra: {
+        userId: 'user_123',
+        verifiedBy: 'clerk',
+        auth: expect.objectContaining({
+          isAuthenticated: true,
+          tokenType: 'oauth_token',
+          id: 'oat_123',
+          subject: 'user_123',
+          userId: 'user_123',
+          clientId: 'client_123',
+          scopes: ['profile', 'email'],
+          getToken: expect.any(Function),
+          has: expect.any(Function),
+        }),
+      },
     });
+    await expect(
+      (authInfo.extra.auth as unknown as { getToken(): Promise<string> }).getToken(),
+    ).resolves.toBe(token);
   });
 
   test('accepts the normalized form of a resource URL that is not written that way', async () => {

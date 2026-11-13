@@ -69,6 +69,7 @@ const PINNED: Record<string, Surface> = {
     ],
     types: [
       'ClerkAuthInfo',
+      'ClerkOAuthAuth',
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpPublicMethod',
@@ -94,6 +95,7 @@ const PINNED: Record<string, Surface> = {
     ],
     types: [
       'ClerkAuthInfo',
+      'ClerkOAuthAuth',
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpAuthOptions',
@@ -125,6 +127,7 @@ const PINNED: Record<string, Surface> = {
     ],
     types: [
       'ClerkAuthInfo',
+      'ClerkOAuthAuth',
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpAuthOptions',
@@ -152,6 +155,7 @@ const PINNED: Record<string, Surface> = {
     ],
     types: [
       'ClerkAuthInfo',
+      'ClerkOAuthAuth',
       'ClerkOAuthClient',
       'McpAuthFailure',
       'McpAuthOptions',
