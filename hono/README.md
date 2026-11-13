@@ -12,9 +12,9 @@ npm install @hono/node-server
 
 These are optional peer dependencies, so the package manager doesn't install them for you or warn when one is missing. The package is ESM-only: it has no CommonJS build, so import it from an ES module (`"type": "module"` in `package.json`).
 
-`@modelcontextprotocol/sdk` 1.x is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need it.
+The MCP SDK is only for `streamableHttpHandler`, which runs your server on the SDK's web-standard transport. It takes either `@modelcontextprotocol/sdk` 1.x or `@modelcontextprotocol/server` 2.x, whichever your server is built with. On SDK 2.1 or later, its `scopeChallenge` step-up works through the handler too; see [Per-tool scopes](#per-tool-scopes). An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need the handler.
 
-The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also use `zod` (3.25 or later, or 4), an optional peer dependency that the MCP SDK already brings in.
+The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also import `zod` (3.25 or later, or 4), an optional peer dependency. Add it to your app's own dependencies, on the same major version your MCP SDK uses (4.2 or later for SDK 2), even though the SDK depends on it too: a package manager that doesn't hoist dependencies, such as Yarn PnP or pnpm with an isolated layout, can't resolve the SDK's copy from `@clerk/mcp-tools`.
 
 `mcpAuth` builds its Clerk client with `createClerkClient` from `@clerk/backend`, from the `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` environment variables. It loads the package only when it builds that client, so an app that passes `clerkClient` or `verifyToken` doesn't need it.
 
@@ -197,7 +197,36 @@ app.all(
 
 ### Per-tool scopes
 
-Step-up authorization, a `403` challenge that makes the MCP client ask the user to approve more scopes before a tool runs, comes from the `scopeChallenge` option of `registerTool` with `requireAdditionalScopes`, and needs `@modelcontextprotocol/server` 2.1 or later. `streamableHttpHandler` runs `@modelcontextprotocol/sdk` 1.x, which has no `scopeChallenge` option, so a tool behind it must check its scopes itself. List the scope in `challengeScopes` so clients request it when they first authorize, and answer a token without it with an error result:
+Step-up authorization, a `403` challenge that makes the MCP client ask the user to approve more scopes before a tool runs, comes from the `scopeChallenge` option of `registerTool` with `requireAdditionalScopes`, and needs `@modelcontextprotocol/server` 2.1 or later. Build the server with SDK 2 and pass its transport to `streamableHttpHandler`, and the handler sends that challenge:
+
+```ts
+import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
+import { requireAdditionalScopes, streamableHttpHandler } from '@clerk/mcp-tools/hono';
+
+function createServer() {
+  const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+  server.registerTool(
+    'list_projects',
+    {
+      description: 'Lists the projects of the signed-in user',
+      inputSchema: {},
+      scopeChallenge: requireAdditionalScopes('projects:read'),
+    },
+    async () => {
+      // ...
+    },
+  );
+  return server;
+}
+
+app.all(
+  '/mcp',
+  mcpAuth(mcpAuthOptions),
+  streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+);
+```
+
+`@modelcontextprotocol/sdk` 1.x has no `scopeChallenge` option, so on SDK 1 a tool must check its scopes itself. List the scope in `challengeScopes` so clients request it when they first authorize, and answer a token without it with an error result:
 
 ```ts
 server.registerTool(
@@ -236,4 +265,4 @@ Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Re
 
 ### `streamableHttpHandler(createServer, Transport)`
 
-Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` as `Transport`: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than a Hono `404`.
+Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` as `Transport`, from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` on SDK 1.x or from `@modelcontextprotocol/server` on SDK 2.x, with `McpServer` from the same SDK: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than a Hono `404`.
