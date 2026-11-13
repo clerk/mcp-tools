@@ -282,14 +282,32 @@ export function toClerkAuthInfo(
     token,
     scopes: auth.scopes,
     clientId: auth.clientId,
-    extra: { userId: auth.userId, verifiedBy: 'clerk' },
+    // The checks above guarantee the fields `ClerkOAuthAuth` types; the object stored is still the one Clerk returned
+    extra: { userId: auth.userId, verifiedBy: 'clerk', auth: auth as ClerkOAuthAuth },
   };
 }
 
 /**
- * Auth info produced by `toClerkAuthInfo`. `clientId` can be empty when the `AuthInfo` was built by hand.
+ * Clerk's auth object for a verified OAuth access token, as `toClerkAuthInfo` stores it on `extra.auth`. At runtime it
+ * is the object Clerk returned, with every field Clerk sets, such as `id`, `subject`, `getToken()`, and `has()`. Only
+ * the fields `toClerkAuthInfo` checks are typed here, so that this package's types do not need `@clerk/backend`; cast
+ * it to Clerk's `MachineAuthObject<'oauth_token'>` for the rest.
  */
-export type ClerkAuthInfo = AuthInfo & { extra: { userId: string; verifiedBy: 'clerk' } };
+export type ClerkOAuthAuth = {
+  isAuthenticated: true;
+  tokenType: 'oauth_token';
+  userId: string;
+  clientId: string;
+  scopes: string[];
+};
+
+/**
+ * Auth info produced by `toClerkAuthInfo`. `extra.auth` is Clerk's auth object for the token. `clientId` can be empty,
+ * and `extra.auth` missing, when the `AuthInfo` was built by hand.
+ */
+export type ClerkAuthInfo = AuthInfo & {
+  extra: { userId: string; verifiedBy: 'clerk'; auth: ClerkOAuthAuth | undefined };
+};
 
 /**
  * Whether `authInfo` came from `toClerkAuthInfo`, so its `clientId` and `extra.userId` are Clerk ids.

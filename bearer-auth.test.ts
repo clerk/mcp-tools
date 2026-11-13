@@ -257,6 +257,31 @@ describe('verifyClerkOAuthToken', () => {
     });
   });
 
+  test("keeps Clerk's own auth object on extra.auth", async () => {
+    const auth = {
+      isAuthenticated: true,
+      tokenType: 'oauth_token',
+      id: 'oat_1',
+      subject: 'user-1',
+      clientId: 'client-1',
+      scopes: ['profile'],
+      userId: 'user-1',
+      getToken: async () => 't',
+    };
+    const authenticateRequest = vi
+      .fn()
+      .mockResolvedValue({ isAuthenticated: true, toAuth: () => auth });
+
+    const authInfo = await verifyClerkOAuthToken(
+      { authenticateRequest },
+      't',
+      'https://mcp.example.com/mcp',
+    );
+
+    expect(authInfo.extra.auth).toBe(auth);
+    expect(authInfo.extra).toMatchObject({ userId: 'user-1', verifiedBy: 'clerk' });
+  });
+
   test('rejects a token Clerk accepted without a user, client, or scopes, with a cause', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const authenticateRequest = vi.fn().mockResolvedValue({
