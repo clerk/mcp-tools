@@ -6,9 +6,11 @@ Hono utilities for building MCP servers with authentication support.
 
 ```bash
 npm install @clerk/mcp-tools hono @clerk/backend @modelcontextprotocol/sdk
+# On Node.js, to start the server
+npm install @hono/node-server
 ```
 
-These are optional peer dependencies, so the package manager doesn't install them for you or warn when one is missing.
+These are optional peer dependencies, so the package manager doesn't install them for you or warn when one is missing. The package is ESM-only: it has no CommonJS build, so import it from an ES module (`"type": "module"` in `package.json`).
 
 `@modelcontextprotocol/sdk` 1.x is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need it.
 

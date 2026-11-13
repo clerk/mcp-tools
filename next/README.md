@@ -158,7 +158,7 @@ export const mcpAuthOptions = {
 } satisfies McpAuthOptions;
 ```
 
-The route handler gets no `req.auth` for a request that `publicAccess` let through. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+Tools see `ctx.http?.authInfo` as `undefined` for a request that `publicAccess` let through. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
 
 ### Building an MCP Client
 
