@@ -5,16 +5,14 @@ Hono utilities for building MCP servers with authentication support.
 ## Installation
 
 ```bash
-npm install @clerk/mcp-tools hono @modelcontextprotocol/sdk
+npm install @clerk/mcp-tools hono @clerk/backend @modelcontextprotocol/sdk
 ```
 
-`@modelcontextprotocol/sdk` is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need it.
+These are optional peer dependencies, so the package manager doesn't install them for you or warn when one is missing.
 
-If you're using Clerk for authentication, also install:
+`@modelcontextprotocol/sdk` 1.x is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need it.
 
-```bash
-npm install @clerk/backend
-```
+The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also need `zod` (3.25 or later, or 4), which the MCP SDK already needs.
 
 `mcpAuth` builds its Clerk client with `createClerkClient` from `@clerk/backend`, from the `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` environment variables. It loads the package only when it builds that client, so an app that passes `clerkClient` or `verifyToken` doesn't need it.
 
@@ -29,6 +27,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { cors } from 'hono/cors';
 import {
   type McpAuthOptions,
+  isClerkAuthInfo,
   mcpAuth,
   protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
@@ -47,14 +46,20 @@ app.use('*', cors({ origin: '*', exposeHeaders: ['WWW-Authenticate'] }));
 
 function createServer() {
   const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-  // `authInfo.token` is the bearer token, so return only the user ID that `mcpAuth` puts in `extra`
-  server.tool(
+  server.registerTool(
     'whoami',
-    'Returns the ID of the Clerk user that authorized this request',
-    {},
-    async (_, { authInfo }) => ({
-      content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
-    }),
+    {
+      description: 'Returns the ID of the Clerk user that authorized this request',
+      inputSchema: {},
+    },
+    async (_args, { authInfo }) => {
+      // Narrows `authInfo` to the auth info `mcpAuth` built from a Clerk token, so `extra.userId` is a string
+      if (!isClerkAuthInfo(authInfo)) {
+        return { isError: true, content: [{ type: 'text', text: 'Not signed in with Clerk.' }] };
+      }
+      // `authInfo.token` is the bearer token, so return only the user ID
+      return { content: [{ type: 'text', text: authInfo.extra.userId }] };
+    },
   );
   return server;
 }
@@ -71,6 +76,24 @@ app.all(
 );
 
 export default app;
+```
+
+`export default app` is the form Cloudflare Workers and Bun run. On Node.js, install `@hono/node-server` and start the server instead:
+
+```ts
+import { serve } from '@hono/node-server';
+
+serve({ fetch: app.fetch, port: 3000 });
+```
+
+To let clients connect, list tools, and call some of them before the user signs in, add `publicAccess` to the shared options. A tool you don't list still gets the `401` challenge. See [Public access](#public-access).
+
+```ts
+const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  requiredScopes: ['profile', 'email'],
+  publicAccess: { methods: true, tools: ['search_docs'] },
+} satisfies McpAuthOptions;
 ```
 
 The MCP route doesn't need `clerkMiddleware()` from `@clerk/hono`. If other routes in your app do, mount it on those routes rather than on `*` or `/mcp`: it verifies the bearer token too, so on the MCP route each token would be verified twice.
@@ -137,7 +160,7 @@ Middleware that enforces authentication for MCP requests. Extracts the bearer to
 
 Earlier versions took the verifier as the first argument, `mcpAuth(verifyToken, options)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware throws to Hono's error handler, and Hono's default handler answers with a JSON `500`, `{"error":"server_error"}`, and logs the error with `console.error`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque access token at all, for example during an outage or with an invalid secret key, the middleware throws to Hono's error handler, and Hono's default handler answers with a JSON `500` (or the `5xx` status Clerk answered with), `{"error":"server_error"}`, and logs the error with `console.error`, so clients keep their tokens instead of restarting authorization. A JWT access token whose signing keys Clerk cannot fetch still gets the `401` challenge, because Clerk reports that failure the same way as an invalid signature.
 
 A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `c.get('mcpAuthFailure')`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, which a middleware mounted earlier can read after `await next()`, for example for logging. When `verifyToken` throws, or Clerk cannot verify the token, the middleware throws an `McpAuthError` to Hono's error handler instead, with `reason: 'verification_failed'` and the thrown error as its `cause`. A custom `onError` replaces the default answer and logging, so answer with the same JSON there. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client:
 
@@ -169,6 +192,33 @@ app.all(
 ```
 
 `c.get('mcpAuth')` is `undefined` for a request that `publicAccess` let through, and its type is `AuthInfo | undefined`. `mcpAuth` reads the body of a request without a token to check it, so a middleware before it that reads the body must use `c.req.json()` or `c.req.text()`, or read a copy, as `c.req.raw.clone().json()`. One that reads `c.req.raw` itself makes `mcpAuth` throw a `Clerk error:`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+
+### Per-tool scopes
+
+Step-up authorization, a `403` challenge that makes the MCP client ask the user to approve more scopes before a tool runs, comes from the `scopeChallenge` option of `registerTool` with `requireAdditionalScopes`, and needs `@modelcontextprotocol/server` 2.1 or later. `streamableHttpHandler` runs `@modelcontextprotocol/sdk` 1.x, which has no `scopeChallenge` option, so a tool behind it must check its scopes itself. List the scope in `challengeScopes` so clients request it when they first authorize, and answer a token without it with an error result:
+
+```ts
+server.registerTool(
+  'list_projects',
+  { description: 'Lists the projects of the signed-in user', inputSchema: {} },
+  async (_args, { authInfo }) => {
+    if (!authInfo?.scopes.includes('projects:read')) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: 'This tool needs the projects:read scope. Ask the user to reconnect the MCP server and approve it.',
+          },
+        ],
+      };
+    }
+    // ...
+  },
+);
+```
+
+See [Step-up for your own tools](../README.md#step-up-for-your-own-tools) in the main guide.
 
 ### `protectedResourceMetadataHandler(options?)`
 
