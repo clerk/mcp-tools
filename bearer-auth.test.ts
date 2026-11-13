@@ -205,13 +205,13 @@ describe('authenticateBearer', () => {
 });
 
 describe('McpAuthError', () => {
-  test.each([500, 503, 599])('keeps a %i status from the cause', (status) => {
+  test.each([429, 500, 503, 599])('keeps a %i status from the cause', (status) => {
     expect(new McpAuthError(Object.assign(new Error('unavailable'), { status })).status).toBe(
       status,
     );
   });
 
-  test.each([400, 401, 403, 429, 600, '503', 503.5, Number.NaN])(
+  test.each([400, 401, 403, 428, 600, '503', 503.5, Number.NaN])(
     'drops a %j status from the cause',
     (status) => {
       expect(

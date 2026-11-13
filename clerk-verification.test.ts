@@ -1,11 +1,13 @@
 // Runs `verifyClerkOAuthToken` against the real `@clerk/backend` verifier. With a `jwtKey`, Clerk checks a JWT access
-// token locally, so these tests need no network.
+// token locally, and the other tests answer Clerk from a local stub, so these tests need no network.
 import { createSign, generateKeyPairSync } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { createClerkClient } from '@clerk/backend';
-import { describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
-import { verifyClerkOAuthToken } from './bearer-auth';
-import { McpTokenVerificationError } from './server';
+import { authenticateBearer, serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
+import { McpAuthError, McpTokenVerificationError } from './server';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -112,5 +114,109 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
 
     expect(error).toBeInstanceOf(McpTokenVerificationError);
     expect(error).toMatchObject({ code: 'token-verification-failed' });
+  });
+});
+
+// A stub Backend API, so the status Clerk's verifier reports for an answer it got is the one it really derives
+describe('verifyClerkOAuthToken when the Backend API fails', () => {
+  let status = 503;
+  const requests: string[] = [];
+  const backendApi = createServer((req, res) => {
+    requests.push(`${req.method} ${req.url}`);
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ errors: [{ code: 'unexpected_error', message: 'down' }] }));
+  });
+  let apiUrl = '';
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => backendApi.listen(0, '127.0.0.1', resolve));
+    apiUrl = `http://127.0.0.1:${(backendApi.address() as AddressInfo).port}`;
+  });
+  afterAll(() => new Promise<void>((resolve) => backendApi.close(() => resolve())));
+  beforeEach(() => {
+    requests.length = 0;
+  });
+
+  // No `jwtKey`, so a JWT access token makes Clerk fetch the JWKS from the stub
+  const remoteClient = () =>
+    createClerkClient({
+      secretKey: 'sk_test_clerk_verification',
+      publishableKey: 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k',
+      apiUrl,
+    });
+
+  test.each([503, 500, 429])(
+    'throws an McpAuthError with status %i for an opaque token Clerk could not check',
+    async (answered) => {
+      status = answered;
+
+      const error = await verifyClerkOAuthToken(remoteClient(), 'oat_abc', resourceUrl).catch(
+        (thrown: unknown) => thrown,
+      );
+
+      expect(requests).toEqual(['POST /oauth_applications/access_tokens/verify']);
+      expect(error).toBeInstanceOf(McpAuthError);
+      expect(error).toMatchObject({ status: answered });
+      expect((error as McpAuthError).cause).toMatchObject({
+        code: 'unexpected-error',
+        status: answered,
+      });
+      expect(serverErrorAnswer(error as McpAuthError)).toEqual({
+        status: answered,
+        body: { error: 'server_error' },
+      });
+    },
+  );
+
+  test.each([400, 422])(
+    'rejects an opaque token the Backend API answered with %i for',
+    async (answered) => {
+      status = answered;
+
+      const error = await verifyClerkOAuthToken(remoteClient(), 'oat_abc', resourceUrl).catch(
+        (thrown: unknown) => thrown,
+      );
+
+      expect(error).toBeInstanceOf(McpTokenVerificationError);
+      expect(error).not.toBeInstanceOf(McpAuthError);
+      expect(error).toMatchObject({ code: 'unexpected-error', status: answered });
+    },
+  );
+
+  test('answers a rejected opaque token with the invalid_token challenge', async () => {
+    status = 400;
+
+    const result = await authenticateBearer({
+      authorization: 'Bearer oat_abc',
+      requestUrl: resourceUrl,
+      resourceUrl,
+      requiredScopes: [],
+      challengeScopes: [],
+      verifyToken: (token) => verifyClerkOAuthToken(remoteClient(), token, resourceUrl),
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 401, failure: { reason: 'invalid_token' } });
+    expect(result.ok === false && result.challenge).toContain('error="invalid_token"');
+  });
+
+  test('throws an McpAuthError answered with a 500 when the JWKS for a JWT access token cannot be loaded', async () => {
+    status = 503;
+
+    const error = await verifyClerkOAuthToken(
+      remoteClient(),
+      accessToken({ aud: resourceUrl }),
+      resourceUrl,
+    ).catch((thrown: unknown) => thrown);
+
+    expect(requests).toContain('GET /v1/jwks');
+    expect(error).toBeInstanceOf(McpAuthError);
+    expect((error as McpAuthError).cause).toMatchObject({
+      code: 'token-verification-failed',
+      message: expect.stringMatching(/^Error loading Clerk JWKS from .* with code=503/),
+    });
+    expect(serverErrorAnswer(error as McpAuthError)).toEqual({
+      status: 500,
+      body: { error: 'server_error' },
+    });
   });
 });

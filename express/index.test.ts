@@ -500,7 +500,7 @@ describe('mcpAuth', () => {
     expect(JSON.parse(res.body)).toEqual({ error: 'server_error' });
   });
 
-  test.each([401, 429])(
+  test.each([401, 403])(
     "answers 500 when the verifier error's status is %i, which is not the client's to act on",
     async (status) => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
