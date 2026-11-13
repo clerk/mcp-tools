@@ -14,7 +14,7 @@ These are optional peer dependencies, so the package manager doesn't install the
 
 `@modelcontextprotocol/sdk` 1.x is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need it.
 
-The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also need `zod` (3.25 or later, or 4), which the MCP SDK already needs.
+The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also use `zod` (3.25 or later, or 4), an optional peer dependency that the MCP SDK already brings in.
 
 `mcpAuth` builds its Clerk client with `createClerkClient` from `@clerk/backend`, from the `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` environment variables. It loads the package only when it builds that client, so an app that passes `clerkClient` or `verifyToken` doesn't need it.
 
