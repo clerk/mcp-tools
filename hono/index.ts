@@ -12,6 +12,7 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  failureBody,
   failureHeaders,
   methodNotAllowed,
   readJsonBody,
@@ -264,10 +265,10 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
 
     if (!result.ok) {
       if (result.failure) c.set('mcpAuthFailure', result.failure);
-      return c.json(
-        { error: result.error },
-        { status: result.status, headers: failureHeaders(result) },
-      );
+      return c.json(failureBody(result), {
+        status: result.status,
+        headers: failureHeaders(result),
+      });
     }
 
     c.set('mcpAuth', result.authInfo);

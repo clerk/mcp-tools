@@ -767,7 +767,12 @@ describe.each(publicAccessRoutes)('%s publicAccess', (_name, send) => {
     expect(res.status).toBe(405);
     expect(res.allow).toBe('POST');
     expect(res.challenge).toBeNull();
-    expect(res.body).toEqual({ error: 'method_not_allowed' });
+    // The same body `streamableHttpHandler` sends a GET that carries a token
+    expect(res.body).toEqual({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed.' },
+      id: null,
+    });
   });
 
   test('answers a GET without a token with the 401 when the handshake is closed', async () => {
