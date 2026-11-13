@@ -47,12 +47,14 @@ export const mcpAuthOptions = {
 
 ```ts
 // app/.well-known/oauth-protected-resource/mcp/route.ts
-import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
+import { metadataCorsHandler, protectedResourceMetadataHandler } from '@clerk/mcp-tools/next';
 import { mcpAuthOptions } from '@/lib/mcp';
 
 const handler = protectedResourceMetadataHandler(mcpAuthOptions);
+// Answers the CORS preflight of browser-based MCP clients
+const corsHandler = metadataCorsHandler();
 
-export { handler as GET };
+export { handler as GET, corsHandler as OPTIONS };
 ```
 
 #### 3. MCP Endpoint
@@ -87,6 +89,42 @@ export { authHandler as GET, authHandler as POST, authHandler as DELETE };
 Tools read the verified auth info as `ctx.http?.authInfo`, as `@modelcontextprotocol/server` 2.x passes it. It is `undefined` for a request that [`publicAccess`](#public-access) let through without a token, and with `verifyToken` it is whatever your function returns, so `isClerkAuthInfo` is `false` there.
 
 **Note**: This implementation uses Vercel's `mcp-handler` 2.x, which is specifically designed for Next.js applications and runs on `@modelcontextprotocol/server`. Import `withMcpAuth` from `@clerk/mcp-tools/next` instead of `mcp-handler`: it takes the route handler and an options object instead of a verifier function, and verifies tokens with Clerk unless you pass `verifyToken`.
+
+#### 4. CORS for browser-based MCP clients
+
+Neither `withMcpAuth` nor `mcp-handler` sets CORS headers on the MCP route. A browser-based client, such as MCP Inspector, needs the response to expose `WWW-Authenticate`, or it can't read the `401` challenge that points it to the metadata. It also sends `Authorization`, `Content-Type`, and, after `initialize`, `Mcp-Protocol-Version`, so the preflight must allow those request headers. To serve those clients, add the headers in `app/mcp/route.ts` and answer the preflight, which carries no token, before `withMcpAuth`:
+
+```ts
+// app/mcp/route.ts, in place of the export above
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Mcp-Protocol-Version',
+  'Access-Control-Expose-Headers': 'WWW-Authenticate',
+};
+
+async function corsAuthHandler(req: Request) {
+  const response = await authHandler(req);
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(corsHeaders)) headers.set(name, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function preflight() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
+export {
+  corsAuthHandler as GET,
+  corsAuthHandler as POST,
+  corsAuthHandler as DELETE,
+  preflight as OPTIONS,
+};
+```
 
 ### `withMcpAuth(handler, options)`
 

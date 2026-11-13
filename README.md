@@ -134,7 +134,7 @@ server.registerTool(
 - The challenge lists the granted scopes followed by the missing ones. Some MCP clients request exactly the challenged scopes, so listing only the missing ones could drop access that other tools need. The SDK's own `requireScopes` helper lists the required scopes only.
 - Enable every scope your tools need for the OAuth application. Its scope settings and the user's approval decide what a token can get. `scopes_supported` in your protected resource metadata only guides what clients request: MCP clients request the scopes named in a challenge, and otherwise usually the whole `scopes_supported` list on first connection. A `401` names scopes only when your server adds them, as `mcp-handler`'s `withMcpAuth` does from its `requiredScopes`, and this package's `mcpAuth` and `withMcpAuth` do from `requiredScopes` and `challengeScopes`. Listing only baseline scopes in `scopes_supported` encourages clients to request extra scopes through step-up, though a client can still request them up front. When the `401` doesn't name scopes, listing a scope there makes most clients request it on first connection, which is usually the only way clients without step-up support ask for it.
 - The SDK sends the challenge only over HTTP (`createMcpHandler` or the Streamable HTTP transport) and for requests with auth info. Elsewhere, including stdio, the tool runs without it.
-- MCP SDK 1.x has no `scopeChallenge` option, and TypeScript rejects it there. The `streamableHttpHandler` adapters in `@clerk/mcp-tools/express` and `@clerk/mcp-tools/hono` run SDK 1.x, so a tool behind them must check its scopes itself.
+- MCP SDK 1.x has no `scopeChallenge` option, and TypeScript rejects it there, so a tool on SDK 1.x must check its scopes itself. `streamableHttpHandler` runs whichever SDK's transport you pass it: in `@clerk/mcp-tools/hono`, pass `McpServer` and `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/server` 2.1 or later, and the step-up challenge works through it. The Express handler is documented and tested with SDK 1.x's `StreamableHTTPServerTransport`.
 - `requireAdditionalScopes` throws a `Clerk error:` message when it is given no scopes or a scope that is not a valid OAuth scope token.
 - `createBrowserSessionTool` sets this option from its `requiredScopes` for you, and leaves it out when `requiredScopes` is empty.
 
@@ -173,7 +173,8 @@ Nothing is open unless it is listed, and without `publicAccess` every request wi
 - The `401` for a protected call is the usual challenge, with `resource_metadata` and the `scope` from `requiredScopes` and `challengeScopes`. It is sent before the MCP SDK runs, which is what makes a client start authorization. A tool cannot send it: the SDK turns an error from a tool into a `200` result, which no client treats as a reason to sign in.
 - A `GET` without a token gets a `405` with `Allow: POST` when `methods` opens `initialize` or `server/discover`. MCP clients open a `GET` stream once they have connected, and a `401` there would start authorization before the client reached anything protected. The `GET` has to reach `mcpAuth` for this, so route every method of the endpoint through it, as in `app.all('/mcp', ...)` in Express and Hono. In Next.js, export the wrapped handler as `GET` and `DELETE` as well as `POST`.
 - A `DELETE` without a token gets the `401`, as does any other request that isn't open. MCP clients send a `DELETE` only to end a session, and the stateless handlers never start one.
-- The `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed` messages pass whenever `publicAccess` opens anything. A client sends them about work already under way, for example when a call is cancelled or times out, and a `401` there would ask the user to sign in although they reached nothing protected. Any other notification from a client without a token still gets the `401`.
+- `tasks/get`, `tasks/result`, and `tasks/cancel` always need a token, even for a task that a public tool started: a task ID alone doesn't show who may read or cancel the task. A client without a token gets the `401` for them.
+- The `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed` messages pass whenever `publicAccess` opens anything. A client sends them about work already under way, for example when a call is cancelled or times out, and a `401` there would ask the user to sign in although they reached nothing protected. Any other notification from a client without a token still gets the `401`. `publicAccess` assumes a stateless server, as `streamableHttpHandler`, `createMcpHandler`, and `mcp-handler` run: these notifications are not checked against the caller, so on a stateful server a client without a token that knows a session ID and a request ID could cancel another user's request or report progress on it.
 - An open list method shows its whole list. With `tools/list` open, anyone can read the name, description, and input schema of every tool, the protected ones included.
 - A request that `publicAccess` lets through has no auth info, so a public tool cannot assume there is a user.
 - A protected tool still declares the scopes it needs with `requireAdditionalScopes`, as in [Step-up for your own tools](#step-up-for-your-own-tools), so that a token without them gets the `403` step-up.
@@ -195,7 +196,7 @@ function createServer() {
 }
 ```
 
-The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/sdk` 1.x (`McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`) and `@modelcontextprotocol/server` 2.x (`McpServer` from `@modelcontextprotocol/server`). The registration line is the same. The tool's schemas must use the same `zod` copy as the MCP SDK, or its input schema doesn't type-check against `registerTool`. If your app lists `zod`, keep it on a version the SDK accepts (4.2 or later for SDK 2.x) and check that `npm ls zod` shows a single version.
+The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/sdk` 1.x (`McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`) and `@modelcontextprotocol/server` 2.x (`McpServer` from `@modelcontextprotocol/server`). The registration line is the same. The tool's schemas must use the same `zod` copy as the MCP SDK, or its input schema doesn't type-check against `registerTool`. Keep `zod` on a version the SDK accepts (4.2 or later for SDK 2.x) and check that `npm ls zod` shows a single version.
 
 - `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `submitFeedbackTool` throws if it's empty, so a missing environment variable fails at startup.
 - Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`, the `FeedbackKind` type), how the task ended (`FeedbackImpact`), and what they tried and what went wrong. `SUBMIT_FEEDBACK_TOOL_NAME` names the tool before it is built.
@@ -206,7 +207,8 @@ The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/s
 - Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.
 - On a public MCP endpoint without authentication, anyone can call this tool, submit misleading reports, and exhaust the instance's 100-report-per-hour limit. Protect it with authentication or other access controls where possible.
 - If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`. Requests to Clerk time out after 10 seconds.
-- This module uses `zod` (3.25 or later, or 4), an optional peer dependency that the MCP SDK already brings in.
+- Its error result names the failure in `_meta[ERROR_CODE_META_KEY]` (`ERROR_CODE_META_KEY` is exported from `@clerk/mcp-tools/tools`): `rate_limited` for Clerk's `429`, `rejected` for any other refusal, or `unconfirmed` after a timeout, a lost connection, or an unreadable success response, when Clerk may have stored the report.
+- This module imports `zod` (3.25 or later, or 4), an optional peer dependency. List it in your app's own dependencies even though the MCP SDK depends on it too: a package manager that doesn't hoist dependencies, such as Yarn PnP or pnpm with an isolated layout, can't resolve the SDK's copy from `@clerk/mcp-tools`.
 
 #### Signed-in browser links for agents
 
@@ -276,24 +278,26 @@ export { authHandler as GET, authHandler as POST, authHandler as DELETE };
 - The link is a bearer credential: anyone who has it before it is used or expires can sign in as the user. The tool never puts it in error messages, but its text result contains the link so that the agent can open it. Never log it, and treat MCP client and gateway logs of tool results as credentials.
 - `restricted` (default `true`) limits the session the link starts. Clerk's Frontend API refuses these writes from that session: touch, switching the active session or organization, sign-out, writes to the user's own profile and organizations, reverification, and OAuth consent and approval. The one exception is refreshing its own session token. Clerk enforces this restriction, not your app's own backend: your backend sees an ordinary signed-in session unless it checks for an agent session itself. Pass `restricted: false` for an ordinary session. When Clerk does not confirm the restriction in its response, for example on a Clerk Backend API that does not support it yet, the tool revokes the new session link on a best-effort basis, refuses to return it, and fails with the error code `restricted_not_applied`. The log line names the `agent_task_id` when it is a well-formed ID. A malformed ID is never logged. It is still revoked when it can safely go in the revoke request's path; otherwise the log line says `revoke_skipped`, and the unused link expires on its own.
 - Optional settings: `sessionMaxDurationInSeconds` sets the maximum length, in seconds, of the session the link starts. Clerk's default is 30 minutes, and a larger value makes the session longer. `agentName`, `apiUrl`, and `fetch` are also available. Requests to Clerk time out after 10 seconds.
-- `organizationId` sets the organization each link starts in, as described for `createBrowserSession` below. Pass an ID, or a function that returns one for each call from the request's verified auth info, such as the workspace the user connected. The function runs only after the auth, scope, and path checks pass. Return `undefined` to leave the organization to Clerk. When it throws, the tool answers with its generic error.
-- To customise the tool, override parts of the config it returns instead of building your own, and wrap its callback to add logging. When the tool fails for a reason it can name, its error result carries the `BrowserSessionErrorCode` in `_meta['clerk.com/error_code']`, so a wrapper can tell, for example, `rate_limited` from `invalid_path` without reading the text. Use `CREATE_BROWSER_SESSION_TOOL_NAME` to allowlist the tool or name it before it is built.
+- `organizationId` sets the organization each link starts in, as described for `createBrowserSession` below. Pass an ID, or a function that returns one for each call from the request's verified auth info, such as the workspace the user connected. The function may be synchronous or `async`, and runs only after the auth, scope, and path checks pass. Return `undefined` to leave the organization to Clerk. When it throws, or returns anything but a non-empty string or `undefined`, the tool refuses with `organization_lookup_failed` and logs the error's name and its `code` property, never its message. To give the agent a more specific reason, throw a `BrowserSessionError`, such as `new BrowserSessionError('organization_rejected', 'No workspace')`, and the tool answers with that code. A static `organizationId` must be a non-empty string.
+- To customise the tool, override parts of the config it returns instead of building your own, and wrap its callback to add logging. Every error result carries a code in `_meta[ERROR_CODE_META_KEY]`, the key `'clerk.com/error_code'`: the `BrowserSessionErrorCode` when the tool can name the failure, or `unexpected_error`. A wrapper can tell, for example, `rate_limited` from `invalid_path` without reading the text. Use `CREATE_BROWSER_SESSION_TOOL_NAME` to allowlist the tool or name it before it is built.
 
   ```ts
+  import { createBrowserSessionTool, ERROR_CODE_META_KEY } from '@clerk/mcp-tools/tools';
+
   const [name, config, callback] = createBrowserSessionTool(options);
   server.registerTool(
     name,
     { ...config, description: `${config.description} ${READ_ONLY_NOTE}` },
     async (input, extra) => {
       const result = await callback(input, extra);
-      if (result.isError) log(name, result._meta?.['clerk.com/error_code']);
+      if (result.isError) log(name, result._meta?.[ERROR_CODE_META_KEY]);
       return result;
     },
   );
   ```
 
 - To create a link outside of an MCP tool, use `createBrowserSession({ authInfo, path, taskDescription, organizationId }, options)` from `@clerk/mcp-tools/tools`. It resolves to `{ url, agentTaskId, redirectUrl }`. `organizationId` is optional and sets the organization the session starts in. With `restricted`, it is also the only organization the session can use. Without it, Clerk uses the user's last active organization. When you pass it, the link is refused with `restricted_not_applied` unless Clerk confirms that organization, and it fails with `organization_rejected` when the user does not belong to the organization, or when the instance requires one and none applies. It rejects with a `Clerk error:` message when the options cannot work. When it rejects with a `BrowserSessionError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`, or `restricted_not_applied`).
-- The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module uses `zod` (3.25 or later, or 4), an optional peer dependency that the MCP SDK already brings in. The tool's schemas must use the same `zod` copy as the MCP SDK: if your app lists `zod`, keep it on a version the SDK accepts (4.2 or later for SDK 2.x) and check that `npm ls zod` shows a single version.
+- The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module imports `zod` (3.25 or later, or 4), an optional peer dependency. List it in your app's own dependencies even though the MCP SDK depends on it too: a package manager that doesn't hoist dependencies, such as Yarn PnP or pnpm with an isolated layout, can't resolve the SDK's copy from `@clerk/mcp-tools`. The tool's schemas must use the same `zod` copy as the MCP SDK: keep `zod` on a version the SDK accepts (4.2 or later for SDK 2.x) and check that `npm ls zod` shows a single version.
 
 ### Guide: building a client
 
@@ -314,10 +318,13 @@ import { createDynamicallyRegisteredMcpClient } from '@clerk/mcp-tools/client';
 import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 
 // Create a persistent store (use appropriate store for your environment)
-const store = createRedisStore({ url: process.env.REDIS_URL });
+const store = createRedisStore({
+  host: process.env.REDIS_HOST,
+  password: process.env.REDIS_PASSWORD,
+});
 
 export async function initializeMCPConnection(mcpEndpoint: string) {
-  const { connect, sessionId } = createDynamicallyRegisteredMcpClient({
+  const { connect, sessionId } = await createDynamicallyRegisteredMcpClient({
     mcpEndpoint,
     oauthScopes: 'openid profile email',
     oauthRedirectUrl: 'https://yourapp.com/oauth_callback',
@@ -383,7 +390,6 @@ export async function callMCPTool(sessionId: string, toolName: string, args: any
 
 For complete framework-specific implementations with working examples, see:
 
-- [Express.js client guide](./express/README.md)
 - [Next.js client guide](./next/README.md#building-an-mcp-client)
 
 ### Stores
@@ -414,8 +420,10 @@ For production environments, use one of these persistent stores:
 ```ts
 import { createRedisStore } from '@clerk/mcp-tools/stores/redis';
 
+// `host`, `port`, `password`, `db`, and `tls` configure the connection
 const store = createRedisStore({
-  url: process.env.REDIS_URL,
+  host: process.env.REDIS_HOST,
+  password: process.env.REDIS_PASSWORD,
 });
 ```
 
@@ -435,7 +443,7 @@ const store = createPostgresStore({
 import { createSqliteStore } from '@clerk/mcp-tools/stores/sqlite';
 
 const store = createSqliteStore({
-  filename: './mcp-sessions.db',
+  dbPath: './mcp-sessions.db',
 });
 ```
 
@@ -663,7 +671,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
       /**
        * Calling this function will initialize a connect to the MCP service.
        */
-      connect: () => void;
+      connect: () => Promise<void>;
       /**
        * Lower level primitive, likely not necessary for use
        * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -819,6 +827,25 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Params:** `...requiredScopes: string[]`, one or more scopes as separate arguments
   - **Returns:** the function to pass as the `scopeChallenge` option, `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`
 
+- `toClerkAuthInfo`
+  - **Description:** Converts Clerk's auth object for an already verified OAuth access token into the MCP SDK's `AuthInfo`, marked with `extra.verifiedBy: 'clerk'`. It verifies nothing itself: pass the result of `auth({ acceptsToken: 'oauth_token' })` or of a request state's `toAuth()`. Use it when you verify tokens yourself instead of with `mcpAuth` or `withMcpAuth`.
+  - **Params:** `auth`, Clerk's auth object; `token: string | undefined`, the access token it came from
+  - **Returns:** `ClerkAuthInfo | undefined`, `undefined` when there is no token or Clerk did not authenticate it
+
+- `matchResourceUrl`
+  - **Description:** The URL from a `resourceUrl` option that a request is for: `resourceUrl` itself when it is one URL, or the listed URL with the request's origin. It is the rule `mcpAuth`, `withMcpAuth`, and `protectedResourceMetadataHandler` apply, so a metadata route of your own can keep its `resource` identical to the URL they check. Answer `421` when it returns `undefined`.
+  - **Params:** `resourceUrl: string | readonly string[]` (the `McpResourceUrl` type), `requestUrl: string | URL`
+  - **Returns:** `string | undefined`
+
+- `McpAuthError`
+  - **Description:** What `mcpAuth` and `withMcpAuth` throw to the framework's error handler when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the status the adapters answer with when the cause reported one they forward. See your framework's guide for the answer it sends.
+
+- `McpTokenVerificationError`
+  - **Description:** What a verifier reported for a token it did not accept. Clerk verification creates one from Clerk's `reason` (its `code`, such as `token-invalid`) and `message`, and it is the `cause` of an `invalid_token` failure (`McpAuthFailure`) or of an `McpAuthError`. A `verifyToken` function can throw one to reject a token with its own code. It is never sent to the client.
+  - **Params:** `new McpTokenVerificationError(code: string, message: string, options?: { status?: number })`
+
+- Types: `McpResourceUrl` (one URL or a list), `PublicAccess` (the `publicAccess` option, see [Public access](#public-access-sign-in-only-when-needed)), `McpPublicMethod`, and `McpAuthFailure` (why `mcpAuth` answered a request itself, with its `reason` and, for `invalid_token`, the `cause`).
+
 - `metadataCorsHeaders`
   - **Description:** Pre-configured CORS headers for OAuth metadata endpoints. These headers allow cross-origin requests to your OAuth metadata endpoints, which is necessary for web-based MCP clients.
   - **Value:**
@@ -837,6 +864,14 @@ For detailed documentation on server utilities and framework-specific implementa
 - [Express.js server guide](./express/README.md)
 - [Hono server guide](./hono/README.md)
 - [Next.js server guide](./next/README.md#building-an-mcp-server)
+
+#### Scope: `@clerk/mcp-tools/tools`
+
+Needs `zod` in your app's own dependencies; see [Collecting feedback from agents](#collecting-feedback-from-agents).
+
+- `submitFeedbackTool(options)`: the `submit_feedback` tool, as arguments for `server.registerTool(...)`. `submitFeedback` sends one report without a tool, and rejects with a `FeedbackSubmissionError` (with `status`) when Clerk refuses it. `SUBMIT_FEEDBACK_TOOL_NAME` is the tool's name. See [Collecting feedback from agents](#collecting-feedback-from-agents).
+- `createBrowserSessionTool(options)`: the `create_browser_session` tool, as arguments for `server.registerTool(...)`. `createBrowserSession` creates one link without a tool and rejects with a `BrowserSessionError`, whose `code` is a `BrowserSessionErrorCode`. `browserSessionInstructions(destinationUrl)` builds the server instructions, and `CREATE_BROWSER_SESSION_TOOL_NAME` is the tool's name. See [Signed-in browser links for agents](#signed-in-browser-links-for-agents).
+- `ERROR_CODE_META_KEY`: `'clerk.com/error_code'`, the `_meta` key that holds the code of every error result both tools return.
 
 #### Framework-Specific Utilities
 
