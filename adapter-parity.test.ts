@@ -427,6 +427,59 @@ describe('metadata handler headers', () => {
     },
   );
 
+  // RFC 9110 section 15.6.3: a 502 is for an invalid answer from an upstream server, and here none was asked
+  test.each<[string, () => Promise<unknown>]>([
+    [
+      'express',
+      async () => {
+        let error: unknown;
+        const app = express();
+        app.get(AUTH_SERVER_PATH, expressAdapter.authorizationServerMetadataHandler());
+        app.use(((err, _req, res, _next) => {
+          error = err;
+          res.status(500).json({});
+        }) satisfies express.ErrorRequestHandler);
+        await sendExpress(app, AUTH_SERVER_PATH);
+        return error;
+      },
+    ],
+    [
+      'hono',
+      async () => {
+        let error: unknown;
+        const app = new Hono();
+        app.onError((err, c) => {
+          error = err;
+          return c.json({}, 500);
+        });
+        app.get('*', honoAdapter.authorizationServerMetadataHandler());
+        await app.request(`${origin}${AUTH_SERVER_PATH}`);
+        return error;
+      },
+    ],
+    [
+      'next',
+      () =>
+        nextAdapter
+          .authorizationServerMetadataHandler()()
+          .catch((error: unknown) => error),
+    ],
+  ])(
+    '%s authorizationServerMetadataHandler throws for a key that is not a publishable key, instead of a 502',
+    async (adapter, run) => {
+      const name =
+        adapter === 'next' ? 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY' : 'CLERK_PUBLISHABLE_KEY';
+      process.env[name] = 'pk_test_abc';
+
+      const error = await run();
+
+      expect(String(error)).toContain(`Clerk error: ${name} is not a Clerk publishable key`);
+      expect(globalThis.fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining('oauth-authorization-server'),
+      );
+    },
+  );
+
   test('next metadataCorsHandler answers a preflight with the CORS headers', () => {
     const res = nextAdapter.metadataCorsHandler()();
 

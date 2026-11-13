@@ -414,6 +414,21 @@ describe('assertProtectedResourceMetadataOptions', () => {
     );
   });
 
+  // RFC 9728 section 3.3: the `resource` must be the URL the client derived the metadata URL from
+  test.each([
+    ['without resourceUrl', {}],
+    ['beside resourceUrl', { resourceUrl: 'https://mcp.example.com/mcp' }],
+  ])('throws when properties sets resource %s', (_case, options) => {
+    expect(() =>
+      assertProtectedResourceMetadataOptions({
+        ...options,
+        properties: { resource: 'https://mcp.example.com/mcp' },
+      }),
+    ).toThrow(
+      'Clerk error: protectedResourceMetadataHandler properties cannot set resource: it is the URL mcpAuth checks',
+    );
+  });
+
   test.each([
     ['is not a URL', 'mcp.example.com/mcp'],
     ['has a fragment', 'https://mcp.example.com/mcp#tools'],

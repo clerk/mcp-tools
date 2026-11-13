@@ -6,7 +6,7 @@ import {
 } from './server';
 
 // RFC 9728 section 2 parameters only: `jwks_uri` would name the protected resource's own keys, not the
-// authorization server's, and Clerk's documentation link is `resource_documentation`.
+// authorization server's, and `resource_documentation` must describe the app's own server, which only it can name.
 describe('generateProtectedResourceMetadata', () => {
   test('holds only the RFC 9728 parameters it can state', () => {
     expect(
@@ -40,7 +40,7 @@ describe('generateProtectedResourceMetadata', () => {
 describe('generateProtectedResourceMetadata with a publishable key', () => {
   const publishableKey = `pk_test_${btoa('clerk.example.com$')}`;
 
-  test('names the Frontend API as the authorization server and links the docs', () => {
+  test('names the Frontend API as the authorization server', () => {
     expect(
       generateProtectedResourceMetadata({
         publishableKey,
@@ -50,11 +50,22 @@ describe('generateProtectedResourceMetadata with a publishable key', () => {
       resource: 'https://mcp.example.com/mcp',
       authorization_servers: ['https://clerk.example.com'],
       bearer_methods_supported: ['header'],
-      resource_documentation: 'https://clerk.com/docs',
     });
   });
 
-  test('lets properties override the docs link', () => {
+  test.each(['pk_test_abc', `pk_test_${btoa('$')}`, `sk_test_${btoa('clerk.example.com$')}`, ''])(
+    'throws a Clerk error for the publishable key %j',
+    (key) => {
+      expect(() =>
+        generateProtectedResourceMetadata({
+          publishableKey: key,
+          resourceUrl: 'https://mcp.example.com/mcp',
+        }),
+      ).toThrow('Clerk error: the publishable key is not a Clerk publishable key');
+    },
+  );
+
+  test('adds resource_documentation from properties', () => {
     expect(
       generateProtectedResourceMetadata({
         publishableKey,
