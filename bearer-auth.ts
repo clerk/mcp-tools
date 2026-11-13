@@ -275,8 +275,19 @@ function opensAnything({ methods, tools, resources, prompts }: PublicAccess): bo
   );
 }
 
+// The notifications a client sends about work already under way, which pass whenever `publicAccess` opens anything.
+// A challenge for one would start authorization although the user reached nothing protected: `cancelled` when a call
+// is cancelled or times out, `progress` while the client answers a request from the server, and
+// `roots/list_changed` when the client's roots change. None of them runs anything or returns data, and a server
+// ignores a cancellation or progress token for a request it does not have in flight.
+const openNotifications: ReadonlySet<string> = new Set([
+  'notifications/cancelled',
+  'notifications/progress',
+  'notifications/roots/list_changed',
+]);
+
 // Whether one JSON-RPC message is open without a token. A response to a server request has no `method`, and a
-// notification other than the two below is not listed, so both stay closed.
+// notification that is not named here is not listed, so both stay closed.
 function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean {
   if (typeof message !== 'object' || message === null || Array.isArray(message)) return false;
   const { method, params } = message as { method?: unknown; params?: unknown };
@@ -299,12 +310,8 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
     // The client sends this right after `initialize` succeeds, so it is part of that handshake
     case 'notifications/initialized':
       return opensMethod(publicAccess, 'initialize');
-    // A client sends this when it gives up on a request, for example on a timeout. A challenge here would start
-    // authorization because the user cancelled something public. It names a request by ID and runs nothing, and a
-    // server ignores an ID it does not have in flight.
-    case 'notifications/cancelled':
-      return opensAnything(publicAccess);
     default:
+      if (openNotifications.has(method)) return opensAnything(publicAccess);
       return publicMethods.has(method) && opensMethod(publicAccess, method as McpPublicMethod);
   }
 }

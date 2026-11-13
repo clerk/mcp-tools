@@ -552,31 +552,46 @@ describe('publicAccess', () => {
     ).resolves.toMatchObject(challenged);
   });
 
+  const openNotifications = [
+    {
+      jsonrpc: '2.0',
+      method: 'notifications/cancelled',
+      params: { requestId: 1, reason: 'timeout' },
+    },
+    {
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+      params: { progressToken: 'a', progress: 1 },
+    },
+    { jsonrpc: '2.0', method: 'notifications/roots/list_changed' },
+  ];
+
   test.each([
     { methods: true },
     { methods: ['ping'] },
     { tools: ['search_docs'] },
     { resources: ['docs://index'] },
     { prompts: true },
-  ] as const)('opens notifications/cancelled when %j opens something', async (publicAccess) => {
-    const cancelled = {
-      jsonrpc: '2.0',
-      method: 'notifications/cancelled',
-      params: { requestId: 1, reason: 'timeout' },
-    };
-    await expect(withoutToken(publicAccess, cancelled)).resolves.toEqual(open);
-  });
+  ] as const)(
+    'opens the cancelled, progress, and roots notifications when %j opens something',
+    async (publicAccess) => {
+      for (const notification of openNotifications) {
+        await expect(withoutToken(publicAccess, notification)).resolves.toEqual(open);
+      }
+      await expect(withoutToken(publicAccess, openNotifications)).resolves.toEqual(open);
+    },
+  );
 
   test.each([
     {},
     { methods: false },
     { methods: [], tools: [], resources: [], prompts: false },
   ] as const)(
-    'keeps notifications/cancelled closed when %j opens nothing',
+    'keeps the cancelled, progress, and roots notifications closed when %j opens nothing',
     async (publicAccess) => {
-      await expect(
-        withoutToken(publicAccess, { jsonrpc: '2.0', method: 'notifications/cancelled' }),
-      ).resolves.toMatchObject(challenged);
+      for (const notification of openNotifications) {
+        await expect(withoutToken(publicAccess, notification)).resolves.toMatchObject(challenged);
+      }
     },
   );
 
@@ -597,7 +612,10 @@ describe('publicAccess', () => {
     ['null', null],
     ['a string', 'initialize'],
     ['a JSON-RPC response', { jsonrpc: '2.0', id: 1, result: {} }],
-    ['another notification', { jsonrpc: '2.0', method: 'notifications/roots/list_changed' }],
+    [
+      'a notification this package does not know',
+      { jsonrpc: '2.0', method: 'notifications/custom' },
+    ],
     ['an unknown method', { jsonrpc: '2.0', id: 1, method: 'tasks/get' }],
     ['a method that is not a string', { jsonrpc: '2.0', id: 1, method: ['initialize'] }],
   ])('does not open %s', async (_label, body) => {
