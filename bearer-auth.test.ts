@@ -175,6 +175,21 @@ describe('authenticateBearer', () => {
     expect(current).toMatchObject({ ok: true });
   });
 
+  test.each([-8_640_000_000_001, -1e300, -Number.MAX_VALUE])(
+    'rejects an expired token outside the Date range (%d) with invalid_token',
+    async (expiresAt) => {
+      const result = await authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt }) });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 401,
+        challenge:
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+        failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
+      });
+    },
+  );
+
   test.each([Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects a token whose expiresAt is %d instead of letting it through',
     async (expiresAt) => {
