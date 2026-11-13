@@ -507,6 +507,39 @@ describe('withMcpAuth with Clerk', () => {
     expect(defaultAuthenticateRequest).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ['with a token', 'Bearer token-1'],
+    ['without a token', undefined],
+  ])('resolves the Clerk client once per request %s', async (_case, authorization) => {
+    const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
+    const resolve = vi.fn(async () => ({ authenticateRequest }));
+    nextClerkClient.mockReset();
+    nextClerkClient.mockResolvedValue({ authenticateRequest });
+
+    for (const options of [{ resourceUrl, clerkClient: resolve }, { resourceUrl }]) {
+      await withMcpAuth(echoAuth, options)(request(authorization));
+    }
+
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(nextClerkClient).toHaveBeenCalledOnce();
+    expect(authenticateRequest).toHaveBeenCalledTimes(authorization ? 2 : 0);
+  });
+
+  test('keeps the status Clerk reported for an opaque token it could not check', async () => {
+    defaultAuthenticateRequest.mockResolvedValue({
+      isAuthenticated: false,
+      reason: 'unexpected-error',
+      message: 'Unexpected error (code=unexpected-error, status=503)',
+    });
+
+    const error = await withMcpAuth(echoAuth, { clerkClient, resourceUrl })(
+      request('Bearer token-1'),
+    ).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(McpAuthError);
+    expect(error).toMatchObject({ status: 503, cause: { status: 503 } });
+  });
+
   test('prefers the clerkClient option over the one from @clerk/nextjs/server', async () => {
     nextClerkClient.mockClear();
     defaultAuthenticateRequest.mockResolvedValue(authenticated([]));

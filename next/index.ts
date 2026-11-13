@@ -9,12 +9,13 @@ import {
   assertVerifierOrResourceUrl,
   authenticateBearer,
   clerkProtectedResourceMetadata,
-  clerkTokenVerifier,
+  audienceFor,
   failureBody,
   failureHeaders,
   metadataUnavailableAnswer,
   readJsonBody,
   requirePublishableKey,
+  verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
@@ -218,13 +219,20 @@ export function withMcpAuth(
   assertMcpAuthOptions('withMcpAuth', options);
 
   const clerkClientFor = clerkClientResolver(options);
-  const verifyToken =
-    options.verifyToken ?? clerkTokenVerifier(options, clerkClientFor, (req: Request) => req.url);
 
   return async (req) => {
     // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
     // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
-    if (!options.verifyToken) await clerkClientFor();
+    // The client is resolved once per request: a function `clerkClient` option may fetch a secret each time
+    let verifyToken: (token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
+    if (options.verifyToken) {
+      const custom = options.verifyToken;
+      verifyToken = (token) => custom(token, req);
+    } else {
+      const client = await clerkClientFor();
+      const audience = options.resourceUrl;
+      verifyToken = (token) => verifyClerkOAuthToken(client, token, audienceFor(audience, req.url));
+    }
 
     const result = await authenticateBearer({
       authorization: req.headers.get('authorization') ?? undefined,
@@ -236,7 +244,7 @@ export function withMcpAuth(
       method: req.method,
       // A clone, so the route handler can still read the request
       body: () => readJsonBody(req),
-      verifyToken: (token) => verifyToken(token, req),
+      verifyToken,
     });
 
     if (!result.ok) {
