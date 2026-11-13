@@ -195,7 +195,7 @@ function createServer() {
 }
 ```
 
-The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/sdk` 1.x (`McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`) and `@modelcontextprotocol/server` 2.x (`McpServer` from `@modelcontextprotocol/server`). The registration line is the same. With SDK 2.x, install `zod` 4 (SDK 2.x requires it), so the tool's input schema type-checks against `registerTool`.
+The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/sdk` 1.x (`McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`) and `@modelcontextprotocol/server` 2.x (`McpServer` from `@modelcontextprotocol/server`). The registration line is the same. The tool's schemas must use the same `zod` copy as the MCP SDK, or its input schema doesn't type-check against `registerTool`. If your app lists `zod`, keep it on a version the SDK accepts (4.2 or later for SDK 2.x) and check that `npm ls zod` shows a single version.
 
 - `secretKey` must be the secret key (`sk_...`) of the Clerk instance the reports belong to. `submitFeedbackTool` throws if it's empty, so a missing environment variable fails at startup.
 - Agents describe the task, what kind of problem it was (`missing`, `broken`, `confusing`, or `idea`, the `FeedbackKind` type), how the task ended (`FeedbackImpact`), and what they tried and what went wrong. `SUBMIT_FEEDBACK_TOOL_NAME` names the tool before it is built.
@@ -206,7 +206,7 @@ The tool works with both major versions of the MCP SDK: `@modelcontextprotocol/s
 - Clerk removes secrets it detects in reports and accepts up to 100 reports per instance per hour.
 - On a public MCP endpoint without authentication, anyone can call this tool, submit misleading reports, and exhaust the instance's 100-report-per-hour limit. Protect it with authentication or other access controls where possible.
 - If a report can't be stored, the tool tells the agent not to retry and logs the response status with `console.error`. Requests to Clerk time out after 10 seconds.
-- This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs.
+- This module uses `zod` (3.25 or later, or 4), an optional peer dependency that the MCP SDK already brings in.
 
 #### Signed-in browser links for agents
 
@@ -293,7 +293,7 @@ export { authHandler as GET, authHandler as POST, authHandler as DELETE };
   ```
 
 - To create a link outside of an MCP tool, use `createBrowserSession({ authInfo, path, taskDescription, organizationId }, options)` from `@clerk/mcp-tools/tools`. It resolves to `{ url, agentTaskId, redirectUrl }`. `organizationId` is optional and sets the organization the session starts in. With `restricted`, it is also the only organization the session can use. Without it, Clerk uses the user's last active organization. When you pass it, the link is refused with `restricted_not_applied` unless Clerk confirms that organization, and it fails with `organization_rejected` when the user does not belong to the organization, or when the instance requires one and none applies. It rejects with a `Clerk error:` message when the options cannot work. When it rejects with a `BrowserSessionError`, `error.code` says why (for example `insufficient_scope`, with the scopes in `error.missingScopes`, or `restricted_not_applied`).
-- The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module requires `zod` (3.25 or later, or 4), which the MCP SDK already needs; with SDK 2.x, install `zod` 4.
+- The tool works with `@modelcontextprotocol/sdk` 1.x and `@modelcontextprotocol/server` 2.x, with the same registration line. This module uses `zod` (3.25 or later, or 4), an optional peer dependency that the MCP SDK already brings in. The tool's schemas must use the same `zod` copy as the MCP SDK: if your app lists `zod`, keep it on a version the SDK accepts (4.2 or later for SDK 2.x) and check that `npm ls zod` shows a single version.
 
 ### Guide: building a client
 
