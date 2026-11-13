@@ -133,13 +133,14 @@ export type PublicAccess = {
    */
   tools?: readonly string[] | undefined;
   /**
-   * Whether `resources/read` is open without a token, for every resource.
+   * The resources a `resources/read` may ask for without a token: `true` for every resource, or a list of resource
+   * URIs. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
    */
-  resources?: boolean | undefined;
+  resources?: boolean | readonly string[] | undefined;
   /**
-   * Whether `prompts/get` is open without a token, for every prompt.
+   * The prompts a `prompts/get` may ask for without a token: `true` for every prompt, or a list of prompt names.
    */
-  prompts?: boolean | undefined;
+  prompts?: boolean | readonly string[] | undefined;
 };
 
 /**

@@ -508,6 +508,50 @@ describe('publicAccess', () => {
     );
   });
 
+  test('a resources list opens a resources/read only for a URI it names, exactly', async () => {
+    const publicAccess: PublicAccess = { resources: ['docs://index'] };
+    await expect(
+      withoutToken(publicAccess, rpc('resources/read', { uri: 'docs://index' })),
+    ).resolves.toEqual(open);
+    for (const params of [
+      { uri: 'docs://private' },
+      { uri: 'docs://index/' },
+      { uri: 'DOCS://index' },
+      { uri: ['docs://index'] },
+      { name: 'docs://index' },
+      undefined,
+    ]) {
+      await expect(
+        withoutToken(publicAccess, rpc('resources/read', params)),
+      ).resolves.toMatchObject(challenged);
+    }
+    await expect(
+      withoutToken({ resources: [] }, rpc('resources/read', { uri: 'docs://index' })),
+    ).resolves.toMatchObject(challenged);
+    await expect(
+      withoutToken({ resources: false }, rpc('resources/read', { uri: 'docs://index' })),
+    ).resolves.toMatchObject(challenged);
+  });
+
+  test('a prompts list opens a prompts/get only for a prompt it names', async () => {
+    const publicAccess: PublicAccess = { prompts: ['summarize'] };
+    await expect(
+      withoutToken(publicAccess, rpc('prompts/get', { name: 'summarize' })),
+    ).resolves.toEqual(open);
+    for (const params of [{ name: 'draft_reply' }, { name: 'constructor' }, {}, undefined]) {
+      await expect(withoutToken(publicAccess, rpc('prompts/get', params))).resolves.toMatchObject(
+        challenged,
+      );
+    }
+    // A list for one kind of call opens nothing of another kind
+    await expect(
+      withoutToken(publicAccess, rpc('tools/call', { name: 'summarize' })),
+    ).resolves.toMatchObject(challenged);
+    await expect(
+      withoutToken(publicAccess, rpc('resources/read', { uri: 'summarize' })),
+    ).resolves.toMatchObject(challenged);
+  });
+
   test('a batch passes only when every message in it is open', async () => {
     const publicAccess: PublicAccess = { methods: true, tools: ['search_docs'] };
     const publicCall = rpc('tools/call', { name: 'search_docs' });
@@ -631,6 +675,8 @@ describe('assertPublicAccess', () => {
     { methods: false },
     { methods: ['initialize', 'server/discover', 'ping', 'tools/list'] },
     { methods: true, tools: ['search_docs'], resources: true, prompts: false },
+    { resources: ['docs://index'], prompts: ['summarize'] },
+    { resources: [], prompts: [] },
     { methods: undefined, tools: undefined, resources: undefined, prompts: undefined },
   ])('accepts %j', (publicAccess) => {
     expect(() => assertPublicAccess('mcpAuth', publicAccess)).not.toThrow();
@@ -665,8 +711,19 @@ describe('assertPublicAccess', () => {
       'Clerk error: mcpAuth publicAccess.tools must be a list of tool names',
     ],
     [{ tools: [''] }, 'Clerk error: mcpAuth publicAccess.tools must be a list of tool names'],
-    [{ resources: 'all' }, 'Clerk error: mcpAuth publicAccess.resources must be true or false'],
-    [{ prompts: 1 }, 'Clerk error: mcpAuth publicAccess.prompts must be true or false'],
+    [
+      { resources: 'all' },
+      "Clerk error: mcpAuth publicAccess.resources must be true, false, or a list of resource URIs, such as ['docs://index']",
+    ],
+    [
+      { resources: [''] },
+      'Clerk error: mcpAuth publicAccess.resources must be true, false, or a list',
+    ],
+    [
+      { prompts: 1 },
+      "Clerk error: mcpAuth publicAccess.prompts must be true, false, or a list of prompt names, such as ['summarize']",
+    ],
+    [{ prompts: [1] }, 'Clerk error: mcpAuth publicAccess.prompts must be true, false, or a list'],
   ])('rejects %j', (publicAccess, message) => {
     expect(() => assertPublicAccess('mcpAuth', publicAccess)).toThrow(message);
   });
