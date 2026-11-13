@@ -197,6 +197,36 @@ describe('a server with publicAccess', () => {
     expect(redirects).toHaveLength(0);
   });
 
+  // Protocol revision 2026-07-28 replaces that GET stream with this POST
+  test('admits the subscriptions/listen a client opens after connecting, but not one for a closed resource', async () => {
+    const { fetchImpl } = startServer();
+    const post = (notifications: Record<string, unknown>) =>
+      fetchImpl(MCP_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-protocol-version': '2026-07-28',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'subscriptions/listen',
+          params: { notifications },
+        }),
+      });
+
+    // It reaches the transport, which answers this bare request itself; only a challenge would start authorization
+    const listening = await post({ toolsListChanged: true });
+    await listening.body?.cancel();
+    expect(listening.status).not.toBe(401);
+    expect(listening.headers.get('www-authenticate')).toBeNull();
+
+    const subscribed = await post({ resourceSubscriptions: ['docs://private'] });
+    expect(subscribed.status).toBe(401);
+    expect(subscribed.headers.get('www-authenticate')).toMatch(/^Bearer /);
+  });
+
   test('does not start authorization when the client cancels a public tool call', async () => {
     const { client, redirects, toolCalls, answers } = await connect();
     const abort = new AbortController();
