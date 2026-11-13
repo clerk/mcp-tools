@@ -1,4 +1,3 @@
-import { clerkClient } from '@clerk/express';
 import type { McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
@@ -16,7 +15,11 @@ import {
   failureHeaders,
   requirePublishableKey,
 } from '../bearer-auth';
-import { type McpAuthFailure, fetchAuthorizationServerMetadata } from '../server';
+import {
+  type ClerkOAuthClient,
+  type McpAuthFailure,
+  fetchAuthorizationServerMetadata,
+} from '../server';
 
 declare global {
   namespace Express {
@@ -107,16 +110,22 @@ interface NodeStreamableHttpTransport {
  */
 export function mcpAuth(options: McpAuthOptions) {
   assertMiddlewareAuthOptions(options);
+  const clerkClientFor = async (): Promise<ClerkOAuthClient> =>
+    options.clerkClient ?? expressClerkClient();
   const verifyToken =
     options.verifyToken ??
     clerkTokenVerifier(
       options,
-      () => options.clerkClient ?? clerkClient,
+      clerkClientFor,
       // The middleware answers a request without a usable URL before it verifies a token
       (req: express.Request) => getRequestUrl(req)!,
     );
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
+    // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
+    if (!options.verifyToken) await clerkClientFor();
+
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
     // error, or derive a challenge for `http://undefined`
     const requestUrl = getRequestUrl(req);
@@ -150,6 +159,24 @@ export function mcpAuth(options: McpAuthOptions) {
 
     next();
   };
+}
+
+/**
+ * `clerkClient` from `@clerk/express`. The package is an optional peer that only this path needs, so it is loaded with
+ * `import()` inside `try`, and an app that passes `verifyToken` or its own `clerkClient` does not need it installed.
+ * @returns The client. It throws a `Clerk error:` asking to install `@clerk/express` when the package can't be loaded,
+ * with the load error as the `cause`.
+ */
+async function expressClerkClient(): Promise<ClerkOAuthClient> {
+  let clerkExpress: typeof import('@clerk/express');
+  try {
+    clerkExpress = await import('@clerk/express');
+  } catch (error) {
+    throw new Error('Clerk error: install @clerk/express, or pass clerkClient to mcpAuth', {
+      cause: error,
+    });
+  }
+  return clerkExpress.clerkClient;
 }
 
 /**

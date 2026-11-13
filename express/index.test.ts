@@ -3,16 +3,30 @@ import { StreamableHTTPServerTransport as Transport } from '@modelcontextprotoco
 import express from 'express';
 import { type AddressInfo, connect } from 'node:net';
 import type { Server } from 'node:http';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-vi.mock('@clerk/express', () => ({
-  clerkClient: { authenticateRequest: vi.fn() },
-}));
+// The default client, which `mcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
+// `clerkExpressLoad.error` to make that load fail. Every registration of the mock uses this one factory: Vitest
+// registers the `vi.doMock` calls queued for one path in parallel, so with different factories a later call would
+// not reliably replace an earlier one.
+const clerkExpressLoad = vi.hoisted(() => {
+  const load = {
+    error: undefined as Error | undefined,
+    clerkClient: { authenticateRequest: vi.fn() },
+    factory: () => {
+      if (load.error) throw load.error;
+      return { clerkClient: load.clerkClient };
+    },
+  };
+  return load;
+});
+vi.mock('@clerk/express', () => clerkExpressLoad.factory());
 
 import { clerkClient } from '@clerk/express';
 import {
   McpAuthError,
   type McpAuthFailure,
+  type McpAuthOptions,
   McpTokenVerificationError,
   mcpAuth,
   streamableHttpHandler,
@@ -710,6 +724,90 @@ describe('mcpAuth with Clerk', () => {
     expect(res.challenge).toBe(
       `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", scope="openid profile"`,
     );
+  });
+});
+
+describe('mcpAuth without @clerk/express installed', () => {
+  const loadError = new Error('Cannot find package @clerk/express');
+
+  // `vi.resetModules()` keeps loaded mocks, so registering the mock again is what drops the loaded one. The next
+  // import of `@clerk/express` then runs the factory, which throws.
+  beforeEach(() => {
+    clerkExpressLoad.error = loadError;
+    vi.doMock('@clerk/express', clerkExpressLoad.factory);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    // Back to the mock the other tests use, which later imports of `@clerk/express` load again
+    clerkExpressLoad.error = undefined;
+    vi.doMock('@clerk/express', clerkExpressLoad.factory);
+    vi.resetModules();
+  });
+
+  // A fresh module graph, so the adapter is loaded while `@clerk/express` can't be
+  async function post(options: McpAuthOptions, authorization?: string) {
+    const adapter = await import('./index');
+    const errors: unknown[] = [];
+    const app = express();
+    app.post('/mcp', adapter.mcpAuth(options), (_req, res) => {
+      res.json({ reached: true });
+    });
+    app.use(((error, _req, res, _next) => {
+      errors.push(error);
+      res.status(500).json({});
+    }) satisfies express.ErrorRequestHandler);
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: authorization === undefined ? {} : { Authorization: authorization },
+      }),
+    );
+    return { status: res.status, errors, McpAuthError: adapter.McpAuthError };
+  }
+
+  // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives
+  test.each([
+    ['with a token', 'Bearer token-1'],
+    ['without a token', undefined],
+  ])(
+    'throws a Clerk error asking to install @clerk/express %s, with the load error as the cause',
+    async (_case, authorization) => {
+      const res = await post({ resourceUrl }, authorization);
+
+      expect(res.status).toBe(500);
+      expect(res.errors).toHaveLength(1);
+      const error = res.errors[0] as Error;
+      expect(error).not.toBeInstanceOf(res.McpAuthError);
+      expect(error.message).toBe(
+        'Clerk error: install @clerk/express, or pass clerkClient to mcpAuth',
+      );
+      // Vitest wraps an error thrown by a mock factory in its own, with the original as that error's cause
+      const { cause } = error;
+      expect(cause).toBeInstanceOf(Error);
+      expect((cause as Error).cause).toBe(loadError);
+    },
+  );
+
+  test('verifies with verifyToken without loading @clerk/express', async () => {
+    const verifyToken = vi.fn(async () => undefined);
+
+    const res = await post({ verifyToken }, 'Bearer token-1');
+
+    expect(res.status).toBe(401);
+    expect(res.errors).toEqual([]);
+    expect(verifyToken).toHaveBeenCalledOnce();
+  });
+
+  test('verifies with the clerkClient option without loading @clerk/express', async () => {
+    const authenticateRequest = vi.fn().mockResolvedValue({ isAuthenticated: false });
+
+    const res = await post({ resourceUrl, clerkClient: { authenticateRequest } }, 'Bearer token-1');
+
+    expect(res.status).toBe(401);
+    expect(res.errors).toEqual([]);
+    expect(authenticateRequest).toHaveBeenCalledOnce();
   });
 });
 
