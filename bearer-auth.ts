@@ -695,6 +695,17 @@ export function failureHeaders(
   return result.challenge ? { 'WWW-Authenticate': result.challenge } : {};
 }
 
+/**
+ * The JSON body for a request `authenticateBearer` did not let through. The 405 gets the same JSON-RPC error
+ * `streamableHttpHandler` sends, so a GET gets one answer whether or not it carried a token.
+ * @param result - A result with `ok` false
+ * @returns The body to send with the status
+ */
+export function failureBody(result: Extract<BearerResult, { ok: false }>) {
+  if (result.status === 405) return methodNotAllowed.body;
+  return { error: result.error };
+}
+
 // An RFC 9110 `auth-param` value here is a `quoted-string`: a URL's `:` and `/` are not allowed in a bare token.
 function quoted(value: string): string {
   return `"${value.replace(/[\\"]/g, '\\$&')}"`;

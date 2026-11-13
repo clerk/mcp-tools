@@ -12,6 +12,7 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  failureBody,
   failureHeaders,
   methodNotAllowed,
   requirePublishableKey,
@@ -166,7 +167,7 @@ export function mcpAuth(options: McpAuthOptions) {
 
     if (!result.ok) {
       if (result.failure) res.locals.mcpAuthFailure = result.failure;
-      res.status(result.status).set(failureHeaders(result)).json({ error: result.error });
+      res.status(result.status).set(failureHeaders(result)).json(failureBody(result));
       return;
     }
 

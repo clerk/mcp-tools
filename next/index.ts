@@ -10,6 +10,7 @@ import {
   authenticateBearer,
   clerkProtectedResourceMetadata,
   clerkTokenVerifier,
+  failureBody,
   failureHeaders,
   readJsonBody,
   requirePublishableKey,
@@ -243,10 +244,10 @@ export function withMcpAuth(
           void Promise.resolve(options.onAuthFailure?.(failure, req)).catch(() => {});
         } catch {}
       }
-      return Response.json(
-        { error: result.error },
-        { status: result.status, headers: failureHeaders(result) },
-      );
+      return Response.json(failureBody(result), {
+        status: result.status,
+        headers: failureHeaders(result),
+      });
     }
 
     // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does. It is `undefined` for a
