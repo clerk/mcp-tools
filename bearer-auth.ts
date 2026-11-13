@@ -189,6 +189,8 @@ const callMethodHints: Readonly<Record<string, string>> = {
 /**
  * The largest body, in bytes, read from a request without a token to decide whether `publicAccess` opens it. A larger
  * one gets the 401 challenge unread, so that an unauthenticated client cannot make the server buffer more than this.
+ * In Express, `express.json()` reads the body before `mcpAuth` does, so its `limit` (100kb by default) is what bounds
+ * the buffering there; a body whose `Content-Length` is over this limit still gets the 401.
  */
 export const PUBLIC_BODY_LIMIT = 1024 * 1024;
 

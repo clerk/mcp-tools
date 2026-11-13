@@ -838,6 +838,50 @@ describe('express publicAccess without express.json()', () => {
   });
 });
 
+describe('express publicAccess behind express.json() with a limit over 1 MiB', () => {
+  const publicAccess = { methods: ['initialize'] } as const;
+
+  async function post(body: unknown) {
+    const app = express();
+    app.use(express.json({ limit: '5mb' }));
+    app.post('/mcp', expressAdapter.mcpAuth({ verifyToken, publicAccess }), (_req, res) => {
+      res.json({ reached: true });
+    });
+    const server: Server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      return await publicAnswer(
+        await fetch(`http://127.0.0.1:${port}/mcp`, {
+          ...publicRequestInit({ body }),
+          signal: AbortSignal.timeout(5000),
+        }),
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  test('challenges an open method whose body is over 1 MiB, as the other adapters do', async () => {
+    const res = await post(rpc('initialize', { padding: 'x'.repeat(2 * 1024 * 1024) }));
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toMatch(
+      /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"$/,
+    );
+    expect(res.body).toEqual({ error: 'Unauthorized' });
+  });
+
+  test('lets the same open method through with a small body', async () => {
+    const res = await post(rpc('initialize'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ reached: true });
+  });
+});
+
 describe('hono publicAccess behind a middleware that reads the body first', () => {
   const publicAccess = { methods: true, tools: ['search_docs'] } as const;
 
