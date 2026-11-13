@@ -552,6 +552,34 @@ describe('publicAccess', () => {
     ).resolves.toMatchObject(challenged);
   });
 
+  test.each([
+    { methods: true },
+    { methods: ['ping'] },
+    { tools: ['search_docs'] },
+    { resources: ['docs://index'] },
+    { prompts: true },
+  ] as const)('opens notifications/cancelled when %j opens something', async (publicAccess) => {
+    const cancelled = {
+      jsonrpc: '2.0',
+      method: 'notifications/cancelled',
+      params: { requestId: 1, reason: 'timeout' },
+    };
+    await expect(withoutToken(publicAccess, cancelled)).resolves.toEqual(open);
+  });
+
+  test.each([
+    {},
+    { methods: false },
+    { methods: [], tools: [], resources: [], prompts: false },
+  ] as const)(
+    'keeps notifications/cancelled closed when %j opens nothing',
+    async (publicAccess) => {
+      await expect(
+        withoutToken(publicAccess, { jsonrpc: '2.0', method: 'notifications/cancelled' }),
+      ).resolves.toMatchObject(challenged);
+    },
+  );
+
   test('a batch passes only when every message in it is open', async () => {
     const publicAccess: PublicAccess = { methods: true, tools: ['search_docs'] };
     const publicCall = rpc('tools/call', { name: 'search_docs' });
@@ -569,7 +597,7 @@ describe('publicAccess', () => {
     ['null', null],
     ['a string', 'initialize'],
     ['a JSON-RPC response', { jsonrpc: '2.0', id: 1, result: {} }],
-    ['another notification', { jsonrpc: '2.0', method: 'notifications/cancelled' }],
+    ['another notification', { jsonrpc: '2.0', method: 'notifications/roots/list_changed' }],
     ['an unknown method', { jsonrpc: '2.0', id: 1, method: 'tasks/get' }],
     ['a method that is not a string', { jsonrpc: '2.0', id: 1, method: ['initialize'] }],
   ])('does not open %s', async (_label, body) => {

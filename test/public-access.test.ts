@@ -35,6 +35,11 @@ function startServer() {
       toolCalls('search_docs');
       return { content: [{ type: 'text' as const, text: 'results' }] };
     });
+    // Never answers, so a test can cancel the call while it is in flight
+    server.registerTool('slow_search', { description: 'Searches slowly' }, async () => {
+      toolCalls('slow_search');
+      return new Promise<never>(() => {});
+    });
     server.registerTool(
       'get_primary_email',
       {
@@ -57,7 +62,7 @@ function startServer() {
       verifyToken,
       resourceUrl: MCP_URL.href,
       challengeScopes: ['profile', 'email'],
-      publicAccess: { methods: true, tools: ['search_docs'] },
+      publicAccess: { methods: true, tools: ['search_docs', 'slow_search'] },
     }),
     streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
   );
@@ -119,7 +124,11 @@ describe('a server with publicAccess', () => {
 
     const { tools } = await client.listTools();
     // The list is open, so it names the protected tool as well
-    expect(tools.map((tool) => tool.name)).toEqual(['search_docs', 'get_primary_email']);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      'search_docs',
+      'slow_search',
+      'get_primary_email',
+    ]);
 
     const result = await client.callTool({ name: 'search_docs', arguments: {} });
     expect(textOf(result)).toBe('results');
@@ -134,6 +143,26 @@ describe('a server with publicAccess', () => {
 
     // The client opens the stream without waiting for it, so give it a turn
     await vi.waitFor(() => expect(answers).toContain('GET 405'));
+    expect(redirects).toHaveLength(0);
+  });
+
+  test('does not start authorization when the client cancels a public tool call', async () => {
+    const { client, redirects, toolCalls, answers } = await connect();
+    const abort = new AbortController();
+
+    const call = client.callTool({ name: 'slow_search', arguments: {} }, undefined, {
+      signal: abort.signal,
+    });
+    await vi.waitFor(() => expect(toolCalls).toHaveBeenCalledWith('slow_search'));
+    const before = answers.length;
+    abort.abort();
+    await expect(call).rejects.toThrow();
+
+    // The client tells the server with a notifications/cancelled POST, which must not be challenged
+    await vi.waitFor(() => expect(answers.length).toBeGreaterThan(before));
+    expect(answers.slice(before).filter((answer) => answer.startsWith('POST'))).toEqual([
+      'POST 202',
+    ]);
     expect(redirects).toHaveLength(0);
   });
 

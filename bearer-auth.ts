@@ -268,8 +268,15 @@ function opensMethod({ methods }: PublicAccess, method: McpPublicMethod): boolea
   return methods === true || (Array.isArray(methods) && methods.includes(method));
 }
 
-// Whether one JSON-RPC message is open without a token. A response to a server request has no `method`, and any
-// notification other than the handshake's is not listed, so both stay closed.
+// Whether `publicAccess` opens anything at all, so that a client without a token can have a request in flight
+function opensAnything({ methods, tools, resources, prompts }: PublicAccess): boolean {
+  return [methods, tools, resources, prompts].some(
+    (option) => option === true || (Array.isArray(option) && option.length > 0),
+  );
+}
+
+// Whether one JSON-RPC message is open without a token. A response to a server request has no `method`, and a
+// notification other than the two below is not listed, so both stay closed.
 function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean {
   if (typeof message !== 'object' || message === null || Array.isArray(message)) return false;
   const { method, params } = message as { method?: unknown; params?: unknown };
@@ -292,6 +299,11 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
     // The client sends this right after `initialize` succeeds, so it is part of that handshake
     case 'notifications/initialized':
       return opensMethod(publicAccess, 'initialize');
+    // A client sends this when it gives up on a request, for example on a timeout. A challenge here would start
+    // authorization because the user cancelled something public. It names a request by ID and runs nothing, and a
+    // server ignores an ID it does not have in flight.
+    case 'notifications/cancelled':
+      return opensAnything(publicAccess);
     default:
       return publicMethods.has(method) && opensMethod(publicAccess, method as McpPublicMethod);
   }
