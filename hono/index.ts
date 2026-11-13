@@ -14,6 +14,7 @@ import {
   clerkTokenVerifier,
   failureBody,
   failureHeaders,
+  metadataUnavailableAnswer,
   methodNotAllowed,
   readJsonBody,
   requirePublishableKey,
@@ -178,8 +179,12 @@ export function authorizationServerMetadataHandler() {
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (c: Context) => {
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
-    const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
-    return c.json(metadata);
+    try {
+      return c.json(await fetchAuthorizationServerMetadata({ publishableKey }));
+    } catch (error) {
+      const answer = metadataUnavailableAnswer(error);
+      return c.json(answer.body, answer.status);
+    }
   };
 }
 

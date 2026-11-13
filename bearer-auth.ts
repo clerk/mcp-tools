@@ -649,6 +649,17 @@ export function serverErrorAnswer(error: McpAuthError) {
 }
 
 /**
+ * The answer `authorizationServerMetadataHandler` gives when Clerk's authorization server metadata can't be fetched.
+ * It is a 502 (RFC 9110 section 15.6.3): the handler relays the metadata of an upstream server, Clerk's Frontend API,
+ * which failed. The error is logged with `console.error`, since the framework's error handler never sees it.
+ * @param error - What `fetchAuthorizationServerMetadata` threw
+ */
+export function metadataUnavailableAnswer(error: unknown) {
+  console.error(error);
+  return { status: 502, body: { error: 'server_error' } } as const;
+}
+
+/**
  * The answer `streamableHttpHandler` gives a request that isn't a POST. It serves each POST on a new stateless
  * transport, so it has no session for a GET to stream on or a DELETE to end. It answers both with the 405 and JSON-RPC
  * error that MCP SDK 2's stateless serving sends, rather than letting an SDK 1 transport open a stream that nothing
