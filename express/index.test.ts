@@ -857,4 +857,37 @@ describe('streamableHttpHandler', () => {
       'Clerk error: streamableHttpHandler needs a function that returns a new MCP server as its first argument, so each request gets its own server. Call streamableHttpHandler(() => new McpServer(...), StreamableHTTPServerTransport) instead of passing a server object',
     );
   });
+
+  test.each(['GET', 'DELETE'])(
+    'answers a %s with a 405 and Allow: POST, without building a server',
+    async (method) => {
+      const createServer = vi.fn(createMcpServer);
+      const app = express();
+      app.use(express.json());
+      app.all('/mcp', streamableHttpHandler(createServer, Transport));
+      const server: Server = await new Promise((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s));
+      });
+      try {
+        const { port } = server.address() as AddressInfo;
+        const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method,
+          headers: { accept: 'application/json, text/event-stream' },
+          signal: AbortSignal.timeout(2000),
+        });
+
+        expect(res.status).toBe(405);
+        expect(res.headers.get('allow')).toBe('POST');
+        expect(await res.json()).toEqual({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Method not allowed.' },
+          id: null,
+        });
+        expect(createServer).not.toHaveBeenCalled();
+      } finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+  );
 });

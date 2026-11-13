@@ -64,7 +64,7 @@ app.get(
   protectedResourceMetadataHandler(mcpAuthOptions),
 );
 app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
-app.post(
+app.all(
   '/mcp',
   mcpAuth(mcpAuthOptions),
   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
@@ -101,7 +101,7 @@ app.get('/.well-known/oauth-protected-resource/mcp', (c) =>
   ),
 );
 
-app.post(
+app.all(
   '/mcp',
   mcpAuth({
     verifyToken: async (token, c): Promise<AuthInfo | undefined> => {
@@ -157,7 +157,7 @@ Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add y
 `publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected.
 
 ```ts
-app.post(
+app.all(
   '/mcp',
   mcpAuth({
     resourceUrl: 'https://mcp.example.com/mcp',
@@ -183,4 +183,4 @@ Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Re
 
 ### `streamableHttpHandler(createServer, Transport)`
 
-Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` as `Transport`: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated.
+Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` as `Transport`: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than a Hono `404`.

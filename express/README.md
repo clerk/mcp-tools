@@ -70,7 +70,7 @@ app.get(
   protectedResourceMetadataHandler(mcpAuthOptions),
 );
 app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
-app.post(
+app.all(
   '/mcp',
   mcpAuth(mcpAuthOptions),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
@@ -146,7 +146,7 @@ app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
   );
 });
 
-app.post(
+app.all(
   '/mcp',
   mcpAuth({ verifyToken, resourceUrl }),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
@@ -176,7 +176,7 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
 
-app.post(
+app.all(
   '/mcp',
   mcpAuth({
     resourceUrl: 'https://mcp.example.com/mcp',
@@ -201,7 +201,7 @@ async function verifyToken(token: string, req: express.Request): Promise<AuthInf
   return { token, clientId: user.clientId, scopes: user.scopes, extra: { userId: user.id } };
 }
 
-app.post(
+app.all(
   '/mcp',
   mcpAuth({ verifyToken }),
   streamableHttpHandler(createServer, StreamableHTTPServerTransport),
@@ -242,7 +242,7 @@ Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add y
 
 ```ts
 app.use(express.json());
-app.post(
+app.all(
   '/mcp',
   mcpAuth({
     resourceUrl: 'https://mcp.example.com/mcp',
@@ -302,7 +302,7 @@ app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHa
 
 ### `streamableHttpHandler`
 
-Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. A fresh server and transport are created for each request, so concurrent requests don't share state.
+Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. A fresh server and transport are created for each request, so concurrent requests don't share state. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than an Express `404`.
 
 **Parameters:**
 
@@ -330,7 +330,7 @@ function createServer() {
   return server;
 }
 
-app.post('/mcp', streamableHttpHandler(createServer, StreamableHTTPServerTransport));
+app.all('/mcp', streamableHttpHandler(createServer, StreamableHTTPServerTransport));
 ```
 
 ## Accessing Authentication Data in Tools
@@ -405,7 +405,7 @@ import rateLimit from 'express-rate-limit';
 app.use(cors({ exposedHeaders: ['WWW-Authenticate'] }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
-app.post(
+app.all(
   '/mcp',
   mcpAuth({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
   streamableHttpHandler(createServer, StreamableHTTPServerTransport), // MCP request handling

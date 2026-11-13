@@ -640,6 +640,18 @@ export function assertServerFactory(createServer: unknown, transportClassName: s
 }
 
 /**
+ * The answer `streamableHttpHandler` gives a request that isn't a POST. It serves each POST on a new stateless
+ * transport, so it has no session for a GET to stream on or a DELETE to end. It answers both with the 405 and JSON-RPC
+ * error that MCP SDK 2's stateless serving sends, rather than letting an SDK 1 transport open a stream that nothing
+ * will ever write to.
+ */
+export const methodNotAllowed = {
+  status: 405,
+  headers: { Allow: 'POST' },
+  body: { jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null },
+} as const;
+
+/**
  * The RFC 9728 section 3 metadata URL for a resource: the well-known path goes between the host and the resource's
  * path and query.
  */
@@ -661,7 +673,9 @@ export function resourceFromMetadataUrl(metadataUrl: string): string {
 
 /**
  * The response headers for a request `authenticateBearer` did not let through: the challenge, or for the 405 the
- * `Allow` header RFC 9110 section 15.5.6 requires.
+ * `Allow` header RFC 9110 section 15.5.6 requires. It lists only `POST` (RFC 9110 section 10.2.1): a stateless MCP
+ * server has no sessions to stream on with GET or to end with DELETE, and MCP SDK 2's stateless serving answers both
+ * with the same 405 and `Allow: POST`.
  * @param result - A result with `ok` false
  * @returns The headers to send with the status
  */

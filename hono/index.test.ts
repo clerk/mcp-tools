@@ -968,6 +968,26 @@ describe('streamableHttpHandler', () => {
     await res.text();
   });
 
+  test.each(['GET', 'DELETE'])(
+    'answers a %s with a 405 and Allow: POST, without building a server',
+    async (method) => {
+      const createServer = vi.fn(createMcpServer);
+      const app = new Hono();
+      app.all('/mcp', streamableHttpHandler(createServer, Transport));
+
+      const res = await app.request('http://localhost/mcp', { method, headers: mcpHeaders });
+
+      expect(res.status).toBe(405);
+      expect(res.headers.get('allow')).toBe('POST');
+      expect(await res.json()).toEqual({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Method not allowed.' },
+        id: null,
+      });
+      expect(createServer).not.toHaveBeenCalled();
+    },
+  );
+
   test.each(['json', 'text'] as const)(
     'body handoff recovers cached %s for the SDK 1 transport and preserves Request metadata',
     async (reader) => {
