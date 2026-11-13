@@ -745,6 +745,86 @@ describe('publicAccess', () => {
     },
   );
 
+  const listen = (notifications: unknown) => rpc('subscriptions/listen', { notifications });
+
+  test.each([
+    { methods: true },
+    { methods: ['initialize'] },
+    { methods: ['server/discover'] },
+  ] as const)(
+    'opens a subscriptions/listen without resource subscriptions when %j opens the handshake',
+    async (publicAccess) => {
+      await expect(
+        withoutToken(publicAccess, listen({ toolsListChanged: true, promptsListChanged: true })),
+      ).resolves.toEqual(open);
+      await expect(withoutToken(publicAccess, listen({}))).resolves.toEqual(open);
+    },
+  );
+
+  test.each([
+    { methods: ['ping', 'tools/list'] },
+    { tools: ['search_docs'] },
+    { resources: true },
+  ] as const)(
+    'keeps a subscriptions/listen closed when %j leaves the handshake closed',
+    async (publicAccess) => {
+      await expect(
+        withoutToken(publicAccess, listen({ toolsListChanged: true })),
+      ).resolves.toMatchObject(challenged);
+    },
+  );
+
+  test('opens a subscriptions/listen only when every resource it subscribes to is open', async () => {
+    const listed: PublicAccess = { methods: true, resources: ['docs://index', 'docs://faq'] };
+    await expect(
+      withoutToken(listed, listen({ resourceSubscriptions: ['docs://index', 'docs://faq'] })),
+    ).resolves.toEqual(open);
+    await expect(withoutToken(listed, listen({ resourceSubscriptions: [] }))).resolves.toEqual(
+      open,
+    );
+    await expect(
+      withoutToken(
+        { methods: true, resources: true },
+        listen({ resourceSubscriptions: ['x://y'] }),
+      ),
+    ).resolves.toEqual(open);
+    for (const notifications of [
+      { resourceSubscriptions: ['docs://index', 'docs://private'] },
+      { resourceSubscriptions: ['DOCS://index'] },
+      { resourceSubscriptions: 'docs://index' },
+      { resourceSubscriptions: [['docs://index']] },
+    ]) {
+      await expect(withoutToken(listed, listen(notifications))).resolves.toMatchObject(challenged);
+    }
+    await expect(
+      withoutToken({ methods: true }, listen({ resourceSubscriptions: ['docs://index'] })),
+    ).resolves.toMatchObject(challenged);
+  });
+
+  test.each([
+    ['no params', rpc('subscriptions/listen')],
+    ['no notifications', rpc('subscriptions/listen', {})],
+    ['notifications that are not an object', listen(true)],
+    ['null notifications', listen(null)],
+    ['notifications that are a list', listen([])],
+  ])('keeps a subscriptions/listen with %s closed', async (_label, body) => {
+    await expect(withoutToken({ methods: true, resources: true }, body)).resolves.toMatchObject(
+      challenged,
+    );
+  });
+
+  test.each(['tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list'])(
+    'keeps %s closed even when a public tool could have started the task',
+    async (method) => {
+      await expect(
+        withoutToken(
+          { methods: true, tools: ['search_docs'], resources: true, prompts: true },
+          rpc(method, { taskId: 'task_1' }),
+        ),
+      ).resolves.toMatchObject(challenged);
+    },
+  );
+
   test('answers a DELETE without a token with the 401, and reads a body only for a POST', async () => {
     const body = vi.fn(() => rpc('initialize'));
     await expect(

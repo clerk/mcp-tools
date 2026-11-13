@@ -270,6 +270,11 @@ function opensMethod({ methods }: PublicAccess, method: McpPublicMethod): boolea
   return methods === true || (Array.isArray(methods) && methods.includes(method));
 }
 
+// Whether the handshake of either protocol revision is open, which is what lets a client go on without a token
+function opensHandshake(publicAccess: PublicAccess): boolean {
+  return opensMethod(publicAccess, 'initialize') || opensMethod(publicAccess, 'server/discover');
+}
+
 // Whether `publicAccess` opens anything at all, so that a client without a token can have a request in flight
 function opensAnything({ methods, tools, resources, prompts }: PublicAccess): boolean {
   return [methods, tools, resources, prompts].some(
@@ -312,6 +317,24 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
     // The client sends this right after `initialize` succeeds, so it is part of that handshake
     case 'notifications/initialized':
       return opensMethod(publicAccess, 'initialize');
+    // From 2026-07-28 this replaces the GET stream, so it opens with the handshake as that GET's 405 does. It also
+    // replaces `resources/subscribe`, so every resource it subscribes to must be open.
+    case 'subscriptions/listen': {
+      const notifications = param('notifications');
+      if (
+        !opensHandshake(publicAccess) ||
+        typeof notifications !== 'object' ||
+        notifications === null ||
+        Array.isArray(notifications)
+      ) {
+        return false;
+      }
+      const uris = (notifications as { resourceSubscriptions?: unknown }).resourceSubscriptions;
+      return (
+        uris === undefined ||
+        (Array.isArray(uris) && uris.every((uri) => opensNamed(publicAccess.resources, uri)))
+      );
+    }
     default:
       if (openNotifications.has(method)) return opensAnything(publicAccess);
       return publicMethods.has(method) && opensMethod(publicAccess, method as McpPublicMethod);
@@ -775,7 +798,9 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * `isPublicRequest` accepts passes with `authInfo` `undefined`. A GET gets a 405 when the handshake is public: an MCP
  * client opens a GET stream once it has connected and starts authorization on a 401 there, which would make it sign in
  * before it reached anything protected, and the transport specification lets a server answer that GET with a 405 for
- * "no stream". Every other request without a token, and every request with a header, is handled as above.
+ * "no stream". From protocol revision 2026-07-28 the client opens a `subscriptions/listen` POST instead, which the
+ * same handshake condition opens when every resource it subscribes to is open. Every other request without a token,
+ * and every request with a header, is handled as above.
  */
 export async function authenticateBearer({
   authorization,
@@ -838,10 +863,7 @@ export async function authenticateBearer({
     if (httpMethod === 'POST' && isPublicRequest(publicAccess, await body?.())) {
       return { ok: true, authInfo: undefined };
     }
-    if (
-      httpMethod === 'GET' &&
-      (opensMethod(publicAccess, 'initialize') || opensMethod(publicAccess, 'server/discover'))
-    ) {
+    if (httpMethod === 'GET' && opensHandshake(publicAccess)) {
       return {
         ok: false,
         failure: undefined,
