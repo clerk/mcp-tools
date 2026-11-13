@@ -4,6 +4,7 @@ import type express from 'express';
 import {
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
+  PUBLIC_BODY_LIMIT,
   assertAuthorizationServerMetadataHandlerCalled,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
@@ -154,8 +155,11 @@ export function mcpAuth(options: McpAuthOptions) {
 /**
  * The JSON body `express.json()` parsed, which `publicAccess` checks. Without that middleware a JSON request has no
  * parsed body, and every request without a token would get a 401 with nothing to say why, so that case throws.
+ * `express.json()` has already buffered the body by then, up to its own `limit`, so the `PUBLIC_BODY_LIMIT` check here
+ * only keeps the rule the other adapters follow: a body declared larger than that is not public.
  * @param req - The incoming request
- * @returns The parsed body, or `undefined` when the request has no JSON body
+ * @returns The parsed body, or `undefined` when the request has no JSON body or its `Content-Length` is over
+ * `PUBLIC_BODY_LIMIT`
  */
 function parsedJsonBody(req: express.Request): unknown {
   if (req.body === undefined && req.is('application/json')) {
@@ -163,6 +167,8 @@ function parsedJsonBody(req: express.Request): unknown {
       'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
     );
   }
+  // `Number(undefined)` is NaN, so a request without the header keeps its parsed body
+  if (Number(req.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
   return req.body;
 }
 
