@@ -959,6 +959,45 @@ describe('streamableHttpHandler', () => {
     await res.text();
   });
 
+  test.each(['json', 'text'] as const)(
+    'body handoff recovers cached %s for the SDK 1 transport and preserves Request metadata',
+    async (reader) => {
+      const handleRequest = vi.spyOn(Transport.prototype, 'handleRequest');
+      const abort = new AbortController();
+      try {
+        const app = new Hono();
+        app.use('/mcp', async (c, next) => {
+          await c.req[reader]();
+          await next();
+        });
+        app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
+
+        const request = new Request('http://localhost/mcp?test=body', {
+          method: 'POST',
+          headers: mcpHeaders,
+          body: initializeBody,
+          credentials: 'include',
+          redirect: 'manual',
+          signal: abort.signal,
+        });
+        const response = await app.fetch(request);
+        expect(response.status).toBe(200);
+        await response.text();
+
+        const forwarded = handleRequest.mock.calls[0]![0];
+        expect(forwarded.url).toBe(request.url);
+        expect(forwarded.method).toBe('POST');
+        expect([...forwarded.headers]).toEqual([...request.headers]);
+        expect(forwarded.credentials).toBe('include');
+        expect(forwarded.redirect).toBe('manual');
+        abort.abort();
+        expect(forwarded.signal.aborted).toBe(true);
+      } finally {
+        handleRequest.mockRestore();
+      }
+    },
+  );
+
   test('handles sequential requests', async () => {
     const app = new Hono();
     app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));

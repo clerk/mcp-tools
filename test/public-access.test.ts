@@ -4,7 +4,7 @@ import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { describe, expect, test, vi } from 'vitest';
 
 import { mcpAuth, requireAdditionalScopes, streamableHttpHandler } from '../hono';
@@ -24,7 +24,9 @@ function verifyToken(token: string): AuthInfo | undefined {
   return scopes && { token, clientId: 'client_1', scopes, extra: { userId: 'user_1' } };
 }
 
-function startServer() {
+type ReadBody = (context: Context) => Promise<unknown>;
+
+function startServer(readBody: ReadBody | undefined = undefined) {
   const toolCalls = vi.fn();
   // Every answer the MCP endpoint gave, as `<method> <status>`
   const answers: string[] = [];
@@ -56,6 +58,12 @@ function startServer() {
   };
 
   const app = new Hono();
+  if (readBody) {
+    app.use('/mcp', async (c, next) => {
+      if (c.req.method === 'POST') await readBody(c);
+      await next();
+    });
+  }
   app.all(
     '/mcp',
     mcpAuth({
@@ -96,8 +104,8 @@ function startServer() {
 }
 
 // A client that holds `token`, or none. Authorization ends at the redirect, which it records.
-async function connect(token?: string) {
-  const { fetchImpl, toolCalls, answers } = startServer();
+async function connect(token?: string, readBody: ReadBody | undefined = undefined) {
+  const { fetchImpl, toolCalls, answers } = startServer(readBody);
   const redirects: URL[] = [];
   const authProvider: OAuthClientProvider = {
     redirectUrl: 'http://localhost/callback',
@@ -119,6 +127,49 @@ async function connect(token?: string) {
 }
 
 describe('a server with publicAccess', () => {
+  test.each([
+    { name: 'untouched', readBody: undefined },
+    { name: 'cached JSON', readBody: (c: Context) => c.req.json() },
+    { name: 'cached text', readBody: (c: Context) => c.req.text() },
+    { name: 'cloned raw', readBody: (c: Context) => c.req.raw.clone().json() },
+  ])(
+    'body handoff preserves $name requests through auth and the real transport',
+    async ({ readBody }) => {
+      const { client, redirects, toolCalls, answers } = await connect(undefined, readBody);
+      try {
+        expect(textOf(await client.callTool({ name: 'search_docs', arguments: {} }))).toBe(
+          'results',
+        );
+        expect(redirects).toHaveLength(0);
+        expect(answers).not.toContain('POST 400');
+
+        await expect(
+          client.callTool({ name: 'get_primary_email', arguments: {} }),
+        ).rejects.toBeInstanceOf(UnauthorizedError);
+        expect(answers).toContain('POST 401');
+        expect(redirects).toHaveLength(1);
+        expect(toolCalls.mock.calls).toEqual([['search_docs']]);
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  test.each([
+    { name: 'JSON', readBody: (c: Context) => c.req.json() },
+    { name: 'text', readBody: (c: Context) => c.req.text() },
+  ])('body handoff preserves verified auth with cached $name', async ({ readBody }) => {
+    const { client, toolCalls } = await connect('token_full', readBody);
+    try {
+      expect(textOf(await client.callTool({ name: 'get_primary_email', arguments: {} }))).toBe(
+        'email of user_1',
+      );
+      expect(toolCalls.mock.calls).toEqual([['get_primary_email']]);
+    } finally {
+      await client.close();
+    }
+  });
+
   test('lets a client without a token connect, list tools, and call a public tool, without starting authorization', async () => {
     const { client, redirects, toolCalls, answers } = await connect();
 
