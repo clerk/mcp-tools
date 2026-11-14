@@ -11,7 +11,7 @@ export function assertPropertiesOmitResource(caller: string, properties: object 
   // RFC 9728 section 3.3: a client discards metadata whose `resource` is not the URL it derived the metadata URL from
   if (properties !== undefined && Object.hasOwn(properties, 'resource')) {
     throw new Error(
-      `Clerk error: ${caller} properties cannot set resource: it is the URL mcpAuth checks. Pass it as resourceUrl instead, as ${caller}({ resourceUrl: 'https://mcp.example.com/mcp' })`,
+      `Clerk error: ${caller} properties cannot set resource: it must be the resourceUrl the metadata describes (RFC 9728 section 3.3). Pass it as resourceUrl instead, as ${caller}({ resourceUrl: 'https://mcp.example.com/mcp' })`,
     );
   }
 }

@@ -54,7 +54,7 @@ describe('generateProtectedResourceMetadata', () => {
           properties,
         }),
       ).toThrow(
-        'Clerk error: generateProtectedResourceMetadata properties cannot set resource: it is the URL mcpAuth checks',
+        'Clerk error: generateProtectedResourceMetadata properties cannot set resource: it must be the resourceUrl the metadata describes (RFC 9728 section 3.3)',
       );
     }
   });
