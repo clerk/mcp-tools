@@ -33,13 +33,16 @@ export type BaseAuthOptions = {
   resourceUrl?: McpResourceUrl | undefined;
   /**
    * The scopes every request needs. A token without them gets a 403 `insufficient_scope` challenge, and the 401
-   * challenge lists them in its `scope`.
+   * challenge lists them in its `scope`. Only these decide whether a request gets the 403.
    */
   requiredScopes?: readonly string[] | undefined;
   /**
    * More scopes for the 401 challenge's `scope`, after `requiredScopes`, such as the scopes individual tools step up
    * to. MCP clients request the 401 challenge's `scope` when they first authorize, so listing them saves a later
-   * step-up. A token is not required to have them.
+   * step-up. A token is not required to have them: a token without them alone is let through. When a token lacks a
+   * `requiredScopes` entry, the 403 also asks for the ones it lacks here, so list each tool's
+   * `requireAdditionalScopes` scopes here to have the client reauthorize once, not once for the 403 and again for the
+   * tool's own step-up.
    */
   challengeScopes?: readonly string[] | undefined;
   /**
@@ -802,9 +805,11 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * listed URL with its origin. A missing or malformed header gets a challenge without an error code,
  * a rejected token adds `error="invalid_token"` (RFC 6750 section 3), and both 401 challenges list `requiredScopes`
  * then `challengeScopes` in `scope` (RFC 6750 section 3). A token without `requiredScopes` gets a 403 with
- * `error="insufficient_scope"` (RFC 6750 section 3.1). The 403 `scope` is the granted scopes followed by the missing
- * ones, as in `requireAdditionalScopes`, so the new grant keeps the old access. A verified token's auth info gets
- * `resourceMetadataUrl`, which MCP SDK 2 puts in the `resource_metadata` of its own scope challenges. A verifier that
+ * `error="insufficient_scope"` (RFC 6750 section 3.1). The 403 `scope` is the granted scopes followed by every missing
+ * `requiredScopes` and `challengeScopes` entry, each once, as in `requireAdditionalScopes`, so the new grant keeps the
+ * old access and covers the tools that step up to `challengeScopes` too. A token that lacks only `challengeScopes` is
+ * let through. A verified token's auth info gets `resourceMetadataUrl`, which MCP SDK 2 puts in the
+ * `resource_metadata` of its own scope challenges. A verifier that
  * throws an `McpTokenVerificationError` rejects the token, with that error as the failure's `cause`. Any other error
  * it throws gets wrapped in an `McpAuthError`.
  *
@@ -939,7 +944,9 @@ export async function authenticateBearer({
     };
   }
 
-  const scopes = challengeScopes(requiredScopes, authInfo);
+  // Only a missing `requiredScopes` entry gets the 403, and it also asks for the missing `challengeScopes`, so a
+  // client that reauthorizes with its `scope` gets every tool's scopes at once
+  const scopes = challengeScopes(requiredScopes, authInfo, unauthorizedScopes);
   if (scopes) {
     return {
       ok: false,

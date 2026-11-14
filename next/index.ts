@@ -172,8 +172,8 @@ const withMcpAuthCallForm =
  * function. Use it in place of `withMcpAuth` from `mcp-handler`.
  * @param handler - The route handler, such as the one `createMcpHandler` from `mcp-handler` returns
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 challenge also asks for, either the `clerkClient` that verifies tokens or a
- * `verifyToken` function, and `onAuthFailure`, a synchronous notification with the reason for each request answered
+ * needs, the `challengeScopes` the 401 and 403 challenges also ask for, either the `clerkClient` that verifies tokens
+ * or a `verifyToken` function, and `onAuthFailure`, a synchronous notification with the reason for each request answered
  * with a challenge or a 421. `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first
  * request. `verifyToken` is called with the token and the request, and `resourceUrl` is optional with it.
  * @returns The wrapped route handler. A missing or rejected token gets a 401 challenge, and a token without

@@ -642,9 +642,11 @@ describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) =
   });
 });
 
-// `publicAccess`: what a request without a token may reach, and what it gets when it may not
+// `publicAccess`: what a request without a token may reach, and what it gets when it may not. The same routes carry
+// the scope options for the scope challenge.
 type PublicAccessOptions = {
   publicAccess?: nextAdapter.PublicAccess | undefined;
+  requiredScopes?: readonly string[] | undefined;
   challengeScopes?: readonly string[] | undefined;
 };
 
@@ -860,6 +862,38 @@ describe.each(publicAccessRoutes)('%s publicAccess', (_name, send) => {
 
   test('lets a GET with a token through', async () => {
     const res = await send({ publicAccess }, { method: 'GET', authorization: 'Bearer token-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reached: true, auth: { clientId: 'client-1' } });
+  });
+});
+
+// One 403 names every scope a tool needs when its scopes are in `challengeScopes`, so the client reauthorizes once
+// (MCP 2026-07-28 scope challenges). Only `requiredScopes` decides whether the request gets the 403.
+describe.each(publicAccessRoutes)('%s insufficient_scope challenge', (_name, send) => {
+  const body = rpc('tools/call', { name: 'list_projects' });
+
+  test('lists the granted scopes, then every missing required and challenge scope, once each', async () => {
+    const res = await send(
+      {
+        requiredScopes: ['profile', 'email'],
+        challengeScopes: ['email', 'projects:read', 'profile'],
+      },
+      { body, authorization: 'Bearer token-1' },
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.challenge).toMatch(
+      /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp", error="insufficient_scope", scope="profile email projects:read"$/,
+    );
+    expect(res.body).toEqual({ error: 'insufficient_scope' });
+  });
+
+  test('lets a token without only challengeScopes through', async () => {
+    const res = await send(
+      { requiredScopes: ['profile'], challengeScopes: ['projects:read'] },
+      { body, authorization: 'Bearer token-1' },
+    );
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ reached: true, auth: { clientId: 'client-1' } });
