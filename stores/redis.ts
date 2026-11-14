@@ -1,6 +1,6 @@
 // @ts-ignore - Redis is an optional peer dependency
 import Redis from 'redis';
-import type { JsonSerializable } from '../client.js';
+import type { JsonSerializable } from '../client-store.js';
 
 export interface RedisStoreConfig {
   /**

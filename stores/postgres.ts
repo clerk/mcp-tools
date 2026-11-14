@@ -1,6 +1,6 @@
 // @ts-ignore - pg is an optional peer dependency
 import pg from 'pg';
-import type { JsonSerializable } from '../client.js';
+import type { JsonSerializable } from '../client-store.js';
 
 const { Client } = pg;
 

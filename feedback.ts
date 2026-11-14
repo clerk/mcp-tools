@@ -1,4 +1,4 @@
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from './mcp-types';
 import { z } from 'zod/v4';
 
 import {
@@ -17,11 +17,25 @@ import {
 } from './mcp-tool';
 import { isClerkAuthInfo } from './server';
 
+/**
+ * The name `submitFeedbackTool` registers the tool under. Use it to allowlist the tool or name it in server
+ * instructions before the tool is built.
+ */
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
 export const FEEDBACK_KINDS = ['missing', 'broken', 'confusing', 'idea'] as const;
 
 export const FEEDBACK_IMPACTS = ['blocked', 'worked_around', 'friction'] as const;
+
+/**
+ * What sort of problem a report describes: the `kind` values the feedback tool accepts.
+ */
+export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];
+
+/**
+ * How much the problem affected the task: the `impact` values the feedback tool accepts.
+ */
+export type FeedbackImpact = (typeof FEEDBACK_IMPACTS)[number];
 
 export const SUBMIT_FEEDBACK_DESCRIPTION = [
   'Report a problem you ran into while doing a task for the user, so the team that runs this MCP server can fix it.',
@@ -80,16 +94,22 @@ const submitFeedbackOutputSchema = {
   received: z.boolean(),
 };
 
+/**
+ * Where a feedback report came from or who sent it: the kind of reporter, such as `mcp`, with its name and version
+ * when known.
+ */
 export type FeedbackOrigin = { type: string; name?: string; version?: string };
 
-/** One feedback report, shared by every kind of reporter (MCP servers, apps, CLIs). */
+/**
+ * One feedback report, shared by every kind of reporter (MCP servers, apps, CLIs).
+ */
 export type FeedbackReport = {
   /** Known values: missing, broken, confusing, idea. Other lowercase slugs are stored as-is. */
-  kind: string;
+  kind: FeedbackKind | (string & {});
   task: string;
   description: string;
   /** Known values: blocked, worked_around, friction. Other lowercase slugs are stored as-is. */
-  impact?: string;
+  impact?: FeedbackImpact | (string & {});
   operation?: string;
   error?: string;
   suggestion?: string;
@@ -101,17 +121,33 @@ export type FeedbackReport = {
   metadata?: Record<string, unknown>;
 };
 
-/** `secretKey` is the secret key of the Clerk instance the feedback belongs to. */
+/**
+ * Options for `submitFeedback`. `secretKey` is the secret key of the Clerk instance the feedback belongs to.
+ */
 export type SubmitFeedbackOptions = BackendApiOptions;
 
+/**
+ * Options for `submitFeedbackTool`: those of `submitFeedback`, plus the MCP server the reports are attributed to.
+ */
 export type SubmitFeedbackToolOptions = SubmitFeedbackOptions & {
   /** Name and version of your MCP server, shown with each report. The name defaults to the request's host. */
   server?: { name?: string; version?: string };
 };
 
+/**
+ * The feedback record Clerk stored, as `submitFeedback` returns it: its ID and when it was created.
+ */
 export type SubmittedFeedback = { id: string; created_at: string };
 
+/**
+ * The error `submitFeedback` throws when Clerk rejects the report or answers with something other than the stored
+ * record.
+ */
 export class FeedbackSubmissionError extends Error {
+  /**
+   * @param status - The HTTP status of Clerk's response
+   * @param body - The parsed response body, or `undefined` when it was not JSON
+   */
   constructor(
     readonly status: number,
     readonly body: unknown,
@@ -281,7 +317,7 @@ function source(
 }
 
 // Custom mcpAuth verifiers can fill AuthInfo from other identity providers; only forward
-// identity that verifyClerkToken produced.
+// identity that toClerkAuthInfo produced.
 function identityFromAuthInfo(authInfo: AuthInfo | undefined) {
   return isClerkAuthInfo(authInfo)
     ? { user_id: authInfo.extra.userId, client_id: authInfo.clientId || undefined }
@@ -301,15 +337,20 @@ function failureReason(error: unknown) {
   return safeErrorName(error);
 }
 
-function feedbackToolError(text: string) {
-  return toolError(`${text} Do not retry; continue with the task.`);
+// `unconfirmed`: Clerk may have stored it. `rate_limited`: a 429. `rejected`: any other non-2xx answer.
+type FeedbackToolErrorCode = 'unconfirmed' | 'rate_limited' | 'rejected';
+
+function feedbackToolError(text: string, code: FeedbackToolErrorCode) {
+  return toolError(`${text} Do not retry; continue with the task.`, code);
 }
 
 /**
  * Builds a `submit_feedback` tool that agents call when they hit friction. Register it with
  * `server.registerTool(...submitFeedbackTool({ secretKey }))`. Feedback is stored on the Clerk instance that
- * owns `secretKey` and is visible in the Clerk Dashboard. When the request was authenticated with
- * `verifyClerkToken`, the user and OAuth client ids are attached automatically.
+ * owns `secretKey` and is visible in the Clerk Dashboard. When the request's auth info came from
+ * `toClerkAuthInfo`, the user and OAuth client ids are attached automatically. An error result names its code in
+ * `_meta[ERROR_CODE_META_KEY]`: `unconfirmed` when Clerk may have stored the report, `rate_limited` for a 429, or
+ * `rejected`.
  */
 export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFeedbackTool {
   const client = createBackendApiClient('submitFeedbackTool', options);
@@ -331,13 +372,13 @@ export function submitFeedbackTool(options: SubmitFeedbackToolOptions): SubmitFe
         console.error(
           `Clerk error: submit_feedback could not confirm the feedback was stored (${reason})`,
         );
-        return feedbackToolError('Feedback may not have been received.');
+        return feedbackToolError('Feedback may not have been received.', 'unconfirmed');
       }
       console.error(`Clerk error: submit_feedback could not store feedback (${reason})`);
       if (error.status === 429) {
-        return feedbackToolError('Feedback limit reached for now.');
+        return feedbackToolError('Feedback limit reached for now.', 'rate_limited');
       }
-      return feedbackToolError('Feedback could not be sent.');
+      return feedbackToolError('Feedback could not be sent.', 'rejected');
     }
   };
 

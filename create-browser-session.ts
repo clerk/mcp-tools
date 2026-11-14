@@ -1,4 +1,4 @@
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from './mcp-types';
 import { z } from 'zod/v4';
 
 import {
@@ -16,14 +16,24 @@ import {
   toolAuthInfo,
   toolError,
   toolResult,
+  UNEXPECTED_ERROR_CODE,
 } from './mcp-tool';
 import { assertScopeTokens, missingScopes, requireAdditionalScopes } from './scope-challenge';
-import { isClerkAuthInfo } from './server';
+import { type ClerkAuthInfo, isClerkAuthInfo } from './server';
 
+/**
+ * The name `createBrowserSessionTool` registers the tool under. Use it to allowlist the tool or name it in server
+ * instructions before the tool is built.
+ */
 export const CREATE_BROWSER_SESSION_TOOL_NAME = 'create_browser_session';
 
 const DEFAULT_TASK_DESCRIPTION = 'Signed-in browser session requested through MCP';
 
+/**
+ * Options for `createBrowserSession` and `createBrowserSessionTool`: the Clerk Backend API credentials, the app the
+ * link opens, and the limits on the session it starts. Both check them when called and throw a `Clerk error:` message
+ * when they cannot work.
+ */
 export type CreateBrowserSessionOptions = BackendApiOptions & {
   /** Default landing page for the link. HTTPS, or HTTP on loopback. */
   destinationUrl: string;
@@ -50,8 +60,28 @@ export type CreateBrowserSessionOptions = BackendApiOptions & {
   restricted?: boolean;
 };
 
+/**
+ * Options for `createBrowserSessionTool`: the `createBrowserSession` options, plus the organization each link starts in.
+ */
+export type CreateBrowserSessionToolOptions = CreateBrowserSessionOptions & {
+  /**
+   * Organization the session starts in, as `CreateBrowserSessionRequest.organizationId`: an ID, or a function that
+   * returns one for each call from the request's verified auth info, after the auth, scope, and path checks pass. Return
+   * `undefined` to leave it to Clerk. When the function throws, or returns anything but a non-empty string or
+   * `undefined`, the tool refuses the call with `organization_lookup_failed`. To give the agent another reason, throw
+   * a `BrowserSessionError` with that code instead, such as `organization_rejected`.
+   */
+  organizationId?:
+    | string
+    | ((authInfo: ClerkAuthInfo) => string | undefined | Promise<string | undefined>);
+};
+
+/**
+ * One request to `createBrowserSession`: the auth info of the MCP request, which names the user, and where the link
+ * should land.
+ */
 export type CreateBrowserSessionRequest = {
-  /** Auth info produced by `verifyClerkToken`. The signed-in user is taken from here only. */
+  /** Auth info produced by `toClerkAuthInfo`. The signed-in user is taken from here only. */
   authInfo: AuthInfo | undefined;
   /** Path (with optional query and hash) on the destination origin to land on. */
   path?: string;
@@ -64,14 +94,28 @@ export type CreateBrowserSessionRequest = {
   organizationId?: string;
 };
 
+/**
+ * The one-time link `createBrowserSession` returns, with the Clerk agent task that backs it.
+ */
 export type BrowserSession = {
   /** One-time link. Treat it as a credential: never log it. */
   url: string;
+  /**
+   * ID of the Clerk agent task the link belongs to.
+   */
   agentTaskId: string;
   /** Where the browser lands after sign-in. */
   redirectUrl: string;
 };
 
+/**
+ * Why `createBrowserSession` refused or failed to create a link, set as `BrowserSessionError.code`.
+ * `not_authenticated`, `invalid_path`, and `insufficient_scope` are refused before any API call. `rejected`,
+ * `destination_rejected`, `unauthorized`, `rate_limited`, and `organization_rejected` come from Clerk's response, and
+ * `unavailable` means Clerk could not be reached or its response could not be read. `restricted_not_applied` means
+ * Clerk's response did not confirm the restriction or organization the request asked for. `organization_lookup_failed`
+ * means the tool's `organizationId` function threw or returned an invalid value.
+ */
 export type BrowserSessionErrorCode =
   | 'not_authenticated'
   | 'invalid_path'
@@ -82,9 +126,20 @@ export type BrowserSessionErrorCode =
   | 'rate_limited'
   | 'unavailable'
   | 'organization_rejected'
-  | 'restricted_not_applied';
+  | 'restricted_not_applied'
+  | 'organization_lookup_failed';
 
+/**
+ * The error `createBrowserSession` throws when it cannot create a link. Its message and `detail` never include the link
+ * or the secret key.
+ */
 export class BrowserSessionError extends Error {
+  /**
+   * @param code - Why the link was not created
+   * @param message - The error's message
+   * @param missingScopes - The scopes the token lacks, for `insufficient_scope`
+   * @param detail - Safe-to-log detail, such as a status or an error name
+   */
   constructor(
     readonly code: BrowserSessionErrorCode,
     message: string,
@@ -149,10 +204,19 @@ const ERROR_COPY = {
     agent: () =>
       'The browser session could not be created with the required restrictions. Do not retry. Ask the user to contact the server operator.',
   },
+  organization_lookup_failed: {
+    message: 'The organization for the sign-in link could not be resolved',
+    agent: () =>
+      'The server could not work out which workspace to open the sign-in link in. Try again at most once, then tell the user the server owner must check the workspace lookup.',
+  },
 } satisfies Record<
   BrowserSessionErrorCode,
   { message: string; agent: (error: BrowserSessionError) => string }
 >;
+
+function isKnownCode(code: unknown): code is BrowserSessionErrorCode {
+  return typeof code === 'string' && Object.hasOwn(ERROR_COPY, code);
+}
 
 function sessionError(
   code: BrowserSessionErrorCode,
@@ -219,14 +283,6 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
     agentName: options.agentName,
     sessionMaxDurationInSeconds: seconds,
   };
-}
-
-/**
- * Throws a `Clerk error:` message when the options cannot work. `createBrowserSessionTool` and `createBrowserSession` call it
- * too; call it at startup to fail fast on a bad configuration.
- */
-export function validateBrowserSessionOptions(options: CreateBrowserSessionOptions): void {
-  resolveBrowserSessionConfig(options);
 }
 
 // Resolves the agent's `path` against the origin of `destination`. Refuses anything that could leave that origin.
@@ -342,9 +398,37 @@ async function revokeAgentTask(client: BackendApiClient, agentTaskId: string): P
   }
 }
 
+// The error's name and string `code` (such as `ECONNREFUSED`), when they are identifiers. Never its message, which
+// could carry anything the lookup touched.
+function lookupFailureDetail(error: unknown): string {
+  const code =
+    error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : undefined;
+  const safeCode = code !== undefined && IDENTIFIER_PATTERN.test(code) ? `, code ${code}` : '';
+  return `organizationId threw ${safeErrorName(error)}${safeCode}`;
+}
+
+async function lookUpOrganization(
+  lookup: (authInfo: ClerkAuthInfo) => string | undefined | Promise<string | undefined>,
+  authInfo: ClerkAuthInfo,
+): Promise<string | undefined> {
+  let value: unknown;
+  try {
+    value = await lookup(authInfo);
+  } catch (error) {
+    // A BrowserSessionError names its own reason; one with an unknown code (only through a cast) has no copy.
+    if (error instanceof BrowserSessionError && isKnownCode(error.code)) throw error;
+    throw sessionError('organization_lookup_failed', lookupFailureDetail(error));
+  }
+  if (value === undefined || (typeof value === 'string' && value !== '')) return value;
+  const kind = value === null ? 'null' : value === '' ? 'an empty string' : typeof value;
+  throw sessionError('organization_lookup_failed', `organizationId returned ${kind}`);
+}
+
 /**
  * Creates a one-time link that opens the app in a browser as the user who authorized the MCP request.
- * The user comes from `authInfo` (set by `verifyClerkToken`), never from tool input.
+ * The user comes from `authInfo` (set by `toClerkAuthInfo`), never from tool input.
  */
 export async function createBrowserSession(
   request: CreateBrowserSessionRequest,
@@ -353,9 +437,12 @@ export async function createBrowserSession(
   return requestBrowserSession(request, resolveBrowserSessionConfig(options));
 }
 
-// Throws a BrowserSessionError. Nothing reaches the log here: the tool callback logs `error.detail`.
+// Throws a BrowserSessionError, or what an `organizationId` function throws. Nothing reaches the log here: the tool
+// callback logs `error.detail`.
 async function requestBrowserSession(
-  request: CreateBrowserSessionRequest,
+  request: Omit<CreateBrowserSessionRequest, 'organizationId'> & {
+    organizationId?: CreateBrowserSessionToolOptions['organizationId'];
+  },
   config: BrowserSessionConfig,
 ): Promise<BrowserSession> {
   const { authInfo } = request;
@@ -367,14 +454,19 @@ async function requestBrowserSession(
   }
 
   const redirectUrl = resolveRedirectUrl(config.destination, request.path);
+  // Resolved after the checks, so a refused request never runs the caller's lookup.
+  const organizationId =
+    typeof request.organizationId === 'function'
+      ? await lookUpOrganization(request.organizationId, authInfo)
+      : request.organizationId;
   const agentName =
     config.agentName?.trim() || (authInfo.clientId ? `mcp:${authInfo.clientId}` : 'mcp');
   const body = {
     on_behalf_of: { user_id: authInfo.extra.userId },
     permissions: '*',
     session_restricted: config.restricted,
-    ...(request.organizationId !== undefined && {
-      session_organization_id: request.organizationId,
+    ...(organizationId !== undefined && {
+      session_organization_id: organizationId,
     }),
     agent_name: agentName,
     task_description: request.taskDescription?.trim() || DEFAULT_TASK_DESCRIPTION,
@@ -405,8 +497,7 @@ async function requestBrowserSession(
   const validId = IDENTIFIER_PATTERN.test(agentTaskId);
   const unconfirmed =
     (config.restricted && result.data.session_restricted !== true) ||
-    (request.organizationId !== undefined &&
-      result.data.session_organization_id !== request.organizationId);
+    (organizationId !== undefined && result.data.session_organization_id !== organizationId);
   if (unconfirmed) {
     // An id that is not an identifier is never logged. It is still revoked when it is a safe path segment. Otherwise
     // nothing safely names the task, so it is left to expire: the link is never returned or logged, and it works once,
@@ -436,14 +527,7 @@ export function browserSessionInstructions(destinationUrl: string): string {
   return `First call ${CREATE_BROWSER_SESSION_TOOL_NAME} to use ${host} in a browser: it opens ${host} signed in as the user. Never type credentials for ${host}.`;
 }
 
-/** The tool title and description, written for the app at `destinationUrl` so agents can match it to the site. */
-export function browserSessionToolText(destinationUrl: string): {
-  title: string;
-  description: string;
-} {
-  return toolText(parseDestinationUrl(destinationUrl));
-}
-
+// The tool title and description, written for the app at `destination` so agents can match it to the site
 function toolText({ host, origin }: URL): { title: string; description: string } {
   return {
     title: `Open ${host} signed in`,
@@ -508,13 +592,25 @@ const warnStepUpUnsupported = once(() =>
 );
 
 /**
- * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`.
+ * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`,
+ * or override parts of the returned config and wrap the callback to customise it. Every error result carries a code in
+ * `_meta[ERROR_CODE_META_KEY]`: the `BrowserSessionErrorCode`, or `unexpected_error` for a failure it cannot name.
  * Throws when the options cannot work.
  */
 export function createBrowserSessionTool(
-  options: CreateBrowserSessionOptions,
+  options: CreateBrowserSessionToolOptions,
 ): CreateBrowserSessionTool {
   const config = resolveBrowserSessionConfig(options);
+  const { organizationId } = options;
+  if (
+    organizationId !== undefined &&
+    !(typeof organizationId === 'string' && organizationId !== '') &&
+    typeof organizationId !== 'function'
+  ) {
+    throw new Error(
+      'Clerk error: createBrowserSessionTool organizationId must be a non-empty string or a function that returns one',
+    );
+  }
   const callback: CreateBrowserSessionTool[2] = async (input, extra) => {
     try {
       const link = await requestBrowserSession(
@@ -522,6 +618,7 @@ export function createBrowserSessionTool(
           authInfo: toolAuthInfo(extra),
           path: input.path,
           taskDescription: input.task_description,
+          organizationId,
         },
         config,
       );
@@ -531,13 +628,13 @@ export function createBrowserSessionTool(
         redirect_url: link.redirectUrl,
       });
     } catch (error) {
-      if (error instanceof BrowserSessionError) {
+      if (error instanceof BrowserSessionError && isKnownCode(error.code)) {
         if (error.code === 'insufficient_scope' && isSdkV2Extra(extra)) warnStepUpUnsupported();
         // The path is agent input and stays out of the log; `detail` holds only safe text.
         console.error(
           `Clerk error: createBrowserSession failed (${error.code}${error.detail ? `: ${error.detail}` : ''})`,
         );
-        return toolError(browserSessionErrorMessage(error));
+        return toolError(browserSessionErrorMessage(error), error.code);
       }
       // Not the message or stack: they could carry the link or the key.
       console.error(
@@ -545,6 +642,7 @@ export function createBrowserSessionTool(
       );
       return toolError(
         'The sign-in link could not be created. Continue without it, or ask the user to sign in.',
+        UNEXPECTED_ERROR_CODE,
       );
     }
   };

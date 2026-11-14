@@ -3,30 +3,19 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { JsonSerializable, McpClientStore } from './client-store';
+
+export type { JsonSerializable, McpClientStore } from './client-store';
 
 const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';
 const SESSION_PREFIX = 'session_';
 
-export type JsonSerializable =
-  | null
-  | undefined
-  | boolean
-  | number
-  | string
-  | JsonSerializable[]
-  | { [key: string]: JsonSerializable };
-
-export interface McpClientStore {
-  write: (key: string, value: JsonSerializable) => Promise<void>;
-  read: (key: string) => Promise<JsonSerializable>;
-}
-
 /**
  * This function is used to complete the OAuth flow. It is used in the OAuth
  * callback route to complete the OAuth flow given a state and auth code.
  */
-export async function completeAuthWithCode({
+export async function completeOAuth({
   state,
   code,
   store,
@@ -53,7 +42,7 @@ export async function completeAuthWithCode({
     throw new Error(`No session id associated with state "${state}" found in the store`);
   }
 
-  const { transport } = await getClientBySessionId({
+  const { transport } = await getMcpClientBySessionId({
     sessionId,
     store,
     state,
@@ -77,7 +66,7 @@ export async function completeAuthWithCode({
  * Given a client ID and a store, retrieves the client details and returns a
  * transport and MCP client configured with an auth provider.
  */
-export async function getClientBySessionId({
+export async function getMcpClientBySessionId({
   sessionId,
   store,
   state,
@@ -157,15 +146,15 @@ export async function getClientBySessionId({
 }
 
 // Return type for known credentials and dynamically registered clients
-export interface McpClientReturnType {
+export interface McpClientConnection {
   /**
    * Represents a session associated with the connected MCP service endpoint.
    */
   sessionId: string;
   /**
-   * Calling this function will initialize a connect to the MCP service.
+   * Connects to the MCP service. Resolves once the connection is initialized.
    */
-  connect: () => void;
+  connect: () => Promise<void>;
   /**
    * Lower level primitive, likely not necessary for use
    * @see https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/client/streamableHttp.ts#L119
@@ -183,7 +172,7 @@ export interface McpClientReturnType {
   authProvider: OAuthClientProvider;
 }
 
-export interface CreateKnownCredentialsMcpClientParams {
+export interface CreateKnownCredentialsMcpClientOptions {
   /**
    * OAuth client id, expected to be collected via user input
    */
@@ -234,7 +223,7 @@ export async function createKnownCredentialsMcpClient({
   redirect,
   store,
   ...client
-}: CreateKnownCredentialsMcpClientParams): Promise<McpClientReturnType> {
+}: CreateKnownCredentialsMcpClientOptions): Promise<McpClientConnection> {
   const state = randomUUID();
   const sessionId = randomUUID();
 
@@ -285,7 +274,7 @@ export async function createKnownCredentialsMcpClient({
   return createReturnValue(client, authProvider, sessionId);
 }
 
-export interface CreateDynamicallyRegisteredMcpClientParams {
+export interface CreateDynamicallyRegisteredMcpClientOptions {
   /**
    * The endpoint of the MCP service, expected to be collected via user input
    */
@@ -341,7 +330,7 @@ export async function createDynamicallyRegisteredMcpClient({
   redirect,
   store,
   ...clientParams
-}: CreateDynamicallyRegisteredMcpClientParams): Promise<McpClientReturnType> {
+}: CreateDynamicallyRegisteredMcpClientOptions): Promise<McpClientConnection> {
   const state = randomUUID();
   const sessionId = randomUUID();
 
@@ -439,7 +428,7 @@ export async function createDynamicallyRegisteredMcpClient({
  * values, so we abstract the common code here.
  */
 function createReturnValue(
-  client: ClientData,
+  client: McpClientData,
   authProvider: OAuthClientProvider,
   sessionId: string,
 ) {
@@ -485,7 +474,7 @@ function unexpectedFunctionCall(name: string, phase: string) {
 /**
  * The data that is stored in the store for a mcp client.
  */
-export interface ClientData {
+export interface McpClientData {
   oauthRedirectUrl: string;
   mcpEndpoint: string;
   mcpClientName: string;
@@ -516,5 +505,5 @@ async function getClientData(sessionId: string, store: McpClientStore) {
     throw new Error(`Session with ID "${sessionId}" not found in store`);
   }
 
-  return clientData as unknown as ClientData;
+  return clientData as unknown as McpClientData;
 }

@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
-import { createBrowserSessionTool } from '../create-browser-session';
+import { createBrowserSessionTool } from '../tools';
 import { requireAdditionalScopes } from '../server';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
@@ -28,7 +28,7 @@ export type CustomerServerKind = 'v1-route' | 'v2-registration' | 'v2-own-tool';
 
 type Listener = (req: IncomingMessage, res: ServerResponse) => void;
 
-// Stands in for `verifyClerkToken` after the customer's token check.
+// Stands in for `toClerkAuthInfo` after the customer's token check.
 function verify(token: string | undefined): AuthInfo | undefined {
   const match = Object.values(TOKENS).find((entry) => entry.token === token);
   if (!match) return undefined;

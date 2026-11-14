@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { JsonSerializable } from '../client.js';
+import type { JsonSerializable } from '../client-store.js';
 
 export interface FsStoreConfig {
   /**
@@ -22,7 +22,7 @@ export interface FsStoreConfig {
  * ```typescript
  * import { createFsStore } from "@clerk/mcp-tools/stores/fs";
  *
- * const fsStore = createFsStore({
+ * const store = createFsStore({
  *   filePath: "./data/mcp-sessions.json"
  * });
  * ```
@@ -180,7 +180,3 @@ export function createFsStore(config: FsStoreConfig = {}) {
 
   return store;
 }
-
-// Export default for backward compatibility
-const fsStore = createFsStore();
-export default fsStore;
