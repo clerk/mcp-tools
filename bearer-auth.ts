@@ -988,9 +988,13 @@ function isVerificationUnavailable(reason: string, message: string, status: numb
  * throws an `McpTokenVerificationError` with the reason and message Clerk gave, so that the token reaches the client
  * as an `invalid_token` challenge. When Clerk could not verify the token at all, this throws an `McpAuthError` around
  * that error instead and the framework answers with a server error: an `invalid_token` challenge would make the
- * client discard a valid token and restart authorization. That covers an opaque token whose Backend API check failed
- * with a 429, a 5xx, or no response, which the answer keeps as its status (500 without one), an invalid secret key,
- * and a JWT access token whose JWKS Clerk could not load. A Backend API 4xx other than 401 and 429 is a rejection.
+ * client discard a valid token and restart authorization. For an opaque token that covers a Backend API check that
+ * failed with a 429, a 5xx, or no response, which the answer keeps as its status (500 without one), and an invalid
+ * secret key. A Backend API 4xx other than 401 and 429 is a rejection. For a JWT access token it covers only a JWKS
+ * request that Clerk answered with an error status and a JSON body, other than an invalid secret key: `@clerk/backend`
+ * through 3.27.0 reports every other failure to load the JWKS, an invalid secret key, a fetch that throws, or an error
+ * body that is not JSON, with the reason an invalid signature gets, so those still reach the client as an
+ * `invalid_token` challenge.
  */
 export async function verifyClerkOAuthToken(
   client: ClerkOAuthClient,

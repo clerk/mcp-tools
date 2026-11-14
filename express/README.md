@@ -233,7 +233,7 @@ Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add y
 
 ### Public access
 
-`publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected. It reads the body that `express.json()` parsed, so mount that middleware before `mcpAuth`. Without it, a JSON request without a token throws a `Clerk error:`.
+`publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected. It reads the body that `express.json()` parsed, so mount that middleware before `mcpAuth`. Without it, a JSON request without a token throws a `Clerk error:`. `express.json()` reads the whole body before `mcpAuth` sees it, so its `limit` is what bounds the bytes a client without a token can send: set `express.json({ limit })` to the size you accept from anonymous clients. Its 100kb default is below the 1 MiB that `publicAccess` accepts. `mcpAuth` still treats a body over 1 MiB as not public, but for a chunked body it measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so that check is not an exact byte limit.
 
 ```ts
 app.use(express.json());

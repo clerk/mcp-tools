@@ -213,10 +213,13 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
 /**
  * The JSON body `express.json()` parsed, which `publicAccess` checks. Without that middleware a JSON request has no
  * parsed body, and every request without a token would get a 401 with nothing to say why, so that case throws.
- * `express.json()` has already buffered the body by then, up to its own `limit`, so the `PUBLIC_BODY_LIMIT` check here
- * only keeps the rule the other adapters follow: a body larger than that is not public. Without a `Content-Length`,
- * as for a chunked body, the size is that of the parsed body serialized again, which differs from the body sent only
- * by its whitespace and number formatting.
+ * `express.json()` has already buffered the body by then, up to its own `limit`, so that `limit` is what bounds the
+ * bytes a request without a token sends: set it, as `express.json({ limit })`, at or below the size you accept from
+ * anonymous clients. Its 100kb default is below `PUBLIC_BODY_LIMIT`. The `PUBLIC_BODY_LIMIT` check here is defence in
+ * depth that keeps the rule the other adapters follow: a body larger than that is not public. Without a
+ * `Content-Length`, as for a chunked body, the size is that of the parsed body serialized again, which is not the byte
+ * count sent: whitespace and number formatting differ, so padding can carry a chunked body past 1 MiB that still
+ * counts as under it. Only `express.json()`'s `limit` bounds the original bytes.
  * @param req - The incoming request
  * @returns The parsed body, or `undefined` when the request has no JSON body or is over `PUBLIC_BODY_LIMIT`
  */
