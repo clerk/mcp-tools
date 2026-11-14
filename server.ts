@@ -1,4 +1,5 @@
 import type { AuthInfo } from './mcp-types';
+import { assertPropertiesOmitResource } from './resource-metadata-properties';
 
 /**
  * The fields `toClerkAuthInfo` reads from Clerk's auth object for an OAuth access token, the result of
@@ -172,7 +173,8 @@ type GenerateProtectedResourceMetadataOptions = {
    */
   resourceUrl: string;
   /**
-   * Additional properties to include in the metadata. They override the generated ones.
+   * Additional properties to include in the metadata. They override the generated ones, except `resource`, which
+   * they cannot set: it is always `resourceUrl` (RFC 9728 section 3.3).
    */
   properties?: Record<string, unknown>;
 } & (
@@ -197,8 +199,12 @@ type GenerateProtectedResourceMetadataOptions = {
  * the issuer identifier of another authorization server. It holds only parameters RFC 9728 section 2 defines:
  * `resource`, `authorization_servers`, and `bearer_methods_supported`, since the adapters read the token from the
  * `Authorization` header alone. Pass others, such as `resource_name` or `resource_documentation`, in `properties`.
+ * `resource` is always `resourceUrl`, since a client discards metadata whose `resource` is not the URL it derived the
+ * metadata URL from (RFC 9728 section 3.3): it throws a `Clerk error:` when `properties` has its own `resource` key,
+ * even one set to `undefined`, as the `protectedResourceMetadataHandler`s do.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-2
+ * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3.3
  * @param options - `{ resourceUrl, publishableKey }` for Clerk, or `{ resourceUrl, authServerUrl }` for any other
  * authorization server, each with optional `properties`
  * @returns Protected resource metadata, serializable to JSON
@@ -206,6 +212,7 @@ type GenerateProtectedResourceMetadataOptions = {
 export function generateProtectedResourceMetadata(
   options: GenerateProtectedResourceMetadataOptions,
 ) {
+  assertPropertiesOmitResource('generateProtectedResourceMetadata', options.properties);
   const metadata = (authServerUrl: string) => ({
     resource: options.resourceUrl,
     authorization_servers: [authServerUrl],

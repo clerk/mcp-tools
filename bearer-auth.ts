@@ -1,6 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
+import { assertPropertiesOmitResource } from './resource-metadata-properties';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import {
   type ClerkOAuthClient,
@@ -474,12 +475,7 @@ export function assertProtectedResourceMetadataOptions(
   }
   const { properties, ...authOptions } = options as ProtectedResourceMetadataOptions;
   assertMcpAuthOptions('protectedResourceMetadataHandler', authOptions);
-  // RFC 9728 section 3.3: a client discards metadata whose `resource` is not the URL it derived the metadata URL from
-  if (properties !== undefined && Object.hasOwn(properties, 'resource')) {
-    throw new Error(
-      "Clerk error: protectedResourceMetadataHandler properties cannot set resource: it is the URL mcpAuth checks. Pass it as resourceUrl instead, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp' })",
-    );
-  }
+  assertPropertiesOmitResource('protectedResourceMetadataHandler', properties);
 
   const listed = properties?.scopes_supported;
   if (listed === undefined) return;

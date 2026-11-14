@@ -26,14 +26,37 @@ describe('generateProtectedResourceMetadata', () => {
       generateProtectedResourceMetadata({
         authServerUrl: 'https://auth.example.com',
         resourceUrl: 'https://mcp.example.com/mcp',
-        properties: { resource_name: 'Example MCP', resource: 'https://mcp.example.com' },
+        properties: { resource_name: 'Example MCP', bearer_methods_supported: [] },
       }),
     ).toStrictEqual({
-      resource: 'https://mcp.example.com',
+      resource: 'https://mcp.example.com/mcp',
       authorization_servers: ['https://auth.example.com'],
-      bearer_methods_supported: ['header'],
+      bearer_methods_supported: [],
       resource_name: 'Example MCP',
     });
+  });
+
+  // RFC 9728 section 3.3: a client discards metadata whose `resource` is not the URL it derived the metadata URL
+  // from, so `resource` is always `resourceUrl`. An own `resource: undefined`, as from spreading a partial config,
+  // would otherwise clear it.
+  test.each([
+    ['another URL', { resource: 'https://mcp.example.com' }],
+    ['undefined', { resource: undefined }],
+  ])('throws a Clerk error when properties sets resource to %s', (_name, properties) => {
+    for (const keyOptions of [
+      { authServerUrl: 'https://auth.example.com' },
+      { publishableKey: `pk_test_${btoa('clerk.example.com$')}` },
+    ]) {
+      expect(() =>
+        generateProtectedResourceMetadata({
+          ...keyOptions,
+          resourceUrl: 'https://mcp.example.com/mcp',
+          properties,
+        }),
+      ).toThrow(
+        'Clerk error: generateProtectedResourceMetadata properties cannot set resource: it is the URL mcpAuth checks',
+      );
+    }
   });
 });
 
