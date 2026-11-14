@@ -61,7 +61,7 @@ const result = generateProtectedResourceMetadata({
 
 Return this result from `/.well-known/oauth-protected-resource` followed by your MCP endpoint's path, such as `/.well-known/oauth-protected-resource/mcp` for an endpoint at `/mcp` (RFC 9728 section 3). This is the URL the `401` challenge's `resource_metadata` points to. A route at the bare `/.well-known/oauth-protected-resource` describes only the origin, so its `resource` doesn't match an endpoint with a path.
 
-If you are using [Clerk](https://clerk.com) for authentication in your app, pass your publishable key instead of `authServerUrl`. The authorization server is derived from the key. A key that isn't a Clerk publishable key throws a `Clerk error:`. Add `resource_documentation`, a page about your own MCP server, in `properties` if you have one:
+If you are using [Clerk](https://clerk.com) for authentication in your app, pass your publishable key instead of `authServerUrl`. The authorization server is derived from the key. A key that isn't a Clerk publishable key throws a `Clerk error:`. `properties` can't set `resource`, which is always `resourceUrl` so that it matches the URL clients derived the metadata URL from (RFC 9728 section 3.3): setting it, even to `undefined`, throws a `Clerk error:`. Add `resource_documentation`, a page about your own MCP server, in `properties` if you have one:
 
 ```ts
 import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
@@ -734,7 +734,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 #### Scope: `@clerk/mcp-tools/server`
 
 - `generateProtectedResourceMetadata`
-  - **Description:** Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). This metadata helps OAuth clients understand how to authenticate with your resource server. Pass either your Clerk publishable key, from which the authorization server URL is derived, or the URL of any other authorization server. Passing both, or neither, is a type error.
+  - **Description:** Generates OAuth 2.0 Protected Resource Metadata as defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). This metadata helps OAuth clients understand how to authenticate with your resource server. Pass either your Clerk publishable key, from which the authorization server URL is derived, or the URL of any other authorization server. Passing both, or neither, is a type error. `resource` is always `resourceUrl` (RFC 9728 section 3.3): a `properties` object with its own `resource` key, even one set to `undefined`, throws a `Clerk error:`, as the `protectedResourceMetadataHandler`s do.
   - **Arguments:**
 
     ```ts
@@ -749,7 +749,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
            */
           resourceUrl: string;
           /**
-           * Additional properties to include in the metadata
+           * Additional properties to include in the metadata. They cannot set `resource`.
            */
           properties?: Record<string, any>;
         }
@@ -763,7 +763,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
            */
           resourceUrl: string;
           /**
-           * Additional properties to include in the metadata
+           * Additional properties to include in the metadata. They cannot set `resource`.
            */
           properties?: Record<string, any>;
         };
