@@ -263,7 +263,7 @@ Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Cl
 
 Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Requires `CLERK_PUBLISHABLE_KEY`. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable.
 
-Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.on(['GET', 'OPTIONS'], path, handler)` or `app.all`), each answers the CORS preflight with a `200` and those CORS headers. A `cors()` middleware in front of them, as in the Quick Start, answers the preflight itself.
+Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.on(['GET', 'OPTIONS'], path, handler)` or `app.all`), each answers the CORS preflight with a `200` and those CORS headers. A `cors()` middleware in front of them, as in the Quick Start, answers the preflight itself, and on the `GET` the headers it sets, such as its `Access-Control-Allow-Origin`, are kept in place of the handlers' own.
 
 ### `streamableHttpHandler(createServer, Transport)`
 

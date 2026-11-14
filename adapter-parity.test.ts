@@ -784,8 +784,8 @@ const clerkRoutes: [string, SendClerk][] = [
   ],
 ];
 
-// How `@clerk/backend` reports a token it could not verify at all, with the status each adapter answers. Releases
-// after 3.27.0 report a JWKS that can't be loaded as `jwk-remote-failed-to-load`; 3.27.0 reports it as
+// How `@clerk/backend` reports a token it could not verify at all, with the status each adapter answers. With
+// clerk/javascript#10826 it reports a JWKS that can't be loaded as `jwk-remote-failed-to-load`; 3.27.0 reports it as
 // `token-verification-failed` with an `Error loading Clerk JWKS` message.
 const unverifiable: [string, string, number][] = [
   [
