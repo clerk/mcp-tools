@@ -79,8 +79,10 @@ interface NodeStreamableHttpTransport {
  * Express middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 and 403 challenges also ask for, and either the `clerkClient` that verifies
- * tokens or a `verifyToken` function. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
+ * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
+ * `verifyToken` function. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
+ * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
+ * through. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
  * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`; pass your own when the keys come from elsewhere. The route doesn't need
  * `clerkMiddleware()`: this middleware verifies the token itself. Create the client with both `secretKey` and
  * `publishableKey`: without a publishable key, every request fails. A client from `@clerk/backend` must be version

@@ -805,10 +805,10 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * listed URL with its origin. A missing or malformed header gets a challenge without an error code,
  * a rejected token adds `error="invalid_token"` (RFC 6750 section 3), and both 401 challenges list `requiredScopes`
  * then `challengeScopes` in `scope` (RFC 6750 section 3). A token without `requiredScopes` gets a 403 with
- * `error="insufficient_scope"` (RFC 6750 section 3.1). The 403 `scope` is the granted scopes followed by every missing
- * `requiredScopes` and `challengeScopes` entry, each once, as in `requireAdditionalScopes`, so the new grant keeps the
- * old access and covers the tools that step up to `challengeScopes` too. A token that lacks only `challengeScopes` is
- * let through. A verified token's auth info gets `resourceMetadataUrl`, which MCP SDK 2 puts in the
+ * `error="insufficient_scope"` (RFC 6750 section 3.1). When a token lacks a `requiredScopes` entry, the 403 lists the
+ * granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry, each once, as in
+ * `requireAdditionalScopes`, so the new grant keeps the old access and covers the tools that step up to
+ * `challengeScopes` too. A token that lacks only `challengeScopes` entries is let through. A verified token's auth info gets `resourceMetadataUrl`, which MCP SDK 2 puts in the
  * `resource_metadata` of its own scope challenges. A verifier that
  * throws an `McpTokenVerificationError` rejects the token, with that error as the failure's `cause`. Any other error
  * it throws gets wrapped in an `McpAuthError`.
