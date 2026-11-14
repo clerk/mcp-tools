@@ -1029,8 +1029,8 @@ export async function authenticateBearer({
 }
 
 // The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret
-// key, as opposed to when it rejected the token. `jwk-remote-failed-to-load` is the reason `@clerk/backend` releases
-// after 3.27.0 give a JWT access token whose JWKS can't be loaded; 3.27.0 does not declare it yet, so the element type
+// key, as opposed to when it rejected the token. `jwk-remote-failed-to-load` is the reason clerk/javascript#10826 has
+// `@clerk/backend` give a JWT access token whose JWKS can't be loaded; no release declares it yet, so the element type
 // is widened to take it.
 const verificationUnavailable: ReadonlySet<string> = new Set<
   MachineTokenVerificationErrorCode | 'jwk-remote-failed-to-load'
@@ -1046,13 +1046,14 @@ function clerkStatus(message: string | undefined): number | undefined {
 }
 
 // Whether Clerk could not verify the token at all, so the client must keep it. A Backend API 4xx other than 401
-// (an invalid secret key) and 429 (rate limiting) is Clerk refusing the token. Releases of `@clerk/backend` after
-// 3.27.0 report a JWKS that can't be loaded as `jwk-remote-failed-to-load`, which carries no Backend API status and
-// is always unavailable. Through 3.27.0 a JWT access token whose JWKS can't be fetched gets the reason an invalid
-// signature gets, so only the message tells the two apart. The prefix mirrors `fetchJWKSFromBAPI` in `@clerk/backend`
-// 3.27.0, `dist/chunk-CSXNUYCW.mjs:1979`: `Error loading Clerk JWKS from ${url.href} with code=${response.status}`,
-// whose `jwk-remote-failed-to-load` reason `resolveKeyAndVerifyJwt` (`:2111-2117`) replaces with
-// `token-verification-failed`, keeping the message. Drop the prefix rule once the peer range starts after 3.27.0.
+// (an invalid secret key) and 429 (rate limiting) is Clerk refusing the token. With clerk/javascript#10826,
+// `@clerk/backend` reports a JWKS that can't be loaded as `jwk-remote-failed-to-load`, which carries no Backend API
+// status and is always unavailable. Until then, as in 3.27.0, a JWT access token whose JWKS can't be fetched gets the
+// reason an invalid signature gets, so only the message tells the two apart. The prefix mirrors `fetchJWKSFromBAPI` in
+// `@clerk/backend` 3.27.0, `dist/chunk-CSXNUYCW.mjs:1979`: `Error loading Clerk JWKS from ${url.href} with
+// code=${response.status}`, whose `jwk-remote-failed-to-load` reason `resolveKeyAndVerifyJwt` (`:2111-2117`) replaces
+// with `token-verification-failed`, keeping the message. Drop the prefix rule once the supported backend floor reports
+// the reason.
 function isVerificationUnavailable(reason: string, message: string, status: number | undefined) {
   if (reason === 'token-verification-failed') return message.startsWith('Error loading Clerk JWKS');
   if (!verificationUnavailable.has(reason)) return false;
@@ -1067,12 +1068,12 @@ function isVerificationUnavailable(reason: string, message: string, status: numb
  * client discard a valid token and restart authorization. For an opaque token that covers a Backend API check that
  * failed with a 429, a 5xx, or no response, which the answer keeps as its status (500 without one), and an invalid
  * secret key. A Backend API 4xx other than 401 and 429 is a rejection. For a JWT access token it covers a JWKS that
- * can't be loaded. With `@clerk/backend` releases after 3.27.0, which report it as `jwk-remote-failed-to-load`, that is
+ * can't be loaded. Once `@clerk/backend` reports it as `jwk-remote-failed-to-load` (clerk/javascript#10826), that is
  * every such failure: an error status, a fetch that throws, an error body that is not JSON, a missing secret key, or a
- * JWKS without keys; an invalid secret key is `secret-key-invalid`, also covered. Through 3.27.0 it covers only a JWKS
- * request that Clerk answered with an error status and a JSON body, other than an invalid secret key: that release
- * reports every other failure to load the JWKS with the reason an invalid signature gets, so those still reach the
- * client as an `invalid_token` challenge.
+ * JWKS without keys; an invalid secret key is `secret-key-invalid`, also covered. Until then, as in 3.27.0, it covers
+ * only a JWKS request that Clerk answered with an error status and a JSON body, other than an invalid secret key: that
+ * release reports every other failure to load the JWKS with the reason an invalid signature gets, so those still reach
+ * the client as an `invalid_token` challenge.
  */
 export async function verifyClerkOAuthToken(
   client: ClerkOAuthClient,

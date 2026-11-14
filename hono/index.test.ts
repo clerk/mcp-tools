@@ -21,6 +21,7 @@ vi.mock('@clerk/backend', () => ({ createClerkClient: vi.fn() }));
 import { createClerkClient } from '@clerk/backend';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { env } from 'hono/adapter';
+import { cors } from 'hono/cors';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -118,6 +119,21 @@ describe('protectedResourceMetadataHandler', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.authorization_servers).toEqual(['https://clerk.example.com']);
+  });
+
+  test('keeps the CORS headers a cors() middleware in front of it sets on the GET', async () => {
+    const app = new Hono();
+    app.use('*', cors({ origin: 'https://app.example', credentials: true }));
+    app.get('/.well-known/oauth-protected-resource', protectedResourceMetadataHandler());
+
+    const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource', {
+      headers: { origin: 'https://app.example' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example');
+    expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    expect(res.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
+    expect(res.headers.get('cache-control')).toBe('max-age=3600');
   });
 
   test('returns 500 when CLERK_PUBLISHABLE_KEY is missing', async () => {
