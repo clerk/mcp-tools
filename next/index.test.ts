@@ -236,15 +236,34 @@ describe('withMcpAuth with verifyToken', () => {
     expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, scope="profile email"`);
   });
 
-  test('throws an McpAuthError with the verifier error as its cause', async () => {
+  test('answers a verifier that throws with a JSON 500 and logs the McpAuthError with its cause', async () => {
     const cause = new Error('network down');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const error = await withMcpAuth(echoAuth, { verifyToken: () => Promise.reject(cause) })(
+    const res = await withMcpAuth(echoAuth, { verifyToken: () => Promise.reject(cause) })(
       request('Bearer token-1'),
-    ).catch((e: unknown) => e);
+    );
+    const [error] = log.mock.calls[0] ?? [];
+    log.mockRestore();
 
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'server_error' });
+    expect(res.headers.get('WWW-Authenticate')).toBeNull();
     expect(error).toBeInstanceOf(McpAuthError);
     expect(error).toMatchObject({ reason: 'verification_failed', cause });
+  });
+
+  test('lets an error the route handler throws reach Next.js', async () => {
+    const thrown = new Error('route bug');
+
+    const error = await withMcpAuth(
+      () => {
+        throw thrown;
+      },
+      { verifyToken: async () => authInfo([]) },
+    )(request('Bearer token-1')).catch((e: unknown) => e);
+
+    expect(error).toBe(thrown);
   });
 
   test('passes each failure and its request to onAuthFailure, and nothing for a verified token', async () => {
@@ -530,17 +549,22 @@ describe('withMcpAuth with Clerk', () => {
     }
   });
 
-  test('throws when Clerk could not verify the token, instead of answering with a challenge', async () => {
+  test('answers a server error when Clerk could not verify the token, instead of a challenge', async () => {
     defaultAuthenticateRequest.mockResolvedValue({
       isAuthenticated: false,
       reason: 'unexpected-error',
       message: 'Clerk is unavailable',
     });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const error = await withMcpAuth(echoAuth, { clerkClient, resourceUrl })(
+    const res = await withMcpAuth(echoAuth, { clerkClient, resourceUrl })(
       request('Bearer token-1'),
-    ).catch((thrown: unknown) => thrown);
+    );
+    const [error] = log.mock.calls[0] ?? [];
+    log.mockRestore();
 
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'server_error' });
     expect(error).toBeInstanceOf(McpAuthError);
     const { cause } = error as McpAuthError;
     expect(cause).toBeInstanceOf(McpTokenVerificationError);
@@ -590,17 +614,22 @@ describe('withMcpAuth with Clerk', () => {
     expect(authenticateRequest).toHaveBeenCalledTimes(authorization ? 2 : 0);
   });
 
-  test('keeps the status Clerk reported for an opaque token it could not check', async () => {
+  test('answers with the status Clerk reported for an opaque token it could not check', async () => {
     defaultAuthenticateRequest.mockResolvedValue({
       isAuthenticated: false,
       reason: 'unexpected-error',
       message: 'Unexpected error (code=unexpected-error, status=503)',
     });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const error = await withMcpAuth(echoAuth, { clerkClient, resourceUrl })(
+    const res = await withMcpAuth(echoAuth, { clerkClient, resourceUrl })(
       request('Bearer token-1'),
-    ).catch((thrown: unknown) => thrown);
+    );
+    const [error] = log.mock.calls[0] ?? [];
+    log.mockRestore();
 
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'server_error' });
     expect(error).toBeInstanceOf(McpAuthError);
     expect(error).toMatchObject({ status: 503, cause: { status: 503 } });
   });

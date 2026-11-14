@@ -156,19 +156,7 @@ const authHandler = withMcpAuth(handler, {
 });
 ```
 
-A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http?.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque token at all, for example during an outage, the handler throws an `McpAuthError`, exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`. Next.js answers with an empty `500`, without a stack trace, under both `next dev` and `next start`, so clients keep their valid token. A JWT access token gets that `500` only when the request for Clerk's signing keys is answered with an error status and a JSON body. `@clerk/backend` through 3.27.0 reports every other failure to load the signing keys, such as an invalid secret key, a network error, or an error page that is not JSON, as it reports an invalid signature, so the client gets the `401` `invalid_token` challenge and authorizes again. The `McpAuthError`'s `status` is the `429` or `5xx` Clerk's Backend API answered with, but Next.js still answers `500`. A Backend API `4xx` other than `401` and `429` means Clerk refused the token, so it gets the `401` challenge.
-
-To log the error, export `onRequestError` from `instrumentation.ts`. Next.js bundles that file apart from your routes, so `err instanceof McpAuthError` is `false` there; check `err.name` instead:
-
-```ts
-// instrumentation.ts
-import type { Instrumentation } from 'next';
-
-export const onRequestError: Instrumentation.onRequestError = (err) => {
-  if (err instanceof Error && err.name === 'McpAuthError')
-    console.error('MCP auth failed', err.cause);
-};
-```
+A missing or rejected token gets a `401` challenge, and a token without `requiredScopes` gets a `403` `insufficient_scope` challenge. The verified auth info reaches tools as `ctx.http?.authInfo`, with `resourceMetadataUrl` set for step-up scope challenges. When Clerk cannot verify an opaque token at all, for example during an outage, when Clerk rate-limits the server, or with an invalid secret key, the handler answers with a JSON `{"error":"server_error"}` and the `429` or `5xx` status Clerk's Backend API answered with, or `500`, so clients keep their valid token, and logs the `McpAuthError` (exported from `@clerk/mcp-tools/next`, with `reason: 'verification_failed'` and the underlying error as its `cause`) with `console.error`. It is the answer the Express and Hono adapters give. The handler answers it itself, so Next.js's `onRequestError` doesn't see it. A Backend API `4xx` other than `401` and `429` means Clerk refused the token, so it gets the `401` challenge. A JWT access token gets the server error when Clerk's signing keys can't be loaded. With `@clerk/backend` 3.27.0 and earlier that is only when the request for the signing keys is answered with an error status and a JSON body: those releases report every other failure to load the signing keys, such as an invalid secret key, a network error, or an error page that is not JSON, as they report an invalid signature, so the client gets the `401` `invalid_token` challenge and authorizes again. A later `@clerk/backend` that reports those failures as `jwk-remote-failed-to-load` gets the server error for each of them.
 
 Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add your first MCP server to the instance in the Clerk Dashboard; see [Build an MCP server](https://clerk.com/docs/guides/ai/mcp/build-mcp-server). Require `@clerk/nextjs` 7.9.5 or later: on earlier versions, a JWT access token without an `aud` claim and an opaque OAuth access token both pass the audience check.
 
