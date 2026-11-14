@@ -242,7 +242,6 @@ function parsedJsonBody(req: express.Request): unknown {
   }
   const declared = req.get('content-length');
   if (declared !== undefined) return Number(declared) > PUBLIC_BODY_LIMIT ? undefined : req.body;
-  if (req.body === undefined) return undefined;
   return Buffer.byteLength(JSON.stringify(req.body)) > PUBLIC_BODY_LIMIT ? undefined : req.body;
 }
 

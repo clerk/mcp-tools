@@ -285,14 +285,6 @@ function resolveBrowserSessionConfig(options: CreateBrowserSessionOptions): Brow
   };
 }
 
-/**
- * Throws a `Clerk error:` message when the options cannot work. `createBrowserSessionTool` and `createBrowserSession` run
- * the same check, so a tool built at module scope fails fast on a bad configuration.
- */
-export function validateBrowserSessionOptions(options: CreateBrowserSessionOptions): void {
-  resolveBrowserSessionConfig(options);
-}
-
 // Resolves the agent's `path` against the origin of `destination`. Refuses anything that could leave that origin.
 function resolveRedirectUrl(destination: URL, path: string | undefined): string {
   if (!path?.trim()) {
@@ -535,14 +527,7 @@ export function browserSessionInstructions(destinationUrl: string): string {
   return `First call ${CREATE_BROWSER_SESSION_TOOL_NAME} to use ${host} in a browser: it opens ${host} signed in as the user. Never type credentials for ${host}.`;
 }
 
-/** The tool title and description, written for the app at `destinationUrl` so agents can match it to the site. */
-export function browserSessionToolText(destinationUrl: string): {
-  title: string;
-  description: string;
-} {
-  return toolText(parseDestinationUrl(destinationUrl));
-}
-
+// The tool title and description, written for the app at `destination` so agents can match it to the site
 function toolText({ host, origin }: URL): { title: string; description: string } {
   return {
     title: `Open ${host} signed in`,

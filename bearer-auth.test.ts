@@ -757,7 +757,6 @@ describe('publicAccess', () => {
         failure: undefined,
         status: 405,
         challenge: undefined,
-        error: 'method_not_allowed',
       });
       expect(failureHeaders(result as Extract<typeof result, { ok: false }>)).toEqual({
         Allow: 'POST',

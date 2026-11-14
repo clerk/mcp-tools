@@ -225,7 +225,7 @@ The middleware will:
 - Check for the `Authorization` header
 - Extract the Bearer token
 - Verify it with Clerk, or call your `verifyToken` function
-- Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, or if the request has more than one `Authorization` header
+- Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, or if the request has more than one `Authorization` header. A malformed `Bearer` credential, such as `Bearer a b`, and more than one `Authorization` header get that `401` challenge, not the `400` `invalid_request` that [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) recommends for a malformed request, so the client can still start authorization; they are the only departure from that section. Another scheme, such as `Basic`, gets the challenge without an error code, as that section says for an unsupported authentication method.
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 

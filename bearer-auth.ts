@@ -176,7 +176,6 @@ type BearerResult =
       failure: undefined;
       status: 405;
       challenge: undefined;
-      error: 'method_not_allowed';
     };
 
 // Every `McpPublicMethod`, for checking a `publicAccess.methods` list and for `methods: true`
@@ -845,9 +844,12 @@ function bearerChallenge({
 
 type ParsedAuthorization = { token: string } | { reason: 'missing_token' | 'malformed_token' };
 
-// The token from a well-formed `Bearer <token>` header. The scheme is case-insensitive. Malformed Bearer credentials
-// are challenged like a missing header, not answered with the 400 `invalid_request` that RFC 6750 section 3.1
-// suggests, so that a client sending an empty token can still start authorization.
+// The token from a well-formed `Bearer <token>` header. The scheme is case-insensitive. A header with another scheme,
+// such as `Basic`, gets the challenge without an error code, as RFC 6750 section 3.1 says for a request that "attempted
+// using an unsupported authentication method". Only malformed Bearer credentials, such as `Bearer a b` or two
+// `Authorization` headers joined into one, depart from that section: its `invalid_request` SHOULD get a 400 for a
+// request that is "otherwise malformed", and these get the same 401 challenge as a missing header instead, so that a
+// client sending an empty or broken token can still start authorization.
 function parseAuthorization(header: string | undefined): ParsedAuthorization {
   if (!header?.trim()) return { reason: 'missing_token' };
   const [scheme, token, ...rest] = header.trim().split(/\s+/);
@@ -954,7 +956,6 @@ export async function authenticateBearer({
         failure: undefined,
         status: 405,
         challenge: undefined,
-        error: 'method_not_allowed',
       };
     }
   }
