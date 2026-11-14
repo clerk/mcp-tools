@@ -14,6 +14,7 @@ import {
   clerkProtectedResourceMetadata,
   failureBody,
   failureHeaders,
+  metadataResponseHeaders,
   metadataUnavailableAnswer,
   methodNotAllowed,
   readJsonBody,
@@ -26,6 +27,7 @@ import {
   type McpAuthFailure,
   McpAuthError,
   fetchAuthorizationServerMetadata,
+  metadataCorsHeaders,
 } from '../server';
 
 declare module 'hono' {
@@ -157,10 +159,11 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
   assertProtectedResourceMetadataOptions(options);
 
   return (c: Context) => {
+    if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
     const metadata = clerkProtectedResourceMetadata(options, c.req.url, publishableKey);
-    if (!metadata) return c.json({ error: 'misdirected_request' }, 421);
-    return c.json(metadata);
+    if (!metadata) return c.json({ error: 'misdirected_request' }, 421, metadataCorsHeaders);
+    return c.json(metadata, 200, metadataResponseHeaders);
   };
 }
 
@@ -179,12 +182,18 @@ export function authorizationServerMetadataHandler() {
   // `arguments`, not a rest parameter, so the declared signature still takes no arguments
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (c: Context) => {
+    if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
     try {
-      return c.json(await fetchAuthorizationServerMetadata({ publishableKey }));
+      return c.json(
+        await fetchAuthorizationServerMetadata({ publishableKey }),
+        200,
+        metadataResponseHeaders,
+      );
     } catch (error) {
+      // The CORS headers, so a browser client can read the error, but not the caching ones metadata gets
       const answer = metadataUnavailableAnswer(error);
-      return c.json(answer.body, answer.status);
+      return c.json(answer.body, answer.status, metadataCorsHeaders);
     }
   };
 }

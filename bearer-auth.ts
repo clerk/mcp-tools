@@ -13,6 +13,7 @@ import {
   McpTokenVerificationError,
   generateProtectedResourceMetadata,
   matchResourceUrl,
+  metadataCorsHeaders,
   toClerkAuthInfo,
 } from './server';
 
@@ -735,11 +736,23 @@ export function assertServerFactory(createServer: unknown, transportClassName: s
 /**
  * The JSON answer to a request whose token Clerk or `verifyToken` could not verify at all, such as during an outage or
  * with an invalid secret key. It is a server error, not a challenge, so the client keeps a token that may be valid. The
- * status is the `McpAuthError`'s 5xx `status` when it has one, otherwise 500.
+ * status is the `McpAuthError`'s `status` when it has one, the 429 or 5xx Clerk's Backend API answered with, otherwise
+ * 500.
  */
 export function serverErrorAnswer(error: McpAuthError) {
   return { status: error.status ?? 500, body: { error: 'server_error' } } as const;
 }
+
+/**
+ * The headers of a metadata handler's successful response in every adapter: an hour of caching, and the CORS headers
+ * that let a browser-based MCP client read the metadata from any origin. An error answer gets `metadataCorsHeaders`
+ * alone, so it is readable but not cached.
+ */
+export const metadataResponseHeaders = {
+  'Cache-Control': 'max-age=3600',
+  'Content-Type': 'application/json',
+  ...metadataCorsHeaders,
+};
 
 /**
  * The answer `authorizationServerMetadataHandler` gives when Clerk's authorization server metadata can't be fetched.

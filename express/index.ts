@@ -14,6 +14,7 @@ import {
   clerkProtectedResourceMetadata,
   failureBody,
   failureHeaders,
+  metadataResponseHeaders,
   metadataUnavailableAnswer,
   methodNotAllowed,
   requestTokenVerifier,
@@ -25,6 +26,7 @@ import {
   type McpAuthFailure,
   McpAuthError,
   fetchAuthorizationServerMetadata,
+  metadataCorsHeaders,
 } from '../server';
 
 declare global {
@@ -261,19 +263,24 @@ function parsedJsonBody(req: express.Request): unknown {
 export function authorizationServerMetadataHandler() {
   // `arguments`, not a rest parameter, so the declared signature still takes no arguments
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
-  return async (_: express.Request, res: express.Response) => {
+  return async (req: express.Request, res: express.Response) => {
+    if (req.method === 'OPTIONS') {
+      res.status(200).set(metadataCorsHeaders).end();
+      return;
+    }
     const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 
     let metadata: unknown;
     try {
       metadata = await fetchAuthorizationServerMetadata({ publishableKey });
     } catch (error) {
+      // The CORS headers, so a browser client can read the error, but not the caching ones metadata gets
       const answer = metadataUnavailableAnswer(error);
-      res.status(answer.status).json(answer.body);
+      res.status(answer.status).set(metadataCorsHeaders).json(answer.body);
       return;
     }
 
-    res.json(metadata);
+    res.set(metadataResponseHeaders).json(metadata);
   };
 }
 
@@ -300,21 +307,25 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
   assertProtectedResourceMetadataOptions(options);
 
   return (req: express.Request, res: express.Response) => {
+    if (req.method === 'OPTIONS') {
+      res.status(200).set(metadataCorsHeaders).end();
+      return;
+    }
     const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
 
     const requestUrl = getRequestUrl(req);
     if (!requestUrl) {
-      res.status(400).json({ error: 'invalid_request' });
+      res.status(400).set(metadataCorsHeaders).json({ error: 'invalid_request' });
       return;
     }
 
     const metadata = clerkProtectedResourceMetadata(options, requestUrl, publishableKey);
     if (!metadata) {
-      res.status(421).json({ error: 'misdirected_request' });
+      res.status(421).set(metadataCorsHeaders).json({ error: 'misdirected_request' });
       return;
     }
 
-    res.json(metadata);
+    res.set(metadataResponseHeaders).json(metadata);
   };
 }
 
