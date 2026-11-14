@@ -12,6 +12,7 @@ import { type ProtectedResourceMetadataOptions, resourceMetadataUrlFor } from '.
 import * as expressAdapter from './express';
 import * as honoAdapter from './hono';
 import * as nextAdapter from './next';
+import { requireAdditionalScopes } from './server';
 
 const WELL_KNOWN = '/.well-known/oauth-protected-resource';
 const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
@@ -668,7 +669,12 @@ type SendPublic = (
 const TOKENS: Record<string, AuthInfo> = {
   'token-1': { token: 'token-1', clientId: 'client-1', scopes: ['profile'] },
 };
-const verifyToken = (token: string) => TOKENS[token];
+// A token `scoped:<scopes>` grants the comma-separated scopes, standing in for the grant a reauthorization returns.
+const verifyToken = (token: string): AuthInfo | undefined => {
+  const scopes = /^scoped:(.*)$/.exec(token)?.[1];
+  if (scopes === undefined) return TOKENS[token];
+  return { token, clientId: 'client-1', scopes: scopes.split(',').filter(Boolean) };
+};
 
 function publicRequestInit({
   method = 'POST',
@@ -889,7 +895,40 @@ describe.each(publicAccessRoutes)('%s insufficient_scope challenge', (_name, sen
     expect(res.body).toEqual({ error: 'insufficient_scope' });
   });
 
-  test('lets a token without only challengeScopes through', async () => {
+  // `email` is not first in `requiredScopes`, so list order alone would put `profile` first
+  test('lists a granted scope first even when requiredScopes lists it later', async () => {
+    const res = await send(
+      { requiredScopes: ['profile', 'email'], challengeScopes: ['projects:read'] },
+      { body, authorization: 'Bearer scoped:email' },
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.challenge).toMatch(
+      /, error="insufficient_scope", scope="email profile projects:read"$/,
+    );
+  });
+
+  // The adapter half of one reauthorization: a token granted the 403's `scope` passes the middleware, and the tool's
+  // `requireAdditionalScopes` check on the auth info the route receives asks for nothing more.
+  test('lets a token granted the 403 scope through with no further tool challenge', async () => {
+    const options = { requiredScopes: ['profile', 'email'], challengeScopes: ['projects:read'] };
+    const first = await send(options, { body, authorization: 'Bearer scoped:email' });
+    const scope = /scope="([^"]*)"$/.exec(first.challenge ?? '')?.[1];
+    expect(first.status).toBe(403);
+    expect(scope).toBe('email profile projects:read');
+
+    const second = await send(options, {
+      body,
+      authorization: `Bearer scoped:${scope?.replaceAll(' ', ',')}`,
+    });
+
+    expect(second.status).toBe(200);
+    const { auth } = second.body as Reached;
+    expect(auth).not.toBeNull();
+    expect(requireAdditionalScopes('projects:read')({ authInfo: auth! })).toBeUndefined();
+  });
+
+  test('lets a token that lacks only challengeScopes entries through', async () => {
     const res = await send(
       { requiredScopes: ['profile'], challengeScopes: ['projects:read'] },
       { body, authorization: 'Bearer token-1' },
