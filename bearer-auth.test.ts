@@ -425,7 +425,7 @@ describe('assertProtectedResourceMetadataOptions', () => {
         properties: { resource: 'https://mcp.example.com/mcp' },
       }),
     ).toThrow(
-      'Clerk error: protectedResourceMetadataHandler properties cannot set resource: it is the URL mcpAuth checks',
+      'Clerk error: protectedResourceMetadataHandler properties cannot set resource: it must be the resourceUrl the metadata describes (RFC 9728 section 3.3)',
     );
   });
 
