@@ -209,11 +209,13 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * Hono middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 and 403 challenges also ask for, and either the `clerkClient` that verifies
- * tokens or a `verifyToken` function. Without `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
+ * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
+ * `verifyToken` function. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
+ * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
+ * through. Without `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
  * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, kept for each key pair. Keep
- * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from `@clerk/backend` must be version 3.19.0 or later,
- * the first with a reliable audience check. `verifyToken` is called
+ * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from
+ * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called
  * with the token and the Hono context, and returns the auth data, or `undefined` to reject it.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
  * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded in the
