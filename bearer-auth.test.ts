@@ -205,6 +205,20 @@ describe('authenticateBearer', () => {
 });
 
 describe('McpAuthError', () => {
+  // The verifier can be the app's own `verifyToken`, so the message must not blame Clerk; the `cause` says who failed
+  test('does not name Clerk when a custom verifyToken throws', async () => {
+    const cause = new Error('database is down');
+    const error = await authenticate({
+      verifyToken: async () => {
+        throw cause;
+      },
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(McpAuthError);
+    expect((error as McpAuthError).message).toBe('MCP access token verification failed');
+    expect((error as McpAuthError).cause).toBe(cause);
+  });
+
   test.each([429, 500, 503, 599])('keeps a %i status from the cause', (status) => {
     expect(new McpAuthError(Object.assign(new Error('unavailable'), { status })).status).toBe(
       status,

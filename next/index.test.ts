@@ -341,6 +341,51 @@ describe('withMcpAuth with Clerk', () => {
 
   beforeEach(() => {
     defaultAuthenticateRequest.mockReset();
+    // The keys `clerkClient` from `@clerk/nextjs/server` reads, which the default client needs
+    vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_123');
+    vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives, as in
+  // Express and Hono. Thrown by `@clerk/backend` once a token arrives, it would be a 500 after the client authorized.
+  test.each([
+    ['CLERK_SECRET_KEY', 'with a token', 'Bearer token-1'],
+    ['CLERK_SECRET_KEY', 'without a token', undefined],
+    ['NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', 'with a token', 'Bearer token-1'],
+    ['NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', 'without a token', undefined],
+  ])(
+    'throws a Clerk error naming %s when it is not set, %s',
+    async (name, _case, authorization) => {
+      vi.stubEnv(name, '');
+      const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
+      nextClerkClient.mockResolvedValue({ authenticateRequest });
+
+      const error = await withMcpAuth(echoAuth, { resourceUrl })(request(authorization)).catch(
+        (thrown: unknown) => thrown,
+      );
+
+      expect(error).not.toBeInstanceOf(McpAuthError);
+      expect((error as Error).message).toBe(
+        `Clerk error: withMcpAuth needs the ${name} environment variable or a clerkClient option`,
+      );
+      expect(authenticateRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  test('does not check the environment for a clerkClient option', async () => {
+    vi.stubEnv('CLERK_SECRET_KEY', '');
+    vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', '');
+    defaultAuthenticateRequest.mockResolvedValue(authenticated([]));
+
+    const res = await withMcpAuth(echoAuth, { resourceUrl, clerkClient })(
+      request('Bearer token-1'),
+    );
+
+    expect(res.status).toBe(200);
   });
 
   test('throws a Clerk error without a resourceUrl, naming the verifyToken alternative', () => {

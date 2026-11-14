@@ -3,6 +3,7 @@ import {
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
   matchResourceUrl,
+  toClerkAuthInfo,
 } from './server';
 
 // RFC 9728 section 2 parameters only: `jwks_uri` would name the protected resource's own keys, not the
@@ -162,5 +163,22 @@ describe('fetchAuthorizationServerMetadata', () => {
     await expect(fetchAuthorizationServerMetadata({ publishableKey })).rejects.toThrow(
       'Clerk error: fetching authorization server metadata from https://clerk.example.com failed with status 404',
     );
+  });
+});
+
+describe('toClerkAuthInfo', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // A request without a valid token is an ordinary outcome, such as `auth()` in a route a signed-out client called,
+  // not an error to log on every such request
+  test('returns undefined for an unauthenticated auth object without logging', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(
+      toClerkAuthInfo({ isAuthenticated: false, tokenType: 'oauth_token' }, 'token'),
+    ).toBeUndefined();
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
