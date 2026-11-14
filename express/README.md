@@ -68,11 +68,12 @@ function createServer() {
   return server;
 }
 
-app.get(
+// `all`, not `get`, so the handlers also answer a browser-based client's CORS preflight
+app.all(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceMetadataHandler(mcpAuthOptions),
 );
-app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
+app.all('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 app.all(
   '/mcp',
   mcpAuth(mcpAuthOptions),
@@ -281,6 +282,8 @@ app.get(
 );
 ```
 
+Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.all` or `app.use`, not `app.get`), each answers the CORS preflight with a `200` and those CORS headers.
+
 ## Authorization Server Metadata
 
 ### `authorizationServerMetadataHandler`
@@ -431,7 +434,7 @@ app.all(
 
 ### CORS for browser-based MCP clients
 
-This package doesn't set CORS headers on `/mcp` or the metadata routes; use Express middleware such as the `cors` package. For the metadata routes, `metadataCorsHeaders` from `@clerk/mcp-tools/server` holds headers that allow any origin. A browser-based client needs the response to expose `WWW-Authenticate` (`Access-Control-Expose-Headers`), or it can't read the `401` challenge ([RFC 6750 section 3](https://datatracker.ietf.org/doc/html/rfc6750#section-3)) that points it to the metadata. It also sends `Authorization`, `Content-Type`, and, after `initialize`, `Mcp-Protocol-Version`, so the preflight must allow those request headers. Mount the CORS middleware before `mcpAuth`, so it answers the `OPTIONS` preflight, which carries no token, and adds its headers to the `401` and `403`:
+The metadata handlers send their own CORS headers, which allow any origin (see [`protectedResourceMetadataHandler`](#protectedresourcemetadatahandler)). `mcpAuth` and `streamableHttpHandler` don't set CORS headers on `/mcp`; use Express middleware such as the `cors` package. A browser-based client needs the response to expose `WWW-Authenticate` (`Access-Control-Expose-Headers`), or it can't read the `401` challenge ([RFC 6750 section 3](https://datatracker.ietf.org/doc/html/rfc6750#section-3)) that points it to the metadata. It also sends `Authorization`, `Content-Type`, and, after `initialize`, `Mcp-Protocol-Version`, so the preflight must allow those request headers. Mount the CORS middleware before `mcpAuth`, so it answers the `OPTIONS` preflight, which carries no token, and adds its headers to the `401` and `403`:
 
 ```ts
 import cors from 'cors';

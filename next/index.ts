@@ -13,6 +13,7 @@ import {
   clerkProtectedResourceMetadata,
   failureBody,
   failureHeaders,
+  metadataResponseHeaders,
   metadataUnavailableAnswer,
   readJsonBody,
   requestTokenVerifier,
@@ -43,13 +44,6 @@ const withMcpAuthOnlyOptionKeys: ReadonlySet<string> = new Set<keyof McpAuthFail
 
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
-
-// The headers of a metadata handler's successful response
-const metadataResponseHeaders = {
-  'Cache-Control': 'max-age=3600',
-  'Content-Type': 'application/json',
-  ...metadataCorsHeaders,
-};
 
 /**
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by

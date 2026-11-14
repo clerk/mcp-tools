@@ -298,78 +298,108 @@ describe('protectedResourceMetadataHandler onAuthFailure', () => {
 const AUTH_SERVER_PATH = '/.well-known/oauth-authorization-server';
 const clerkMetadata = { issuer: 'https://clerk.example.com' };
 
-// Each adapter's metadata handlers answer with the headers they always have: Next.js adds caching and CORS, since a
-// route file has no middleware, and Express and Hono leave CORS to the framework's own middleware.
-const metadataHeaderCases: [string, string, Send, Record<string, string | null>][] = [
+// Every adapter's metadata handlers answer with the same caching and CORS headers, so a browser-based MCP client can
+// read the metadata cross-origin whichever adapter serves it.
+const corsHeaders = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, OPTIONS',
+  'access-control-allow-headers': '*',
+  'access-control-max-age': '86400',
+};
+const metadataHeaders = { ...corsHeaders, 'cache-control': 'max-age=3600' };
+
+/** Sends a request with `method` to `path` on a fresh app serving the handler. */
+type SendMethod = (path: string, method?: string) => Promise<Answer>;
+
+async function sendExpressRaw(app: express.Express, path: string, method = 'GET') {
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const { port } = server.address() as AddressInfo;
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      signal: AbortSignal.timeout(2000),
+    });
+    const text = await res.text();
+    return {
+      status: res.status,
+      challenge: res.headers.get('WWW-Authenticate'),
+      headers: res.headers,
+      body: text ? JSON.parse(text) : null,
+    };
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function rawAnswer(res: Response): Promise<Answer> {
+  const text = await res.text();
+  return {
+    status: res.status,
+    challenge: res.headers.get('WWW-Authenticate'),
+    headers: res.headers,
+    body: text ? JSON.parse(text) : null,
+  };
+}
+
+const metadataHeaderCases: [string, string, SendMethod][] = [
   [
     'express',
     'protectedResourceMetadataHandler',
-    (path) => {
+    (path, method) => {
       const app = express();
       app.use(WELL_KNOWN, expressAdapter.protectedResourceMetadataHandler());
-      return sendExpress(app, path);
+      return sendExpressRaw(app, path, method);
     },
-    { 'access-control-allow-origin': null, 'cache-control': null },
   ],
   [
     'express',
     'authorizationServerMetadataHandler',
-    (path) => {
+    (path, method) => {
       const app = express();
-      app.get(AUTH_SERVER_PATH, expressAdapter.authorizationServerMetadataHandler());
-      return sendExpress(app, path);
+      app.all(AUTH_SERVER_PATH, expressAdapter.authorizationServerMetadataHandler());
+      return sendExpressRaw(app, path, method);
     },
-    { 'access-control-allow-origin': null, 'cache-control': null },
   ],
   [
     'hono',
     'protectedResourceMetadataHandler',
-    async (path) => {
+    async (path, method) => {
       const app = new Hono();
-      app.get('*', honoAdapter.protectedResourceMetadataHandler());
-      return answer(await app.request(`${origin}${path}`), origin);
+      app.all('*', honoAdapter.protectedResourceMetadataHandler());
+      return rawAnswer(await app.request(`${origin}${path}`, { method }));
     },
-    { 'access-control-allow-origin': null, 'cache-control': null },
   ],
   [
     'hono',
     'authorizationServerMetadataHandler',
-    async (path) => {
+    async (path, method) => {
       const app = new Hono();
-      app.get('*', honoAdapter.authorizationServerMetadataHandler());
-      return answer(await app.request(`${origin}${path}`), origin);
+      app.all('*', honoAdapter.authorizationServerMetadataHandler());
+      return rawAnswer(await app.request(`${origin}${path}`, { method }));
     },
-    { 'access-control-allow-origin': null, 'cache-control': null },
   ],
   [
     'next',
     'protectedResourceMetadataHandler',
-    async (path) =>
-      answer(
-        nextAdapter.protectedResourceMetadataHandler()(new Request(`${origin}${path}`)),
-        origin,
+    async (path, method = 'GET') =>
+      rawAnswer(
+        method === 'OPTIONS'
+          ? nextAdapter.metadataCorsHandler()()
+          : nextAdapter.protectedResourceMetadataHandler()(new Request(`${origin}${path}`)),
       ),
-    {
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET, OPTIONS',
-      'access-control-allow-headers': '*',
-      'access-control-max-age': '86400',
-      'cache-control': 'max-age=3600',
-      'content-type': 'application/json',
-    },
   ],
   [
     'next',
     'authorizationServerMetadataHandler',
-    async () => answer(await nextAdapter.authorizationServerMetadataHandler()(), origin),
-    {
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET, OPTIONS',
-      'access-control-allow-headers': '*',
-      'access-control-max-age': '86400',
-      'cache-control': 'max-age=3600',
-      'content-type': 'application/json',
-    },
+    async (_path, method = 'GET') =>
+      rawAnswer(
+        method === 'OPTIONS'
+          ? nextAdapter.metadataCorsHandler()()
+          : await nextAdapter.authorizationServerMetadataHandler()(),
+      ),
   ],
 ];
 
@@ -393,23 +423,69 @@ describe('metadata handler headers', () => {
     delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
   });
 
-  test.each(metadataHeaderCases)('%s %s', async (_adapter, handler, send, expected) => {
-    const path =
-      handler === 'protectedResourceMetadataHandler' ? `${WELL_KNOWN}/mcp` : AUTH_SERVER_PATH;
-    const res = await send(path);
+  const pathOf = (handler: string) =>
+    handler === 'protectedResourceMetadataHandler' ? `${WELL_KNOWN}/mcp` : AUTH_SERVER_PATH;
 
-    expect(res.status).toBe(200);
-    for (const [name, value] of Object.entries(expected)) {
-      expect(res.headers.get(name), name).toBe(value);
+  test.each(metadataHeaderCases)(
+    '%s %s sends the caching and CORS headers',
+    async (_adapter, handler, send) => {
+      const res = await send(pathOf(handler));
+
+      expect(res.status).toBe(200);
+      for (const [name, value] of Object.entries(metadataHeaders)) {
+        expect(res.headers.get(name), name).toBe(value);
+      }
+      expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+      if (handler === 'authorizationServerMetadataHandler') expect(res.body).toEqual(clerkMetadata);
+    },
+  );
+
+  test.each(metadataHeaderCases)(
+    '%s %s answers the CORS preflight',
+    async (_adapter, handler, send) => {
+      const res = await send(pathOf(handler), 'OPTIONS');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toBeNull();
+      for (const [name, value] of Object.entries(corsHeaders)) {
+        expect(res.headers.get(name), name).toBe(value);
+      }
+      expect(res.headers.get('cache-control')).toBeNull();
+    },
+  );
+
+  test.each(
+    metadataHeaderCases.filter(([, handler]) => handler === 'protectedResourceMetadataHandler'),
+  )('%s %s sends the CORS headers, and no caching, with the 421', async (adapter) => {
+    const resourceUrl = ['https://other.example.dev/mcp', 'https://another.example.dev/mcp'];
+    const path = `${WELL_KNOWN}/mcp`;
+    let res: Answer;
+    if (adapter === 'express') {
+      const app = express();
+      app.use(WELL_KNOWN, expressAdapter.protectedResourceMetadataHandler({ resourceUrl }));
+      res = await sendExpressRaw(app, path);
+    } else if (adapter === 'hono') {
+      const app = new Hono();
+      app.get('*', honoAdapter.protectedResourceMetadataHandler({ resourceUrl }));
+      res = await rawAnswer(await app.request(`${origin}${path}`));
+    } else {
+      res = await rawAnswer(
+        nextAdapter.protectedResourceMetadataHandler({ resourceUrl })(
+          new Request(`${origin}${path}`),
+        ),
+      );
     }
-    if (handler === 'authorizationServerMetadataHandler') expect(res.body).toEqual(clerkMetadata);
+
+    expect(res.status).toBe(421);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('cache-control')).toBeNull();
   });
 
   test.each(
     metadataHeaderCases.filter(([, handler]) => handler === 'authorizationServerMetadataHandler'),
   )(
     '%s %s answers a JSON 502 when Clerk metadata cannot be fetched',
-    async (adapter, _handler, send) => {
+    async (_adapter, _handler, send) => {
       vi.mocked(globalThis.fetch).mockImplementation((input, init) =>
         String(input).startsWith('https://clerk.example.com/')
           ? Promise.resolve(new Response('nope', { status: 400 }))
@@ -423,7 +499,7 @@ describe('metadata handler headers', () => {
       expect(res.body).toEqual({ error: 'server_error' });
       // A failure must not be cached like the metadata is
       expect(res.headers.get('cache-control')).toBeNull();
-      if (adapter === 'next') expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(String(log.mock.calls[0]?.[0])).toContain('failed with status 400');
     },
   );
