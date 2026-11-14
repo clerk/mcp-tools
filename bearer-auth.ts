@@ -93,6 +93,16 @@ export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
 };
 
 /**
+ * The `clerkClient` option of every adapter: the Clerk client that verifies tokens, or a function that returns one,
+ * which is called once for each request that is checked, such as to read the keys when a request arrives. Create the
+ * client with both `secretKey` and `publishableKey`: without a publishable key, every request fails. A client from
+ * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
+ */
+export type ClerkClientOption =
+  | ClerkOAuthClient
+  | (() => ClerkOAuthClient | Promise<ClerkOAuthClient>);
+
+/**
  * The options of the Express and Hono `mcpAuth` middleware, for the framework's request type `Req`. Without
  * `verifyToken`, Clerk verifies each token, and `resourceUrl` is required as its audience. With `verifyToken`, that
  * function verifies each token instead, `resourceUrl` is optional, and `clerkClient` is not allowed.
@@ -100,11 +110,11 @@ export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
 export type MiddlewareAuthOptions<Req> =
   | (ClerkAuthOptions & {
       /**
-       * The Clerk client that verifies tokens. Create it with both `secretKey` and `publishableKey`: without a
-       * publishable key, every request fails. A client from `@clerk/backend` must be version 3.19.0 or later, the
-       * first with a reliable audience check.
+       * The Clerk client that verifies tokens, or a function that returns one, called once for each request. Create
+       * the client with both `secretKey` and `publishableKey`: without a publishable key, every request fails. A
+       * client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
        */
-      clerkClient?: ClerkOAuthClient | undefined;
+      clerkClient?: ClerkClientOption | undefined;
       verifyToken?: never;
     })
   | CustomVerifierAuthOptions<Req>;
@@ -595,22 +605,62 @@ export function assertVerifierOrResourceUrl(options: unknown, message: string) {
 }
 
 /**
- * The verifier for the Clerk branch of an entry point's options. Each token is verified with the client `clientFor`
- * returns for the request, with the listed `resourceUrl` for the request's origin as the audience.
- * @param options - The Clerk branch of the options, which always has `resourceUrl`
- * @param clientFor - Returns the Clerk client for a request
- * @param requestUrlOf - Returns the URL a request was made to
- * @returns A verifier that takes the token and the framework's request
+ * Returns the Clerk client for a request in the Clerk branch of an entry point's options: the `clerkClient` option,
+ * checked here, at startup, or the adapter's default without it. A function option is called on each call.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param clerkClient - The `clerkClient` option, unchecked
+ * @param defaultClient - Returns the adapter's default client for a request
+ * @param defaultName - The default client, as the message names it, such as `clerkClient from '@clerk/express'`
+ * @returns A function that resolves the client for a request
  */
-export function clerkTokenVerifier<Req>(
-  { resourceUrl }: ClerkAuthOptions,
-  clientFor: (request: Req) => ClerkOAuthClient | Promise<ClerkOAuthClient>,
+export function clerkClientResolver<Req>(
+  caller: string,
+  clerkClient: unknown,
+  defaultClient: (request: Req) => Promise<ClerkOAuthClient>,
+  defaultName: string,
+): (request: Req) => Promise<ClerkOAuthClient> {
+  if (clerkClient === undefined) return defaultClient;
+  if (typeof clerkClient === 'function') {
+    const resolve = clerkClient as () => ClerkOAuthClient | Promise<ClerkOAuthClient>;
+    return async () => resolve();
+  }
+  if (
+    typeof (clerkClient as Partial<ClerkOAuthClient> | null)?.authenticateRequest !== 'function'
+  ) {
+    throw new Error(
+      `Clerk error: ${caller} takes a clerkClient with authenticateRequest, or a function that returns one. Omit clerkClient to use ${defaultName}`,
+    );
+  }
+  const client = clerkClient as ClerkOAuthClient;
+  return async () => client;
+}
+
+/**
+ * The token verifier for one request, made once the request arrives. With `verifyToken`, it calls that with the token
+ * and the request. Otherwise the Clerk client is resolved here, once for the request and before any token is read,
+ * so a missing client is thrown as it is, on a request with or without a token; thrown by the verifier, it would be
+ * the `cause` of an `McpAuthError`, and only once a token arrived. Each token is then verified with that client, with
+ * the listed `resourceUrl` for the request's origin as the audience.
+ * @param options - The entry point's options
+ * @param clientFor - Returns the Clerk client for a request, from `clerkClientResolver`
+ * @param request - The framework's request or context
+ * @param requestUrlOf - Returns the URL the request was made to
+ * @returns A verifier that takes the token
+ */
+export async function requestTokenVerifier<Req>(
+  options: MiddlewareAuthOptions<Req>,
+  clientFor: (request: Req) => Promise<ClerkOAuthClient>,
+  request: Req,
   requestUrlOf: (request: Req) => string,
-): (token: string, request: Req) => Promise<AuthInfo> {
-  return async (token, request) => {
-    const client = await clientFor(request);
-    return verifyClerkOAuthToken(client, token, audienceFor(resourceUrl, requestUrlOf(request)));
-  };
+): Promise<(token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>> {
+  if (options.verifyToken) {
+    const custom = options.verifyToken;
+    return (token) => custom(token, request);
+  }
+  const client = await clientFor(request);
+  const { resourceUrl } = options;
+  return (token) =>
+    verifyClerkOAuthToken(client, token, audienceFor(resourceUrl, requestUrlOf(request)));
 }
 
 /**

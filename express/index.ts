@@ -10,12 +10,13 @@ import {
   assertServerFactory,
   assertTransportClass,
   authenticateBearer,
+  clerkClientResolver,
   clerkProtectedResourceMetadata,
-  clerkTokenVerifier,
   failureBody,
   failureHeaders,
   metadataUnavailableAnswer,
   methodNotAllowed,
+  requestTokenVerifier,
   requirePublishableKey,
   serverErrorAnswer,
 } from '../bearer-auth';
@@ -83,7 +84,8 @@ interface NodeStreamableHttpTransport {
  * `verifyToken` function. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
  * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
  * through. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
- * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`; pass your own when the keys come from elsewhere. The route doesn't need
+ * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`; pass your own, or a function that returns one, called once for
+ * each request, when the keys come from elsewhere. The route doesn't need
  * `clerkMiddleware()`: this middleware verifies the token itself. Create the client with both `secretKey` and
  * `publishableKey`: without a publishable key, every request fails. A client from `@clerk/backend` must be version
  * 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called with the token and the request,
@@ -123,21 +125,21 @@ interface NodeStreamableHttpTransport {
  */
 export function mcpAuth(options: McpAuthOptions) {
   assertMiddlewareAuthOptions(options);
-  const clerkClientFor = async (): Promise<ClerkOAuthClient> =>
-    options.clerkClient ?? expressClerkClient();
-  const verifyToken =
-    options.verifyToken ??
-    clerkTokenVerifier(
-      options,
-      clerkClientFor,
-      // The middleware answers a request without a usable URL before it verifies a token
-      (req: express.Request) => getRequestUrl(req)!,
-    );
+  const clerkClientFor = clerkClientResolver(
+    'mcpAuth',
+    options.clerkClient,
+    expressClerkClient,
+    "clerkClient from '@clerk/express'",
+  );
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
-    // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
-    if (!options.verifyToken) await clerkClientFor();
+    const verifyToken = await requestTokenVerifier(
+      options,
+      clerkClientFor,
+      req,
+      // The middleware answers a request without a usable URL before it verifies a token
+      (request: express.Request) => getRequestUrl(request)!,
+    );
 
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
     // error, or derive a challenge for `http://undefined`
@@ -160,7 +162,7 @@ export function mcpAuth(options: McpAuthOptions) {
         publicAccess: options.publicAccess,
         method: req.method,
         body: () => parsedJsonBody(req),
-        verifyToken: (token) => verifyToken(token, req),
+        verifyToken,
       });
     } catch (error) {
       if (!(error instanceof McpAuthError)) throw error;

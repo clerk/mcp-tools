@@ -767,6 +767,113 @@ describe.each(clerkRoutes)(
   },
 );
 
+// The `clerkClient` option has one shape on every adapter: a client, or a function that returns one
+const authenticatedState = {
+  isAuthenticated: true,
+  toAuth: () => ({
+    isAuthenticated: true,
+    tokenType: 'oauth_token',
+    id: 'oat_1',
+    subject: 'user-1',
+    getToken: async () => 't',
+    clientId: 'client-1',
+    scopes: [],
+    userId: 'user-1',
+  }),
+};
+
+const clerkClientRoutes: [
+  string,
+  (clerkClient: unknown, authorization: string | undefined) => Promise<number>,
+][] = [
+  [
+    'express',
+    async (clerkClient, authorization) => {
+      const app = express();
+      app.post(
+        '/mcp',
+        expressAdapter.mcpAuth({
+          resourceUrl: clerkResourceUrl,
+          clerkClient: clerkClient as expressAdapter.ClerkOAuthClient,
+        }),
+        (_req, res) => {
+          res.json({ ok: true });
+        },
+      );
+      return (await sendExpress(app, '/mcp', { method: 'POST', authorization })).status;
+    },
+  ],
+  [
+    'hono',
+    async (clerkClient, authorization) => {
+      const app = new Hono();
+      app.post(
+        '/mcp',
+        honoAdapter.mcpAuth({
+          resourceUrl: clerkResourceUrl,
+          clerkClient: clerkClient as honoAdapter.ClerkOAuthClient,
+        }),
+        (c) => c.json({ ok: true }),
+      );
+      const res = await app.request(`${origin}/mcp`, {
+        method: 'POST',
+        headers: authorization ? { authorization } : {},
+      });
+      return res.status;
+    },
+  ],
+  [
+    'next',
+    async (clerkClient, authorization) => {
+      const handler = nextAdapter.withMcpAuth(() => Response.json({ ok: true }), {
+        resourceUrl: clerkResourceUrl,
+        clerkClient: clerkClient as nextAdapter.ClerkOAuthClient,
+      });
+      const res = await handler(
+        new Request(`${origin}/mcp`, {
+          method: 'POST',
+          headers: authorization ? { authorization } : {},
+        }),
+      );
+      return res.status;
+    },
+  ],
+];
+
+describe.each(clerkClientRoutes)('%s clerkClient option', (_name, send) => {
+  test('verifies with a client object', async () => {
+    const client = { authenticateRequest: vi.fn().mockResolvedValue(authenticatedState) };
+
+    expect(await send(client, 'Bearer t')).toBe(200);
+    expect(client.authenticateRequest).toHaveBeenCalledOnce();
+  });
+
+  test.each([
+    ['with a token', 'Bearer t', 200],
+    ['without a token', undefined, 401],
+  ])(
+    'calls a function that returns the client once per request %s',
+    async (_case, authorization, status) => {
+      const client = { authenticateRequest: vi.fn().mockResolvedValue(authenticatedState) };
+      const resolve = vi.fn(async () => client);
+
+      expect(await send(resolve, authorization)).toBe(status);
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(client.authenticateRequest).toHaveBeenCalledTimes(authorization ? 1 : 0);
+    },
+  );
+
+  test.each([
+    ['an object without authenticateRequest', {}],
+    ['null', null],
+    ['a string', 'sk_test_123'],
+  ])('throws at setup for %s', async (_case, clerkClient) => {
+    await expect(send(clerkClient, 'Bearer t')).rejects.toThrow(
+      /^Clerk error: .* takes a clerkClient with authenticateRequest, or a function that returns one\. Omit clerkClient to use /,
+    );
+  });
+});
+
 // Two `Authorization` headers carry two credentials, and none of them is the one to verify. Fetch `Headers` join them
 // into one value, which the Hono and Next.js adapters see; Node's `http` keeps only the first in `req.headers`.
 const verifyFirst = (token: string): AuthInfo | undefined =>
