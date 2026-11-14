@@ -15,11 +15,13 @@ import {
   metadataUnavailableAnswer,
   readJsonBody,
   requirePublishableKey,
+  serverErrorAnswer,
   verifyClerkOAuthToken,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
+  McpAuthError,
   metadataCorsHeaders,
   fetchAuthorizationServerMetadata,
 } from '../server';
@@ -181,9 +183,10 @@ const withMcpAuthCallForm =
  * @returns The wrapped route handler. A missing or rejected token gets a 401 challenge, and a token without
  * `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler` reads it,
  * with `resourceMetadataUrl` added for the SDK's scope challenges. Tools read it as `ctx.http?.authInfo`, narrowed with
- * `isClerkAuthInfo` before they read Clerk fields such as `extra.userId`. When Clerk cannot verify an opaque token at all,
- * the handler throws, so Next.js answers with a 500 instead of a challenge that would make the client discard a valid
- * token. Without a `clerkClient` option, every request throws a `Clerk error:` naming `CLERK_SECRET_KEY` or
+ * `isClerkAuthInfo` before they read Clerk fields such as `extra.userId`. A token that could not be verified at all,
+ * such as during a Clerk outage, gets a JSON server error, `{ "error": "server_error" }`, with Clerk's 429 or 5xx status
+ * or a 500, instead of a challenge that would make the client discard a valid token, and the `McpAuthError` is logged
+ * with `console.error`. Without a `clerkClient` option, every request throws a `Clerk error:` naming `CLERK_SECRET_KEY` or
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` when it is not set, or asking to install `@clerk/nextjs` when it can't be loaded.
  * @example
  * ```ts
@@ -237,18 +240,28 @@ export function withMcpAuth(
       verifyToken = (token) => verifyClerkOAuthToken(client, token, audienceFor(audience, req.url));
     }
 
-    const result = await authenticateBearer({
-      authorization: req.headers.get('authorization') ?? undefined,
-      requestUrl: req.url,
-      resourceUrl: options.resourceUrl,
-      requiredScopes: options.requiredScopes,
-      challengeScopes: options.challengeScopes,
-      publicAccess: options.publicAccess,
-      method: req.method,
-      // A clone, so the route handler can still read the request
-      body: () => readJsonBody(req),
-      verifyToken,
-    });
+    let result: Awaited<ReturnType<typeof authenticateBearer>>;
+    try {
+      result = await authenticateBearer({
+        authorization: req.headers.get('authorization') ?? undefined,
+        requestUrl: req.url,
+        resourceUrl: options.resourceUrl,
+        requiredScopes: options.requiredScopes,
+        challengeScopes: options.challengeScopes,
+        publicAccess: options.publicAccess,
+        method: req.method,
+        // A clone, so the route handler can still read the request
+        body: () => readJsonBody(req),
+        verifyToken,
+      });
+    } catch (error) {
+      if (!(error instanceof McpAuthError)) throw error;
+      // Answered here with the status and body the Express and Hono adapters send. Next.js's `onRequestError` no
+      // longer sees it, so it is logged with `console.error`, as those adapters log it.
+      const answer = serverErrorAnswer(error);
+      console.error(error);
+      return Response.json(answer.body, { status: answer.status });
+    }
 
     if (!result.ok) {
       const { failure } = result;

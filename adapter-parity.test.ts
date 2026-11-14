@@ -643,6 +643,130 @@ describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) =
   });
 });
 
+// The Clerk branch of each adapter, given a client whose `authenticateRequest` answers with `state`
+type SendClerk = (state: unknown) => ReturnType<Send>;
+
+const clerkResourceUrl = `${origin}/mcp`;
+const clerkClientAnswering = (state: unknown) => ({
+  authenticateRequest: vi.fn().mockResolvedValue(state),
+});
+
+const clerkRoutes: [string, SendClerk][] = [
+  [
+    'express',
+    (state) => {
+      const app = express();
+      app.post(
+        '/mcp',
+        expressAdapter.mcpAuth({
+          resourceUrl: clerkResourceUrl,
+          clerkClient: clerkClientAnswering(state),
+        }),
+        (_req, res) => {
+          res.json({ ok: true });
+        },
+      );
+      return sendExpress(app, '/mcp', { method: 'POST', authorization: 'Bearer t' });
+    },
+  ],
+  [
+    'hono',
+    async (state) => {
+      // No `app.onError`: Hono's default handler answers with the error's `getResponse()`
+      const app = new Hono();
+      app.post(
+        '/mcp',
+        honoAdapter.mcpAuth({
+          resourceUrl: clerkResourceUrl,
+          clerkClient: clerkClientAnswering(state),
+        }),
+        (c) => c.json({ ok: true }),
+      );
+      return answer(
+        await app.request(`${origin}/mcp`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer t' },
+        }),
+        origin,
+      );
+    },
+  ],
+  [
+    'next',
+    async (state) => {
+      const handler = nextAdapter.withMcpAuth(() => Response.json({ ok: true }), {
+        resourceUrl: clerkResourceUrl,
+        clerkClient: clerkClientAnswering(state),
+      });
+      return answer(
+        await handler(
+          new Request(`${origin}/mcp`, { method: 'POST', headers: { authorization: 'Bearer t' } }),
+        ),
+        origin,
+      );
+    },
+  ],
+];
+
+// How `@clerk/backend` reports a token it could not verify at all, with the status each adapter answers. Releases
+// after 3.27.0 report a JWKS that can't be loaded as `jwk-remote-failed-to-load`; 3.27.0 reports it as
+// `token-verification-failed` with an `Error loading Clerk JWKS` message.
+const unverifiable: [string, string, number][] = [
+  [
+    'jwk-remote-failed-to-load',
+    'Error loading Clerk JWKS from https://api.clerk.com/v1/jwks with code=503 (code=jwk-remote-failed-to-load, status=n/a)',
+    500,
+  ],
+  ['jwk-remote-failed-to-load', 'fetch failed (code=jwk-remote-failed-to-load, status=n/a)', 500],
+  [
+    'token-verification-failed',
+    'Error loading Clerk JWKS from https://api.clerk.com/v1/jwks with code=503 (code=token-verification-failed, status=n/a)',
+    500,
+  ],
+  ['unexpected-error', 'Unexpected error (code=unexpected-error, status=429)', 429],
+  ['unexpected-error', 'Unexpected error (code=unexpected-error, status=503)', 503],
+];
+
+describe.each(clerkRoutes)(
+  '%s auth entry point when Clerk cannot verify the token',
+  (_name, send) => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    test.each(unverifiable)(
+      'answers %s (%s) with a JSON %i and logs the McpAuthError',
+      async (reason, message, status) => {
+        const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        const res = await send({ isAuthenticated: false, reason, message });
+
+        expect(res.status).toBe(status);
+        expect(res.body).toEqual({ error: 'server_error' });
+        expect(res.challenge).toBeNull();
+        expect(log).toHaveBeenCalledOnce();
+        expect(log.mock.calls[0]?.[0]).toMatchObject({
+          name: 'McpAuthError',
+          reason: 'verification_failed',
+          cause: { code: reason },
+        });
+      },
+    );
+
+    // RFC 6750 section 3.1: a token Clerk rejects is `invalid_token`, so the client may get a new one
+    test('answers a token Clerk rejects with the invalid_token challenge', async () => {
+      const res = await send({
+        isAuthenticated: false,
+        reason: 'token-verification-failed',
+        message: 'JWT signature is invalid. (code=token-verification-failed, status=n/a)',
+      });
+
+      expect(res.status).toBe(401);
+      expect(res.challenge).toContain('error="invalid_token"');
+    });
+  },
+);
+
 // Two `Authorization` headers carry two credentials, and none of them is the one to verify. Fetch `Headers` join them
 // into one value, which the Hono and Next.js adapters see; Node's `http` keeps only the first in `req.headers`.
 const verifyFirst = (token: string): AuthInfo | undefined =>
