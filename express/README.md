@@ -107,7 +107,11 @@ const resourceUrl = 'https://mcp.example.com/mcp';
 // Return `undefined` to reject the token
 async function verifyToken(token: string): Promise<AuthInfo | undefined> {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as jwt.JwtPayload;
+    // Check the audience: MCP servers must only accept tokens issued for them
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
+      audience: resourceUrl,
+      algorithms: ['HS256'],
+    }) as jwt.JwtPayload;
     return {
       token,
       clientId: decoded.azp,
@@ -197,7 +201,8 @@ import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
-  // Your custom token verification logic
+  // Your custom token verification logic. It must check that the token's audience is this server's URL: MCP servers
+  // must only accept tokens issued for them
   const user = await verifyMyToken(token);
   if (!user) return undefined; // Return undefined for invalid tokens
   // Return the auth info: `scopes` is what `requiredScopes` is checked against
@@ -212,20 +217,20 @@ app.all(
 );
 ```
 
-Earlier versions took the verifier as the first argument, `mcpAuth(verifyToken, options)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
+Version 0.9.0 took the verifier alone, as `await mcpAuth(verifyToken)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
 The middleware will:
 
 - Check for the `Authorization` header
 - Extract the Bearer token
 - Verify it with Clerk, or call your `verifyToken` function
-- Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected
+- Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, or if the request has more than one `Authorization` header
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
 - Add the auth data to `req.auth` if successful
 
-The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access.
+The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access. It asks for those scopes by name, so enable each `requiredScopes` and `challengeScopes` entry for the OAuth application in Clerk: a scope it can't be granted is missing from the new token too, and the client gets the `403` again.
 
-A token Clerk rejects gets a `401` challenge. If Clerk cannot verify a token at all, for example during an outage, when Clerk rate-limits the server, with an invalid secret key, or when Clerk cannot load the signing keys for a JWT access token, the middleware answers with a JSON `{"error":"server_error"}` and the `429` or `5xx` status Clerk's Backend API answered with, or `500`, so clients keep their tokens instead of restarting authorization. It never sends Express's HTML error page, which shows the stack trace outside production. A Backend API `4xx` other than `401` and `429` means Clerk refused the token, so it gets the `401` challenge.
+A token Clerk rejects gets a `401` challenge. If Clerk cannot verify an opaque token at all, for example during an outage, when Clerk rate-limits the server, or with an invalid secret key, the middleware answers with a JSON `{"error":"server_error"}` and the `429` or `5xx` status Clerk's Backend API answered with, or `500`, so clients keep their tokens instead of restarting authorization. It never sends Express's HTML error page, which shows the stack trace outside production. A Backend API `4xx` other than `401` and `429` means Clerk refused the token, so it gets the `401` challenge. A JWT access token gets that server error only when the request for Clerk's signing keys is answered with an error status and a JSON body. `@clerk/backend` through 3.27.0 reports every other failure to load the signing keys, such as an invalid secret key, a network error, or an error page that is not JSON, as it reports an invalid signature, so the client gets the `401` `invalid_token` challenge and authorizes again.
 
 A request the middleware answers itself, with a `401` or `403` challenge or a `421`, gets `res.locals.mcpAuthFailure`, whose `reason` is `missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`, for example for logging from a `res.on('finish')` listener. When `verifyToken` throws, or Clerk cannot verify the token, the middleware sends that JSON answer and logs an `McpAuthError` with `console.error`, with `reason: 'verification_failed'` and the thrown error as its `cause`. It does not pass the error to your error middleware: Express's default error handler would then close a connection whose request body is still uploading, and the client would get a reset instead of the answer. Under Clerk verification, what Clerk reported is an `McpTokenVerificationError`, whose `code` is Clerk's reason, such as `token-verification-failed`, and whose `message` is Clerk's message, which says which check failed. It is the `cause` of an `invalid_token` failure for a token Clerk rejected, and the `cause` of the `McpAuthError` when Clerk answered but could not verify the token. Your own `verifyToken` can throw one to reject a token with a code. It is never sent to the client.
 
@@ -233,7 +238,7 @@ Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add y
 
 ### Public access
 
-`publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected. It reads the body that `express.json()` parsed, so mount that middleware before `mcpAuth`. Without it, a JSON request without a token throws a `Clerk error:`. `express.json()` reads the whole body before `mcpAuth` sees it, so its `limit` is what bounds the bytes a client without a token can send: set `express.json({ limit })` to the size you accept from anonymous clients. Its 100kb default is below the 1 MiB that `publicAccess` accepts. `mcpAuth` still treats a body over 1 MiB as not public, but for a chunked body it measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so that check is not an exact byte limit.
+`publicAccess` lets a client connect and call the tools you list without a token, and sign in only when it reaches something protected. It reads the body that `express.json()` parsed, so mount that middleware before `mcpAuth`. Only a body sent as `application/json` can be public: a form that `express.urlencoded()` parsed gets the `401`, as it does in the Hono and Next.js adapters. Without it, a JSON request without a token throws a `Clerk error:`. `express.json()` reads the whole body before `mcpAuth` sees it, so its `limit` is what bounds the bytes a client without a token can send: set `express.json({ limit })` to the size you accept from anonymous clients. Its 100kb default is below the 1 MiB that `publicAccess` accepts. `mcpAuth` still treats a body over 1 MiB as not public, but for a chunked body it measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so that check is not an exact byte limit.
 
 ```ts
 app.use(express.json());
@@ -355,7 +360,11 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as jwt.JwtPayload;
+    // Check the audience: MCP servers must only accept tokens issued for them
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
+      audience: 'https://mcp.example.com/mcp',
+      algorithms: ['HS256'],
+    }) as jwt.JwtPayload;
     return {
       token,
       clientId: decoded.azp,

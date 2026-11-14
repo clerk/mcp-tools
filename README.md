@@ -67,7 +67,7 @@ If you are using [Clerk](https://clerk.com) for authentication in your app, pass
 import { generateProtectedResourceMetadata } from '@clerk/mcp-tools/server';
 
 const result = generateProtectedResourceMetadata({
-  publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+  publishableKey: process.env.CLERK_PUBLISHABLE_KEY!,
   resourceUrl: 'https://myapp.com/current-route',
   properties: { resource_documentation: 'https://myapp.com/docs/mcp' },
 });
@@ -90,7 +90,7 @@ import { fetchAuthorizationServerMetadata } from '@clerk/mcp-tools/server';
 
 // Return this result from <your-app>/.well-known/oauth-authorization-server
 const result = await fetchAuthorizationServerMetadata({
-  publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+  publishableKey: process.env.CLERK_PUBLISHABLE_KEY!,
 });
 ```
 
