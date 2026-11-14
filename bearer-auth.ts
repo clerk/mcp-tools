@@ -23,8 +23,11 @@ export type BaseAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
-   * origin gets a 421. The request's origin is the one the app sees, so behind a proxy that terminates TLS or rewrites
-   * `Host`, list those URLs or, in Express, set `trust proxy`. The challenge's `resource_metadata` is derived from it.
+   * origin gets a 421. A single URL is used whatever origin the request has, so it works behind a proxy as it is. Only
+   * a list is matched against the request's origin, which is the one the app sees: behind a proxy that terminates TLS
+   * or rewrites `Host`, rebuild it from `X-Forwarded-*` headers you trust (in Express, set `trust proxy`). Never list
+   * the internal URLs: each listed URL is an audience and a metadata `resource`, and clients connect to the public one.
+   * The challenge's `resource_metadata` is derived from it.
    * With `verifyToken` it can be omitted, and it is then derived from the incoming request, which can differ from the
    * public URL behind a proxy. Without `verifyToken` it is required: Clerk rejects a token whose `aud` claim does not
    * include the URL for the request's origin, so a token issued for one listed URL does not pass on another. Pass the
@@ -968,7 +971,10 @@ const verificationUnavailable: ReadonlySet<string> = new Set<MachineTokenVerific
   'secret-key-invalid',
 ]);
 
-// Clerk keeps the Backend API's status only in the message, as `Unexpected error (code=unexpected-error, status=503)`
+// Clerk keeps the Backend API's status only in the message, as `Unexpected error (code=unexpected-error, status=503)`.
+// The pattern mirrors `MachineTokenVerificationError.getFullMessage()` in `@clerk/backend` 3.27.0,
+// `dist/chunk-U3UVQERL.mjs:73`: `${this.message} (code=${this.code}, status=${this.status || "n/a"})`, which
+// `handleMachineError` (`dist/chunk-CSXNUYCW.mjs:7801`) makes the request state's `message`.
 function clerkStatus(message: string | undefined): number | undefined {
   const status = /\(code=[^,()]*, status=(\d{3})\)$/.exec(message ?? '')?.[1];
   return status === undefined ? undefined : Number(status);
@@ -976,7 +982,11 @@ function clerkStatus(message: string | undefined): number | undefined {
 
 // Whether Clerk could not verify the token at all, so the client must keep it. A Backend API 4xx other than 401
 // (an invalid secret key) and 429 (rate limiting) is Clerk refusing the token. A JWT access token whose JWKS can't be
-// fetched gets the reason an invalid signature gets, so only the message tells the two apart.
+// fetched gets the reason an invalid signature gets, so only the message tells the two apart. The prefix mirrors
+// `fetchJWKSFromBAPI` in `@clerk/backend` 3.27.0, `dist/chunk-CSXNUYCW.mjs:1979`:
+// `Error loading Clerk JWKS from ${url.href} with code=${response.status}`, whose `jwk-remote-failed-to-load` reason
+// `resolveKeyAndVerifyJwt` (`:2111-2117`) replaces with `token-verification-failed`, keeping the message. Once a
+// release of `@clerk/backend` keeps that reason, match it instead of the message.
 function isVerificationUnavailable(reason: string, message: string, status: number | undefined) {
   if (reason === 'token-verification-failed') return message.startsWith('Error loading Clerk JWKS');
   if (!verificationUnavailable.has(reason)) return false;
