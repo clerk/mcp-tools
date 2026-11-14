@@ -10,13 +10,14 @@ import {
   assertServerFactory,
   assertTransportClass,
   authenticateBearer,
+  clerkClientResolver,
   clerkProtectedResourceMetadata,
-  clerkTokenVerifier,
   failureBody,
   failureHeaders,
   metadataUnavailableAnswer,
   methodNotAllowed,
   readJsonBody,
+  requestTokenVerifier,
   requirePublishableKey,
   serverErrorAnswer,
 } from '../bearer-auth';
@@ -212,7 +213,8 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
  * `verifyToken` function. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
  * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
- * through. Without `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
+ * through. `clerkClient` is a client, or a function that returns one, called once for each request. Without
+ * `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
  * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, kept for each key pair. Keep
  * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from
  * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called
@@ -241,15 +243,20 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  */
 export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   assertMiddlewareAuthOptions(options);
-  const clerkClientFor = async (c: Context): Promise<ClerkOAuthClient> =>
-    options.clerkClient ?? envClerkClient(requireClerkKeys(c));
-  const verifyToken =
-    options.verifyToken ?? clerkTokenVerifier(options, clerkClientFor, (c: Context) => c.req.url);
+  const clerkClientFor = clerkClientResolver(
+    'mcpAuth',
+    options.clerkClient,
+    (c: Context) => envClerkClient(requireClerkKeys(c)),
+    'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY',
+  );
 
   return async (c: Context, next: Next) => {
-    // A missing Clerk client is a mistake in the app's setup, so it is thrown as it is, on a request with or without
-    // a token. Thrown by the verifier, it would be the `cause` of an `McpAuthError`, and only once a token arrives.
-    if (!options.verifyToken) await clerkClientFor(c);
+    const verifyToken = await requestTokenVerifier(
+      options,
+      clerkClientFor,
+      c,
+      (ctx) => ctx.req.url,
+    );
 
     let result: Awaited<ReturnType<typeof authenticateBearer>>;
     try {
@@ -263,7 +270,7 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
         method: c.req.method,
         // A clone, so the MCP transport can still read the request
         body: async () => readJsonBody(await requestWithBody(c)),
-        verifyToken: (token) => verifyToken(token, c),
+        verifyToken,
       });
     } catch (error) {
       if (!(error instanceof McpAuthError)) throw error;
