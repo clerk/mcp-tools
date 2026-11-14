@@ -209,8 +209,8 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * Hono middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
  * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
- * `verifyToken` function. Without `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
+ * needs, the `challengeScopes` the 401 and 403 challenges also ask for, and either the `clerkClient` that verifies
+ * tokens or a `verifyToken` function. Without `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
  * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, kept for each key pair. Keep
  * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from `@clerk/backend` must be version 3.19.0 or later,
  * the first with a reliable audience check. `verifyToken` is called
