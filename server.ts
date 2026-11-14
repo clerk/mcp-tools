@@ -321,7 +321,10 @@ export function toClerkAuthInfo(
     token,
     scopes: auth.scopes,
     clientId: auth.clientId,
-    // The checks above guarantee every field `ClerkOAuthAuth` types; the object stored is still the one Clerk returned
+    // The checks above guarantee every field `ClerkOAuthAuth` types; the object stored is still the one Clerk returned.
+    // `getToken` resolves to the token: this is an authenticated `oauth_token` auth object, whose `getToken` Clerk
+    // types as `() => Promise<string>`. The parameter's type only allows `null` because it also takes the
+    // unauthenticated and session objects `auth()` can return, which never get here.
     extra: { userId: auth.userId, verifiedBy: 'clerk', auth: auth as ClerkOAuthAuth },
   };
 }

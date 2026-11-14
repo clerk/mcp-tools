@@ -3,11 +3,7 @@ import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotoco
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 // Internals the public entry no longer exposes
-import {
-  browserSessionErrorMessage,
-  browserSessionToolText,
-  validateBrowserSessionOptions,
-} from './create-browser-session';
+import { browserSessionErrorMessage } from './create-browser-session';
 import {
   createBrowserSession,
   BrowserSessionError,
@@ -496,7 +492,9 @@ describe('createBrowserSession', () => {
   });
 });
 
-describe('validateBrowserSessionOptions', () => {
+// `createBrowserSessionTool` and `createBrowserSession` check their options the same way, so a tool built at module
+// scope fails fast on a bad configuration
+describe('createBrowserSessionTool options', () => {
   const base = {
     secretKey: SECRET,
     destinationUrl: 'https://app.example.com/',
@@ -504,9 +502,9 @@ describe('validateBrowserSessionOptions', () => {
   };
 
   test('accepts valid options, including loopback http', () => {
-    expect(() => validateBrowserSessionOptions(base)).not.toThrow();
+    expect(() => createBrowserSessionTool(base)).not.toThrow();
     expect(() =>
-      validateBrowserSessionOptions({
+      createBrowserSessionTool({
         ...base,
         destinationUrl: 'http://localhost:3000/',
         apiUrl: 'http://127.0.0.1:8080',
@@ -538,12 +536,12 @@ describe('validateBrowserSessionOptions', () => {
     ['non-function fetch', { fetch: 123 as unknown as typeof fetch }],
     ['non-boolean restricted', { restricted: 'yes' as unknown as boolean }],
   ])('rejects %s', (_name, patch) => {
-    expect(() => validateBrowserSessionOptions({ ...base, ...patch })).toThrow(/^Clerk error: /);
+    expect(() => createBrowserSessionTool({ ...base, ...patch })).toThrow(/^Clerk error: /);
   });
 
   test('accepts scopes that only contain the letters of a key prefix', () => {
     expect(() =>
-      validateBrowserSessionOptions({ ...base, requiredScopes: ['desk:read', 'task_list'] }),
+      createBrowserSessionTool({ ...base, requiredScopes: ['desk:read', 'task_list'] }),
     ).not.toThrow();
   });
 
@@ -635,14 +633,19 @@ describe('createBrowserSessionTool', () => {
     'refuses destination %j in the text helpers',
     (destinationUrl) => {
       expect(() => browserSessionInstructions(destinationUrl)).toThrow(/^Clerk error: /);
-      expect(() => browserSessionToolText(destinationUrl)).toThrow(/^Clerk error: /);
+      expect(() =>
+        createBrowserSessionTool({ secretKey: SECRET, destinationUrl, requiredScopes: [] }),
+      ).toThrow(/^Clerk error: /);
     },
   );
 
   test('keeps the port of a loopback destination', () => {
-    expect(browserSessionToolText('http://localhost:3000/').title).toBe(
-      'Open localhost:3000 signed in',
-    );
+    const [, config] = createBrowserSessionTool({
+      secretKey: SECRET,
+      destinationUrl: 'http://localhost:3000/',
+      requiredScopes: [],
+    });
+    expect(config.title).toBe('Open localhost:3000 signed in');
   });
 
   describe('required scopes', () => {
