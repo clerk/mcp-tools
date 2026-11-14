@@ -2,7 +2,7 @@
 import express from 'express';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import type { AddressInfo } from 'node:net';
-import type { Server } from 'node:http';
+import { type Server, request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 vi.mock('@clerk/express', () => ({ clerkClient: { authenticateRequest: vi.fn() } }));
@@ -643,6 +643,95 @@ describe.each(mcpRoutes)('%s auth entry point with verifyToken', (_name, send) =
   });
 });
 
+// Two `Authorization` headers carry two credentials, and none of them is the one to verify. Fetch `Headers` join them
+// into one value, which the Hono and Next.js adapters see; Node's `http` keeps only the first in `req.headers`.
+const verifyFirst = (token: string): AuthInfo | undefined =>
+  token === 'first' ? { token, clientId: 'client-1', scopes: [] } : undefined;
+const duplicateAuthorization = ['Bearer first', 'Bearer second'];
+
+function fetchHeadersWithDuplicates() {
+  const headers = new Headers();
+  for (const value of duplicateAuthorization) headers.append('authorization', value);
+  return headers;
+}
+
+const duplicateAuthorizationRoutes: [
+  string,
+  () => Promise<{ status: number; challenge: string | null }>,
+][] = [
+  [
+    'express',
+    async () => {
+      const app = express();
+      app.post('/mcp', expressAdapter.mcpAuth({ verifyToken: verifyFirst }), (_req, res) => {
+        res.json({ ok: true });
+      });
+      const server: Server = await new Promise((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s));
+      });
+      try {
+        const { port } = server.address() as AddressInfo;
+        // `fetch` would join the headers, so the request is sent with `http`, which sends each value on its own line
+        return await new Promise((resolve, reject) => {
+          const req = httpRequest(
+            { host: '127.0.0.1', port, method: 'POST', path: '/mcp' },
+            (res) => {
+              res.resume();
+              res.on('end', () =>
+                resolve({
+                  status: res.statusCode ?? 0,
+                  challenge: (res.headers['www-authenticate'] as string | undefined) ?? null,
+                }),
+              );
+            },
+          );
+          req.setHeader('authorization', duplicateAuthorization);
+          req.on('error', reject);
+          req.end();
+        });
+      } finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+  ],
+  [
+    'hono',
+    async () => {
+      const app = new Hono();
+      app.post('/mcp', honoAdapter.mcpAuth({ verifyToken: verifyFirst }), (c) =>
+        c.json({ ok: true }),
+      );
+      const res = await app.request(`${origin}/mcp`, {
+        method: 'POST',
+        headers: fetchHeadersWithDuplicates(),
+      });
+      return { status: res.status, challenge: res.headers.get('WWW-Authenticate') };
+    },
+  ],
+  [
+    'next',
+    async () => {
+      const handler = nextAdapter.withMcpAuth(() => Response.json({ ok: true }), {
+        verifyToken: verifyFirst,
+      });
+      const res = await handler(
+        new Request(`${origin}/mcp`, { method: 'POST', headers: fetchHeadersWithDuplicates() }),
+      );
+      return { status: res.status, challenge: res.headers.get('WWW-Authenticate') };
+    },
+  ],
+];
+
+describe.each(duplicateAuthorizationRoutes)('%s duplicate Authorization headers', (_name, send) => {
+  test('challenges the request as malformed instead of verifying one of them', async () => {
+    const res = await send();
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toMatch(/^Bearer resource_metadata="[^"]+"$/);
+  });
+});
+
 // `publicAccess`: what a request without a token may reach, and what it gets when it may not. The same routes carry
 // the scope options for the scope challenge.
 type PublicAccessOptions = {
@@ -707,6 +796,8 @@ const publicAccessRoutes: [string, SendPublic][] = [
     async (options, init = {}) => {
       const app = express();
       app.use(express.json());
+      // An app that also takes form posts on other routes, so a form-encoded body arrives parsed
+      app.use(express.urlencoded());
       app.all('/mcp', expressAdapter.mcpAuth({ verifyToken, ...options }), (req, res) => {
         res.json({
           reached: true,
@@ -820,6 +911,18 @@ describe.each(publicAccessRoutes)('%s publicAccess', (_name, send) => {
     const res = await send(
       { publicAccess },
       { body: JSON.stringify(rpc('initialize')), contentType: 'text/plain' },
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  test('challenges a form-encoded message, even when the app parses form bodies', async () => {
+    const res = await send(
+      { publicAccess },
+      {
+        body: 'jsonrpc=2.0&id=1&method=initialize',
+        contentType: 'application/x-www-form-urlencoded',
+      },
     );
 
     expect(res.status).toBe(401);

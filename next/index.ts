@@ -183,7 +183,8 @@ const withMcpAuthCallForm =
  * with `resourceMetadataUrl` added for the SDK's scope challenges. Tools read it as `ctx.http?.authInfo`, narrowed with
  * `isClerkAuthInfo` before they read Clerk fields such as `extra.userId`. When Clerk cannot verify an opaque token at all,
  * the handler throws, so Next.js answers with a 500 instead of a challenge that would make the client discard a valid
- * token. Without a `clerkClient` option, every request throws a `Clerk error:` when `@clerk/nextjs` can't be loaded.
+ * token. Without a `clerkClient` option, every request throws a `Clerk error:` naming `CLERK_SECRET_KEY` or
+ * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` when it is not set, or asking to install `@clerk/nextjs` when it can't be loaded.
  * @example
  * ```ts
  * import { withMcpAuth } from "@clerk/mcp-tools/next";
@@ -293,7 +294,8 @@ function clerkClientResolver({ clerkClient }: Pick<McpAuthOptions, 'clerkClient'
  * loaded with `import()` inside `try`: webpack and Turbopack fail the build on a bare reference to a package that
  * isn't installed, but only warn on an `import()` inside `try`, and leave it to fail at run time.
  * @returns The client. It throws a `Clerk error:` asking to install `@clerk/nextjs` when the package can't be loaded,
- * with the load error as the `cause`.
+ * with the load error as the `cause`, or naming `CLERK_SECRET_KEY` or `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` when it is
+ * not set.
  */
 async function nextClerkClient(): Promise<ClerkOAuthClient> {
   let nextjs: typeof import('@clerk/nextjs/server');
@@ -303,6 +305,15 @@ async function nextClerkClient(): Promise<ClerkOAuthClient> {
     throw new Error('Clerk error: install @clerk/nextjs, or pass clerkClient to withMcpAuth', {
       cause: error,
     });
+  }
+  // `@clerk/backend` checks the keys only when a token is verified, and a missing one would then look like a Clerk
+  // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs
+  for (const name of ['CLERK_SECRET_KEY', 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY']) {
+    if (!process.env[name]) {
+      throw new Error(
+        `Clerk error: withMcpAuth needs the ${name} environment variable or a clerkClient option`,
+      );
+    }
   }
   return nextjs.clerkClient();
 }

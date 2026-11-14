@@ -99,7 +99,9 @@ export class McpAuthError extends Error {
   readonly status: number | undefined;
 
   constructor(cause: unknown) {
-    super('Clerk error: MCP access token verification failed', { cause });
+    // No `Clerk error:` prefix, which marks setup mistakes: the verifier can be the app's own `verifyToken`, and the
+    // `cause` says what failed
+    super('MCP access token verification failed', { cause });
     this.name = 'McpAuthError';
     const status = (cause as { status?: unknown } | null)?.status;
     this.status =
@@ -282,10 +284,8 @@ export function toClerkAuthInfo(
 ): ClerkAuthInfo | undefined {
   if (!token) return undefined;
 
-  if (!auth.isAuthenticated) {
-    console.error('Invalid OAuth access token');
-    return undefined;
-  }
+  // An unauthenticated auth object is an ordinary outcome, such as a client without a valid token, not an error to log
+  if (!auth.isAuthenticated) return undefined;
 
   if (auth.tokenType !== 'oauth_token') {
     throw new Error("the auth() function must be called with acceptsToken: 'oauth_token'");

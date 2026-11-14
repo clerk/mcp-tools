@@ -150,7 +150,9 @@ export function mcpAuth(options: McpAuthOptions) {
     let result: Awaited<ReturnType<typeof authenticateBearer>>;
     try {
       result = await authenticateBearer({
-        authorization: req.headers.authorization,
+        // Every `Authorization` value, joined as fetch `Headers` join them for the other adapters, so two headers are
+        // challenged as malformed. `req.headers.authorization` keeps only the first, and would verify that one.
+        authorization: req.headersDistinct.authorization?.join(', '),
         requestUrl,
         resourceUrl: options.resourceUrl,
         requiredScopes: options.requiredScopes,
@@ -221,12 +223,15 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
  * depth that keeps the rule the other adapters follow: a body larger than that is not public. Without a
  * `Content-Length`, as for a chunked body, the size is that of the parsed body serialized again, which is not the byte
  * count sent: whitespace and number formatting differ, so padding can carry a chunked body past 1 MiB that still
- * counts as under it. Only `express.json()`'s `limit` bounds the original bytes.
+ * counts as under it. Only `express.json()`'s `limit` bounds the original bytes. Only a body sent as
+ * `application/json` is checked, as in the other adapters, so a body another parser read, such as a form
+ * `express.urlencoded()` parsed, is not public.
  * @param req - The incoming request
  * @returns The parsed body, or `undefined` when the request has no JSON body or is over `PUBLIC_BODY_LIMIT`
  */
 function parsedJsonBody(req: express.Request): unknown {
-  if (req.body === undefined && req.is('application/json')) {
+  if (!req.is('application/json')) return undefined;
+  if (req.body === undefined) {
     throw new Error(
       'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
     );
