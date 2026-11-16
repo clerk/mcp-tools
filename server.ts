@@ -245,14 +245,18 @@ function deriveFapiUrl(publishableKey: string) {
   return `https://${decoded.slice(0, -1)}`;
 }
 
+// How long `fetchAuthorizationServerMetadata` waits for the Frontend API, headers and body together
+const AUTHORIZATION_SERVER_METADATA_TIMEOUT_MS = 5_000;
+
 /**
  * Fetches RFC 8414 authorization server metadata for the Clerk instance a publishable key belongs to, from its
  * Frontend API's `/.well-known/oauth-authorization-server`.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc8414#section-3
  * @param publishableKey - Clerk publishable key
- * @returns The parsed metadata document. It throws a `Clerk error:` when the publishable key is not one, and when
- * the Frontend API does not answer with a 2xx, so an error body is never served, or cached, as the metadata.
+ * @returns The parsed metadata document. It throws a `Clerk error:` when the publishable key is not one, when the
+ * Frontend API does not answer with a 2xx, so an error body is never served, or cached, as the metadata, and when it
+ * has not answered within 5 seconds.
  */
 export async function fetchAuthorizationServerMetadata({
   publishableKey,
@@ -261,13 +265,25 @@ export async function fetchAuthorizationServerMetadata({
 }) {
   const fapiUrl = deriveFapiUrl(publishableKey);
 
-  const res = await fetch(`${fapiUrl}/.well-known/oauth-authorization-server`);
-  if (!res.ok) {
+  try {
+    // Bounded so that a Frontend API that accepts the connection but never answers gets the handler's 502 well before
+    // a serverless platform's own timeout, instead of holding the request for the runtime's default of minutes
+    const res = await fetch(`${fapiUrl}/.well-known/oauth-authorization-server`, {
+      signal: AbortSignal.timeout(AUTHORIZATION_SERVER_METADATA_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Clerk error: fetching authorization server metadata from ${fapiUrl} failed with status ${res.status}`,
+      );
+    }
+    return await res.json();
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'TimeoutError')) throw error;
     throw new Error(
-      `Clerk error: fetching authorization server metadata from ${fapiUrl} failed with status ${res.status}`,
+      `Clerk error: fetching authorization server metadata from ${fapiUrl} timed out after ${AUTHORIZATION_SERVER_METADATA_TIMEOUT_MS / 1000} seconds`,
+      { cause: error },
     );
   }
-  return res.json();
 }
 
 /**

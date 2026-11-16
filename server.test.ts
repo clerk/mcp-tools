@@ -152,7 +152,46 @@ describe('fetchAuthorizationServerMetadata', () => {
     });
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://clerk.example.com/.well-known/oauth-authorization-server',
+      { signal: expect.any(AbortSignal) },
     );
+  });
+
+  test('gives up on a Frontend API that does not answer, with a Clerk error', async () => {
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation(() =>
+        AbortSignal.abort(
+          new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        ),
+      );
+    // A Frontend API that accepts the request and never answers: only the signal ends it
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) reject(signal.reason);
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+
+    const error = await fetchAuthorizationServerMetadata({ publishableKey }).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(timeout).toHaveBeenCalledWith(5_000);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message:
+        'Clerk error: fetching authorization server metadata from https://clerk.example.com timed out after 5 seconds',
+      cause: { name: 'TimeoutError' },
+    });
+  });
+
+  test('passes on a network error other than the timeout as it is', async () => {
+    const cause = new TypeError('fetch failed');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(cause);
+
+    await expect(fetchAuthorizationServerMetadata({ publishableKey })).rejects.toBe(cause);
   });
 
   test('throws instead of returning an error body as the metadata', async () => {
