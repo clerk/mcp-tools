@@ -36,6 +36,7 @@ import {
   type McpAuthOptions,
   McpTokenVerificationError,
   mcpAuth,
+  protectedResourceMetadataHandler,
   streamableHttpHandler,
 } from './index';
 
@@ -706,7 +707,90 @@ describe('mcpAuth', () => {
     expect(response).not.toContain('undefined');
     expect(verifyToken).not.toHaveBeenCalled();
   });
+
+  test('verifies a token sent with an absolute-form request-target against the listed resourceUrl', async () => {
+    const verifyToken = vi.fn(async (token: string) => ({ token, clientId: 'c', scopes: [] }));
+    const app = express();
+    app.post(
+      '/mcp',
+      mcpAuth({ verifyToken, resourceUrl: ['http://mcp.example.com/mcp'] }),
+      (_req, res) => {
+        res.json({});
+      },
+    );
+
+    const response = await withListening(app, (baseUrl) =>
+      sendRaw(
+        baseUrl,
+        'POST http://mcp.example.com/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+      ),
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    expect(verifyToken).toHaveBeenCalledOnce();
+  });
+
+  test('points the challenge for an absolute-form request-target at the metadata for its path', async () => {
+    const app = express();
+    app.post('/mcp', mcpAuth({ verifyToken: reject }), (_req, res) => {
+      res.json({});
+    });
+
+    const response = await withListening(app, (baseUrl) =>
+      sendRaw(
+        baseUrl,
+        'POST http://mcp.example.com/mcp?x=1 HTTP/1.1\r\nHost: mcp.example.com\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+      ),
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 401 Unauthorized');
+    expect(response).toContain(
+      'WWW-Authenticate: Bearer resource_metadata="http://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
 });
+
+describe('protectedResourceMetadataHandler', () => {
+  beforeEach(() => {
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('derives the resource of an absolute-form request-target from its path alone', async () => {
+    const app = express();
+    app.all('/.well-known/oauth-protected-resource/mcp', protectedResourceMetadataHandler());
+
+    const response = await withListening(app, (baseUrl) =>
+      sendRaw(
+        baseUrl,
+        'GET http://mcp.example.com/.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nConnection: close\r\n\r\n',
+      ),
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    const metadata = JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4)) as {
+      resource: string;
+    };
+    expect(metadata.resource).toBe('http://mcp.example.com/mcp');
+  });
+});
+
+// Writes a raw HTTP request, for request lines `fetch` can't send, and resolves the whole response
+function sendRaw(baseUrl: string, text: string) {
+  const { port } = new URL(baseUrl);
+  return new Promise<string>((resolve, reject) => {
+    const socket = connect(Number(port), '127.0.0.1', () => {
+      socket.write(text);
+    });
+    let response = '';
+    socket.on('data', (chunk) => (response += chunk.toString()));
+    socket.on('end', () => resolve(response));
+    socket.on('error', reject);
+  });
+}
 
 async function withListening<T>(app: express.Express, fn: (baseUrl: string) => Promise<T>) {
   const server: Server = await new Promise((resolve) => {

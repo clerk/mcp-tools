@@ -253,7 +253,7 @@ function parsedJsonBody(req: express.Request): unknown {
  * `authorizationServerMetadataHandler` to the route without calling it throws a `Clerk error:` on the first request.
  * @example
  * ```ts
- * app.get(
+ * app.all(
  *   "/.well-known/oauth-authorization-server",
  *   authorizationServerMetadataHandler()
  * );
@@ -296,7 +296,7 @@ export function authorizationServerMetadataHandler() {
  * `CLERK_PUBLISHABLE_KEY` is not set.
  * @example
  * ```ts
- * app.get(
+ * app.all(
  *   "/.well-known/oauth-protected-resource/mcp",
  *   protectedResourceMetadataHandler({ resourceUrl: "https://mcp.example.com/mcp" })
  * );
@@ -334,8 +334,22 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 function getRequestUrl(req: express.Request): string | undefined {
   const host = req.host as string | undefined;
   if (!host) return undefined;
-  const url = `${req.protocol}://${host}${req.originalUrl}`;
+  const path = requestPath(req.originalUrl);
+  if (path === undefined) return undefined;
+  const url = `${req.protocol}://${host}${path}`;
   return URL.canParse(url) ? url : undefined;
+}
+
+// The path and query of a request-target. An absolute-form target, as in `POST http://mcp.example.com/mcp HTTP/1.1`,
+// puts the whole URI in `originalUrl`, and RFC 9112 section 3.2.2 requires a server to accept it. Express routes it by
+// its path, so only that path and its query are kept here. The origin still comes from `req.protocol` and `req.host`,
+// as Express gives them to the rest of the app and as `trust proxy` sets them, although RFC 9112 section 3.2.2 has an
+// origin server take the host from the target: a client sends that form to a proxy, which then sends a matching `Host`.
+function requestPath(originalUrl: string): string | undefined {
+  if (originalUrl.startsWith('/')) return originalUrl;
+  if (!URL.canParse(originalUrl)) return undefined;
+  const { pathname, search } = new URL(originalUrl);
+  return `${pathname}${search}`;
 }
 
 /**

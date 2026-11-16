@@ -272,7 +272,7 @@ Express handler that returns OAuth protected resource metadata for Clerk integra
 ```ts
 import { protectedResourceMetadataHandler } from '@clerk/mcp-tools/express';
 
-app.get(
+app.all(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceMetadataHandler({
     resourceUrl: 'https://mcp.example.com/mcp',
@@ -296,7 +296,7 @@ Express handler that returns OAuth authorization server metadata for Clerk integ
 import { authorizationServerMetadataHandler } from '@clerk/mcp-tools/express';
 
 // Serve authorization server metadata at the standard well-known location
-app.get('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
+app.all('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
 ```
 
 **Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable.
