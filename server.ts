@@ -1,4 +1,5 @@
 import type { AuthInfo } from './mcp-types';
+import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
 
 /**
@@ -215,34 +216,18 @@ export function generateProtectedResourceMetadata(
   options: GenerateProtectedResourceMetadataOptions,
 ) {
   assertPropertiesOmitResource('generateProtectedResourceMetadata', options.properties);
-  const metadata = (authServerUrl: string) => ({
-    resource: options.resourceUrl,
-    authorization_servers: [authServerUrl],
-    bearer_methods_supported: ['header'],
-  });
-
-  if (options.publishableKey === undefined) {
-    return Object.assign(metadata(options.authServerUrl), options.properties);
-  }
-
-  return Object.assign(metadata(deriveFapiUrl(options.publishableKey)), options.properties);
-}
-
-// A publishable key is `pk_test_` or `pk_live_` and the base64 of the Frontend API host followed by `$`
-function deriveFapiUrl(publishableKey: string) {
-  const key = /^pk_(?:test|live)_([A-Za-z0-9+/_=-]+)$/.exec(publishableKey)?.[1] ?? '';
-  const normalizedKey = key.replace(/-/g, '+').replace(/_/g, '/');
-  const paddedKey = normalizedKey.padEnd(Math.ceil(normalizedKey.length / 4) * 4, '=');
-  let decoded = '';
-  try {
-    decoded = atob(paddedKey);
-  } catch {}
-  if (!decoded.endsWith('$') || decoded.length === 1) {
-    throw new Error(
-      'Clerk error: the publishable key is not a Clerk publishable key. Copy it from the API keys page of the Clerk Dashboard',
-    );
-  }
-  return `https://${decoded.slice(0, -1)}`;
+  const authServerUrl =
+    options.publishableKey === undefined
+      ? options.authServerUrl
+      : deriveFapiUrl(options.publishableKey);
+  return Object.assign(
+    {
+      resource: options.resourceUrl,
+      authorization_servers: [authServerUrl],
+      bearer_methods_supported: ['header'],
+    },
+    options.properties,
+  );
 }
 
 // How long `fetchAuthorizationServerMetadata` waits for the Frontend API, headers and body together

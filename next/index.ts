@@ -10,22 +10,21 @@ import {
   assertVerifierOrResourceUrl,
   authenticateBearer,
   clerkClientResolver,
-  clerkProtectedResourceMetadata,
-  failureBody,
-  failureHeaders,
-  metadataResponseHeaders,
-  metadataUnavailableAnswer,
+  authorizationServerMetadataAnswer,
+  failureAnswer,
+  protectedResourceMetadataAnswer,
   readJsonBody,
   requestTokenVerifier,
+  requireClerkEnvKeys,
   requirePublishableKey,
   serverErrorAnswer,
+  type BearerResult,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
   McpAuthError,
   metadataCorsHeaders,
-  fetchAuthorizationServerMetadata,
 } from '../server';
 
 /**
@@ -81,15 +80,8 @@ export function protectedResourceMetadataHandler(
       'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
     );
 
-    const metadata = clerkProtectedResourceMetadata(options, req.url, publishableKey);
-    if (!metadata) {
-      return Response.json(
-        { error: 'misdirected_request' },
-        { status: 421, headers: metadataCorsHeaders },
-      );
-    }
-
-    return Response.json(metadata, { headers: metadataResponseHeaders });
+    const answer = protectedResourceMetadataAnswer(options, req.url, publishableKey);
+    return Response.json(answer.body, answer);
   };
 }
 
@@ -107,15 +99,8 @@ export function authorizationServerMetadataHandler(): () => Promise<Response> {
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
       'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
     );
-
-    try {
-      const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
-      return Response.json(metadata, { headers: metadataResponseHeaders });
-    } catch (error) {
-      // The CORS headers, so a browser client can read the error, but not the caching ones metadata gets
-      const answer = metadataUnavailableAnswer(error);
-      return Response.json(answer.body, { status: answer.status, headers: metadataCorsHeaders });
-    }
+    const answer = await authorizationServerMetadataAnswer(publishableKey);
+    return Response.json(answer.body, answer);
   };
 }
 
@@ -240,17 +225,14 @@ export function withMcpAuth(
   );
 
   return async (req) => {
-    const verifyToken = await requestTokenVerifier(options, clerkClientFor, req, (r) => r.url);
+    const verifyToken = await requestTokenVerifier(options, clerkClientFor, req);
 
-    let result: Awaited<ReturnType<typeof authenticateBearer>>;
+    let result: BearerResult;
     try {
       result = await authenticateBearer({
+        options,
         authorization: req.headers.get('authorization') ?? undefined,
         requestUrl: req.url,
-        resourceUrl: options.resourceUrl,
-        requiredScopes: options.requiredScopes,
-        challengeScopes: options.challengeScopes,
-        publicAccess: options.publicAccess,
         method: req.method,
         // A clone, so the route handler can still read the request
         body: () => readJsonBody(req),
@@ -259,9 +241,8 @@ export function withMcpAuth(
     } catch (error) {
       if (!(error instanceof McpAuthError)) throw error;
       // Answered here with the status and body the Express and Hono adapters send. Next.js's `onRequestError` no
-      // longer sees it, so it is logged with `console.error`, as those adapters log it.
+      // longer sees it, so `serverErrorAnswer` logs it with `console.error`, as it does for those adapters.
       const answer = serverErrorAnswer(error);
-      console.error(error);
       return Response.json(answer.body, { status: answer.status });
     }
 
@@ -274,10 +255,8 @@ export function withMcpAuth(
           void Promise.resolve(options.onAuthFailure?.(failure, req)).catch(() => {});
         } catch {}
       }
-      return Response.json(failureBody(result), {
-        status: result.status,
-        headers: failureHeaders(result),
-      });
+      const answer = failureAnswer(result);
+      return Response.json(answer.body, answer);
     }
 
     // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does. It is `undefined` for a
@@ -308,16 +287,9 @@ async function nextClerkClient(): Promise<ClerkOAuthClient> {
   // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs.
   // Each is written out, not looked up by name: Next.js inlines `process.env.NEXT_PUBLIC_*` only where it is written
   // out, so a publishable key set only at build time is missing from `process.env[name]` at run time.
-  const keys = {
+  requireClerkEnvKeys('withMcpAuth', {
     CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-  };
-  for (const [name, value] of Object.entries(keys)) {
-    if (!value) {
-      throw new Error(
-        `Clerk error: withMcpAuth needs the ${name} environment variable or a clerkClient option`,
-      );
-    }
-  }
+  });
   return nextjs.clerkClient();
 }

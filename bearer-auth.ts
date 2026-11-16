@@ -1,6 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
+import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import {
@@ -11,6 +12,7 @@ import {
   type PublicAccess,
   McpAuthError,
   McpTokenVerificationError,
+  fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
   matchResourceUrl,
   metadataCorsHeaders,
@@ -166,7 +168,7 @@ const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set<
   'verifyToken',
 ]);
 
-type BearerResult =
+export type BearerResult =
   // `authInfo` is `undefined` for a request without a token that `publicAccess` lets through
   | { ok: true; authInfo: (AuthInfo & { resourceMetadataUrl: string }) | undefined }
   | {
@@ -552,20 +554,6 @@ export function clerkProtectedResourceMetadata(
   });
 }
 
-/**
- * The audience for a request that `mcpAuth` let through, which always matches a listed `resourceUrl`, since a request
- * to any other origin gets a 421 first.
- */
-export function audienceFor(resourceUrl: McpResourceUrl, requestUrl: string): string {
-  const audience = matchResourceUrl(resourceUrl, requestUrl);
-  if (!audience) {
-    throw new Error(
-      `Clerk error: no resourceUrl matches the origin of ${new URL(requestUrl).origin}`,
-    );
-  }
-  return audience;
-}
-
 // A URL with another scheme, such as `mailto:`, has no origin for the challenge, `new Request` throws on a URL with
 // credentials, and a resource identifier must not have a fragment (RFC 8707 section 2).
 function isResourceUrl(value: string): boolean {
@@ -646,27 +634,55 @@ export function clerkClientResolver<Req>(
  * and the request. Otherwise the Clerk client is resolved here, once for the request and before any token is read,
  * so a missing client is thrown as it is, on a request with or without a token; thrown by the verifier, it would be
  * the `cause` of an `McpAuthError`, and only once a token arrived. Each token is then verified with that client, with
- * the listed `resourceUrl` for the request's origin as the audience.
+ * the resource `authenticateBearer` matched to the request as the audience.
  * @param options - The entry point's options
  * @param clientFor - Returns the Clerk client for a request, from `clerkClientResolver`
  * @param request - The framework's request or context
- * @param requestUrlOf - Returns the URL the request was made to
- * @returns A verifier that takes the token
+ * @returns A verifier that takes the token and the resource it must be for
  */
 export async function requestTokenVerifier<Req>(
   options: MiddlewareAuthOptions<Req>,
   clientFor: (request: Req) => Promise<ClerkOAuthClient>,
   request: Req,
-  requestUrlOf: (request: Req) => string,
-): Promise<(token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>> {
+): Promise<TokenVerifier> {
   if (options.verifyToken) {
     const custom = options.verifyToken;
     return (token) => custom(token, request);
   }
   const client = await clientFor(request);
-  const { resourceUrl } = options;
-  return (token) =>
-    verifyClerkOAuthToken(client, token, audienceFor(resourceUrl, requestUrlOf(request)));
+  // The Clerk branch always has a `resourceUrl`, so `authenticateBearer` matched one, or answered with a 421, before
+  // it verifies a token
+  return (token, resource) => verifyClerkOAuthToken(client, token, resource!);
+}
+
+/**
+ * The verifier `authenticateBearer` calls with a request's token, and the listed `resourceUrl` the request matched,
+ * or `undefined` without one.
+ */
+type TokenVerifier = (
+  token: string,
+  resource: string | undefined,
+) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
+
+/**
+ * Throws a `Clerk error:` naming the first of `keys` without a value, which the adapter's default Clerk client needs.
+ * The adapters read the values themselves: Next.js only inlines `process.env.NEXT_PUBLIC_*` where it is written out.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param keys - Each environment variable's name and value
+ * @returns The same keys, each with a value
+ */
+export function requireClerkEnvKeys<K extends string>(
+  caller: string,
+  keys: Record<K, string | undefined>,
+): Record<K, string> {
+  for (const [name, value] of Object.entries(keys)) {
+    if (!value) {
+      throw new Error(
+        `Clerk error: ${caller} needs the ${name} environment variable or a clerkClient option`,
+      );
+    }
+  }
+  return keys as Record<K, string>;
 }
 
 /**
@@ -686,8 +702,7 @@ export function requirePublishableKey(
     throw new Error(`${name} environment variable is required`);
   }
   try {
-    // Deriving the authorization server is what decodes the key
-    generateProtectedResourceMetadata({ resourceUrl: 'https://clerk.invalid', publishableKey });
+    deriveFapiUrl(publishableKey);
   } catch (error) {
     throw new Error(
       `Clerk error: ${name} is not a Clerk publishable key. Copy it from the API keys page of the Clerk Dashboard`,
@@ -742,9 +757,10 @@ export function assertServerFactory(createServer: unknown, transportClassName: s
  * The JSON answer to a request whose token Clerk or `verifyToken` could not verify at all, such as during an outage or
  * with an invalid secret key. It is a server error, not a challenge, so the client keeps a token that may be valid. The
  * status is the `McpAuthError`'s `status` when it has one, the 429 or 5xx Clerk's Backend API answered with, otherwise
- * 500.
+ * 500. The error is logged with `console.error`, since the framework's error handler never sees it.
  */
 export function serverErrorAnswer(error: McpAuthError) {
+  console.error(error);
   return { status: error.status ?? 500, body: { error: 'server_error' } } as const;
 }
 
@@ -803,29 +819,67 @@ export function resourceFromMetadataUrl(metadataUrl: string): string {
 }
 
 /**
- * The response headers for a request `authenticateBearer` did not let through: the challenge, or for the 405 the
- * `Allow` header RFC 9110 section 15.5.6 requires. It lists only `POST` (RFC 9110 section 10.2.1): a stateless MCP
- * server has no sessions to stream on with GET or to end with DELETE, and MCP SDK 2's stateless serving answers both
- * with the same 405 and `Allow: POST`.
+ * The answer to a request `authenticateBearer` did not let through: the challenge with `{ error }`, or for the 405
+ * the answer `streamableHttpHandler` sends, so a GET gets one answer whether or not it carried a token. Its `Allow`
+ * header, which RFC 9110 section 15.5.6 requires, lists only `POST` (RFC 9110 section 10.2.1): a stateless MCP server
+ * has no sessions to stream on with GET or to end with DELETE, and MCP SDK 2's stateless serving answers both with the
+ * same 405 and `Allow: POST`.
  * @param result - A result with `ok` false
- * @returns The headers to send with the status
+ * @returns The status, headers, and JSON body to send
  */
-export function failureHeaders(
-  result: Extract<BearerResult, { ok: false }>,
-): Record<string, string> {
-  if (result.status === 405) return { Allow: 'POST' };
-  return result.challenge ? { 'WWW-Authenticate': result.challenge } : {};
+export function failureAnswer(result: Extract<BearerResult, { ok: false }>): {
+  status: 401 | 403 | 405 | 421;
+  headers: Record<string, string>;
+  body: typeof methodNotAllowed.body | { error: string };
+} {
+  if (result.status === 405) return methodNotAllowed;
+  return {
+    status: result.status,
+    headers: result.challenge ? { 'WWW-Authenticate': result.challenge } : {},
+    body: { error: result.error },
+  };
 }
 
 /**
- * The JSON body for a request `authenticateBearer` did not let through. The 405 gets the same JSON-RPC error
- * `streamableHttpHandler` sends, so a GET gets one answer whether or not it carried a token.
- * @param result - A result with `ok` false
- * @returns The body to send with the status
+ * The answer every `protectedResourceMetadataHandler` gives a request: the metadata with `metadataResponseHeaders`,
+ * or a 421 with `metadataCorsHeaders` alone for an origin no listed `resourceUrl` has.
+ * @param options - The handler's options
+ * @param metadataUrl - The URL the metadata was requested at
+ * @param publishableKey - The publishable key `requirePublishableKey` returned
  */
-export function failureBody(result: Extract<BearerResult, { ok: false }>) {
-  if (result.status === 405) return methodNotAllowed.body;
-  return { error: result.error };
+export function protectedResourceMetadataAnswer(
+  options: ProtectedResourceMetadataOptions,
+  metadataUrl: string,
+  publishableKey: string,
+): {
+  status: 200 | 421;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+} {
+  const metadata = clerkProtectedResourceMetadata(options, metadataUrl, publishableKey);
+  if (!metadata) {
+    return { status: 421, headers: metadataCorsHeaders, body: { error: 'misdirected_request' } };
+  }
+  return { status: 200, headers: metadataResponseHeaders, body: metadata };
+}
+
+/**
+ * The answer every `authorizationServerMetadataHandler` gives a request: Clerk's metadata with
+ * `metadataResponseHeaders`, or `metadataUnavailableAnswer` with the CORS headers, so a browser client can read the
+ * error, but not the caching ones metadata gets.
+ * @param publishableKey - The publishable key `requirePublishableKey` returned
+ */
+export async function authorizationServerMetadataAnswer(publishableKey: string): Promise<{
+  status: 200 | 502;
+  headers: Record<string, string>;
+  body: unknown;
+}> {
+  try {
+    const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
+    return { status: 200, headers: metadataResponseHeaders, body: metadata };
+  } catch (error) {
+    return { ...metadataUnavailableAnswer(error), headers: metadataCorsHeaders };
+  }
 }
 
 // An RFC 9110 `auth-param` value here is a `quoted-string`: a URL's `:` and `/` are not allowed in a bare token.
@@ -897,25 +951,31 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * and every request with a header, is handled as above.
  */
 export async function authenticateBearer({
+  options: {
+    resourceUrl,
+    requiredScopes = [],
+    challengeScopes: extraChallengeScopes = [],
+    publicAccess,
+  },
   authorization,
   requestUrl,
-  resourceUrl,
-  requiredScopes = [],
-  challengeScopes: extraChallengeScopes = [],
-  publicAccess,
   method,
   body,
   verifyToken,
 }: {
+  /**
+   * The entry point's options. Each adapter passes its whole options object, so an option every adapter shares
+   * reaches this rule without each one forwarding it.
+   */
+  options: Pick<
+    BaseAuthOptions,
+    'resourceUrl' | 'requiredScopes' | 'challengeScopes' | 'publicAccess'
+  >;
   authorization: string | undefined;
   /**
    * The URL the request was made to, used to pick a listed `resourceUrl`, or to derive one when it is not set.
    */
   requestUrl: string;
-  resourceUrl: McpResourceUrl | undefined;
-  requiredScopes: readonly string[] | undefined;
-  challengeScopes: readonly string[] | undefined;
-  publicAccess?: PublicAccess | undefined;
   /**
    * The request's HTTP method, which `publicAccess` needs: only a POST carries JSON-RPC messages.
    */
@@ -925,7 +985,7 @@ export async function authenticateBearer({
    * only for a POST without a token when `publicAccess` is set.
    */
   body?: (() => unknown) | undefined;
-  verifyToken: (token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
+  verifyToken: TokenVerifier;
 }): Promise<BearerResult> {
   let resourceMetadataUrl: string;
   // The resource a token must be for, when `resourceUrl` names it. A URL derived from the request is not checked: it
@@ -983,7 +1043,7 @@ export async function authenticateBearer({
   let authInfo: AuthInfo | undefined;
   let rejection: McpTokenVerificationError | undefined;
   try {
-    authInfo = await verifyToken(parsed.token);
+    authInfo = await verifyToken(parsed.token, expectedResource);
   } catch (error) {
     if (!(error instanceof McpTokenVerificationError)) {
       throw error instanceof McpAuthError ? error : new McpAuthError(error);

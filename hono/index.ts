@@ -11,22 +11,21 @@ import {
   assertTransportClass,
   authenticateBearer,
   clerkClientResolver,
-  clerkProtectedResourceMetadata,
-  failureBody,
-  failureHeaders,
-  metadataResponseHeaders,
-  metadataUnavailableAnswer,
+  authorizationServerMetadataAnswer,
+  failureAnswer,
   methodNotAllowed,
+  protectedResourceMetadataAnswer,
   readJsonBody,
   requestTokenVerifier,
+  requireClerkEnvKeys,
   requirePublishableKey,
   serverErrorAnswer,
+  type BearerResult,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
   McpAuthError,
-  fetchAuthorizationServerMetadata,
   metadataCorsHeaders,
 } from '../server';
 
@@ -107,18 +106,14 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
  */
 function requireClerkKeys(c: Context) {
   const {
-    CLERK_SECRET_KEY: secretKey,
-    CLERK_PUBLISHABLE_KEY: publishableKey,
+    CLERK_SECRET_KEY,
+    CLERK_PUBLISHABLE_KEY,
     CLERK_API_URL: apiUrl,
     CLERK_API_VERSION: apiVersion,
     CLERK_JWT_KEY: jwtKey,
   } = env<ClerkEnv>(c);
-  const missingKeyError = (name: string) =>
-    new Error(
-      `Clerk error: mcpAuth needs the ${name} environment variable or a clerkClient option`,
-    );
-  if (!secretKey) throw missingKeyError('CLERK_SECRET_KEY');
-  if (!publishableKey) throw missingKeyError('CLERK_PUBLISHABLE_KEY');
+  const { CLERK_SECRET_KEY: secretKey, CLERK_PUBLISHABLE_KEY: publishableKey } =
+    requireClerkEnvKeys('mcpAuth', { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
   // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
   return {
     secretKey,
@@ -137,13 +132,9 @@ function requireClerkKeys(c: Context) {
  * @returns The client, the same one for the same settings
  */
 async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
-  const cacheKey = JSON.stringify([
-    keys.secretKey,
-    keys.publishableKey,
-    keys.apiUrl,
-    keys.apiVersion,
-    keys.jwtKey,
-  ]);
+  // `requireClerkKeys` builds the settings in one key order and leaves out the ones not set, so each set of settings
+  // has one cache key
+  const cacheKey = JSON.stringify(keys);
   const cached = envClerkClients.get(cacheKey);
   if (cached) return cached;
 
@@ -186,9 +177,8 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
   return (c: Context) => {
     if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
-    const metadata = clerkProtectedResourceMetadata(options, c.req.url, publishableKey);
-    if (!metadata) return c.json({ error: 'misdirected_request' }, 421, metadataCorsHeaders);
-    return c.json(metadata, 200, metadataResponseHeaders);
+    const answer = protectedResourceMetadataAnswer(options, c.req.url, publishableKey);
+    return c.json(answer.body, { status: answer.status, headers: answer.headers });
   };
 }
 
@@ -209,17 +199,8 @@ export function authorizationServerMetadataHandler() {
   return async (c: Context) => {
     if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
     const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
-    try {
-      return c.json(
-        await fetchAuthorizationServerMetadata({ publishableKey }),
-        200,
-        metadataResponseHeaders,
-      );
-    } catch (error) {
-      // The CORS headers, so a browser client can read the error, but not the caching ones metadata gets
-      const answer = metadataUnavailableAnswer(error);
-      return c.json(answer.body, answer.status, metadataCorsHeaders);
-    }
+    const answer = await authorizationServerMetadataAnswer(publishableKey);
+    return c.json(answer.body, { status: answer.status, headers: answer.headers });
   };
 }
 
@@ -233,7 +214,6 @@ export function authorizationServerMetadataHandler() {
 function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): Response } {
   return Object.assign(error, {
     getResponse() {
-      console.error(error);
       const answer = serverErrorAnswer(error);
       return Response.json(answer.body, { status: answer.status });
     },
@@ -286,22 +266,14 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   );
 
   return async (c: Context, next: Next) => {
-    const verifyToken = await requestTokenVerifier(
-      options,
-      clerkClientFor,
-      c,
-      (ctx) => ctx.req.url,
-    );
+    const verifyToken = await requestTokenVerifier(options, clerkClientFor, c);
 
-    let result: Awaited<ReturnType<typeof authenticateBearer>>;
+    let result: BearerResult;
     try {
       result = await authenticateBearer({
+        options,
         authorization: c.req.header('authorization'),
         requestUrl: c.req.url,
-        resourceUrl: options.resourceUrl,
-        requiredScopes: options.requiredScopes,
-        challengeScopes: options.challengeScopes,
-        publicAccess: options.publicAccess,
         method: c.req.method,
         // A clone, so the MCP transport can still read the request
         body: async () => readJsonBody(await requestWithBody(c)),
@@ -314,10 +286,8 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
 
     if (!result.ok) {
       if (result.failure) c.set('mcpAuthFailure', result.failure);
-      return c.json(failureBody(result), {
-        status: result.status,
-        headers: failureHeaders(result),
-      });
+      const answer = failureAnswer(result);
+      return c.json(answer.body, { status: answer.status, headers: answer.headers });
     }
 
     c.set('mcpAuth', result.authInfo);

@@ -7,7 +7,7 @@ import {
   assertPublicAccess,
   authenticateBearer,
   clerkProtectedResourceMetadata,
-  failureHeaders,
+  failureAnswer,
   isPublicRequest,
   readJsonBody,
   resourceFromMetadataUrl,
@@ -18,17 +18,19 @@ import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './se
 
 const authInfo = { token: 't', clientId: 'client-1', scopes: ['profile'] };
 
+type AuthenticateInput = Parameters<typeof authenticateBearer>[0];
+
+// The request fields of `authenticateBearer` and the options it reads, side by side
 function authenticate(
-  overrides: Partial<Parameters<typeof authenticateBearer>[0]> = {},
+  overrides: Partial<Omit<AuthenticateInput, 'options'> & AuthenticateInput['options']> = {},
 ): ReturnType<typeof authenticateBearer> {
+  const { resourceUrl, requiredScopes, challengeScopes, publicAccess, ...request } = overrides;
   return authenticateBearer({
+    options: { resourceUrl, requiredScopes, challengeScopes, publicAccess },
     authorization: 'Bearer t',
     requestUrl: 'https://mcp.example.com/mcp',
-    resourceUrl: undefined,
-    requiredScopes: undefined,
-    challengeScopes: undefined,
     verifyToken: async () => authInfo,
-    ...overrides,
+    ...request,
   });
 }
 
@@ -606,7 +608,7 @@ describe('publicAccess', () => {
   function withoutToken(
     publicAccess: PublicAccess | undefined,
     body: unknown,
-    overrides: Partial<Parameters<typeof authenticateBearer>[0]> = {},
+    overrides: Parameters<typeof authenticate>[0] = {},
   ) {
     return authenticate({
       authorization: undefined,
@@ -848,7 +850,7 @@ describe('publicAccess', () => {
         status: 405,
         challenge: undefined,
       });
-      expect(failureHeaders(result as Extract<typeof result, { ok: false }>)).toEqual({
+      expect(failureAnswer(result as Extract<typeof result, { ok: false }>).headers).toEqual({
         Allow: 'POST',
       });
     },

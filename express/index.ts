@@ -11,21 +11,20 @@ import {
   assertTransportClass,
   authenticateBearer,
   clerkClientResolver,
-  clerkProtectedResourceMetadata,
-  failureBody,
-  failureHeaders,
-  metadataResponseHeaders,
-  metadataUnavailableAnswer,
+  authorizationServerMetadataAnswer,
+  failureAnswer,
   methodNotAllowed,
+  protectedResourceMetadataAnswer,
   requestTokenVerifier,
+  requireClerkEnvKeys,
   requirePublishableKey,
   serverErrorAnswer,
+  type BearerResult,
 } from '../bearer-auth';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
   McpAuthError,
-  fetchAuthorizationServerMetadata,
   metadataCorsHeaders,
 } from '../server';
 
@@ -135,13 +134,7 @@ export function mcpAuth(options: McpAuthOptions) {
   );
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const verifyToken = await requestTokenVerifier(
-      options,
-      clerkClientFor,
-      req,
-      // The middleware answers a request without a usable URL before it verifies a token
-      (request: express.Request) => getRequestUrl(request)!,
-    );
+    const verifyToken = await requestTokenVerifier(options, clerkClientFor, req);
 
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
     // error, or derive a challenge for `http://undefined`
@@ -151,17 +144,14 @@ export function mcpAuth(options: McpAuthOptions) {
       return;
     }
 
-    let result: Awaited<ReturnType<typeof authenticateBearer>>;
+    let result: BearerResult;
     try {
       result = await authenticateBearer({
+        options,
         // Every `Authorization` value, joined as fetch `Headers` join them for the other adapters, so two headers are
         // challenged as malformed. `req.headers.authorization` keeps only the first, and would verify that one.
         authorization: req.headersDistinct.authorization?.join(', '),
         requestUrl,
-        resourceUrl: options.resourceUrl,
-        requiredScopes: options.requiredScopes,
-        challengeScopes: options.challengeScopes,
-        publicAccess: options.publicAccess,
         method: req.method,
         body: () => parsedJsonBody(req),
         verifyToken,
@@ -171,14 +161,14 @@ export function mcpAuth(options: McpAuthOptions) {
       // Logged here, not passed to `next`: Express's default error handler destroys the socket of a sent response,
       // which resets a client still uploading its body, and `finish` never fires when the client disconnects
       const answer = serverErrorAnswer(error);
-      console.error(error);
       res.status(answer.status).json(answer.body);
       return;
     }
 
     if (!result.ok) {
       if (result.failure) res.locals.mcpAuthFailure = result.failure;
-      res.status(result.status).set(failureHeaders(result)).json(failureBody(result));
+      const answer = failureAnswer(result);
+      res.status(answer.status).set(answer.headers).json(answer.body);
       return;
     }
 
@@ -208,13 +198,10 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
   }
   // `@clerk/express` reads both keys from the environment only when a token is verified, and a missing one would then
   // look like a Clerk outage, so they are checked here as Hono's adapter checks its own
-  for (const name of ['CLERK_SECRET_KEY', 'CLERK_PUBLISHABLE_KEY']) {
-    if (!process.env[name]) {
-      throw new Error(
-        `Clerk error: mcpAuth needs the ${name} environment variable or a clerkClient option`,
-      );
-    }
-  }
+  requireClerkEnvKeys('mcpAuth', {
+    CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+    CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
+  });
   return clerkExpress.clerkClient;
 }
 
@@ -268,18 +255,8 @@ export function authorizationServerMetadataHandler() {
       return;
     }
     const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
-
-    let metadata: unknown;
-    try {
-      metadata = await fetchAuthorizationServerMetadata({ publishableKey });
-    } catch (error) {
-      // The CORS headers, so a browser client can read the error, but not the caching ones metadata gets
-      const answer = metadataUnavailableAnswer(error);
-      res.status(answer.status).set(metadataCorsHeaders).json(answer.body);
-      return;
-    }
-
-    res.set(metadataResponseHeaders).json(metadata);
+    const answer = await authorizationServerMetadataAnswer(publishableKey);
+    res.status(answer.status).set(answer.headers).json(answer.body);
   };
 }
 
@@ -318,13 +295,8 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
       return;
     }
 
-    const metadata = clerkProtectedResourceMetadata(options, requestUrl, publishableKey);
-    if (!metadata) {
-      res.status(421).set(metadataCorsHeaders).json({ error: 'misdirected_request' });
-      return;
-    }
-
-    res.set(metadataResponseHeaders).json(metadata);
+    const answer = protectedResourceMetadataAnswer(options, requestUrl, publishableKey);
+    res.status(answer.status).set(answer.headers).json(answer.body);
   };
 }
 

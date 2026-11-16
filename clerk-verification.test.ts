@@ -189,9 +189,7 @@ describe('verifyClerkOAuthToken when the Backend API fails', () => {
     const result = await authenticateBearer({
       authorization: 'Bearer oat_abc',
       requestUrl: resourceUrl,
-      resourceUrl,
-      requiredScopes: [],
-      challengeScopes: [],
+      options: { resourceUrl },
       verifyToken: (token) => verifyClerkOAuthToken(remoteClient(), token, resourceUrl),
     });
 
