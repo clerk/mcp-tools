@@ -190,6 +190,96 @@ describe('authenticateBearer', () => {
     },
   );
 
+  test('rejects a token its verifier reports for another resource, as MCP SDK 2 does', async () => {
+    const result = await authenticate({
+      resourceUrl: 'https://mcp.example.com/mcp',
+      verifyToken: async () => ({
+        ...authInfo,
+        resource: new URL('https://other.example.com/mcp'),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 401,
+      challenge:
+        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+      failure: {
+        reason: 'invalid_token',
+        cause: {
+          code: 'resource-mismatch',
+          message:
+            'The token was issued for https://other.example.com/mcp, not https://mcp.example.com/mcp',
+        },
+      },
+    });
+  });
+
+  test('checks the reported resource against the listed URL for the request origin', async () => {
+    const resourceUrl = ['https://mcp.example.com/mcp', 'https://mcp.example.org/mcp'];
+    const verifyToken = async () => ({
+      ...authInfo,
+      resource: new URL('https://mcp.example.com/mcp'),
+    });
+
+    const sameOrigin = await authenticate({ resourceUrl, verifyToken });
+    const otherListedOrigin = await authenticate({
+      requestUrl: 'https://mcp.example.org/mcp',
+      resourceUrl,
+      verifyToken,
+    });
+
+    expect(sameOrigin).toMatchObject({ ok: true });
+    expect(otherListedOrigin).toMatchObject({
+      ok: false,
+      status: 401,
+      failure: { reason: 'invalid_token', cause: { code: 'resource-mismatch' } },
+    });
+  });
+
+  test.each([
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'],
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp/'],
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#section'],
+    ['https://MCP.example.com:443/mcp', 'https://mcp.example.com/mcp'],
+    ['https://mcp.example.com', 'https://mcp.example.com/'],
+    ['https://mcp.example.com/', 'https://mcp.example.com'],
+  ])('accepts a token for %s whose verifier reports %s', async (resourceUrl, resource) => {
+    const result = await authenticate({
+      requestUrl: 'https://mcp.example.com/mcp',
+      resourceUrl,
+      verifyToken: async () => ({ ...authInfo, resource: new URL(resource) }),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  test.each([
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/'],
+    ['https://mcp.example.com/mcp', 'http://mcp.example.com/mcp'],
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp?tenant=1'],
+  ])('rejects a token for %s whose verifier reports %s', async (resourceUrl, resource) => {
+    const result = await authenticate({
+      resourceUrl,
+      verifyToken: async () => ({ ...authInfo, resource: new URL(resource) }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { reason: 'invalid_token', cause: { code: 'resource-mismatch' } },
+    });
+  });
+
+  test('leaves the resource unchecked when the verifier reports none, or resourceUrl is not set', async () => {
+    const withoutResource = await authenticate({ resourceUrl: 'https://mcp.example.com/mcp' });
+    const withoutResourceUrl = await authenticate({
+      verifyToken: async () => ({ ...authInfo, resource: new URL('https://internal:3000/mcp') }),
+    });
+
+    expect(withoutResource).toMatchObject({ ok: true });
+    expect(withoutResourceUrl).toMatchObject({ ok: true });
+  });
+
   test.each([Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects a token whose expiresAt is %d instead of letting it through',
     async (expiresAt) => {

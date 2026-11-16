@@ -25,14 +25,18 @@ export type BaseAuthOptions = {
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
    * origin gets a 421. A single URL is used whatever origin the request has, so it works behind a proxy as it is. Only
-   * a list is matched against the request's origin, which is the one the app sees: behind a proxy that terminates TLS
-   * or rewrites `Host`, rebuild it from `X-Forwarded-*` headers you trust (in Express, set `trust proxy`). Never list
-   * the internal URLs: each listed URL is an audience and a metadata `resource`, and clients connect to the public one.
+   * a list is matched against the request's origin, which is the origin of the URL the framework gives the app, not
+   * always the one the client used. Behind a proxy that terminates TLS or rewrites `Host`, or on a server that builds
+   * that URL from the address it listens on instead of the `Host` header, rebuild it from the `Host` or
+   * `X-Forwarded-*` headers you trust (in Express, set `trust proxy`), or pass a single URL. Never list the internal
+   * URLs: each listed URL is an audience and a metadata `resource`, and clients connect to the public one.
    * The challenge's `resource_metadata` is derived from it.
    * With `verifyToken` it can be omitted, and it is then derived from the incoming request, which can differ from the
-   * public URL behind a proxy. Without `verifyToken` it is required: Clerk rejects a token whose `aud` claim does not
-   * include the URL for the request's origin, so a token issued for one listed URL does not pass on another. Pass the
-   * same value to `protectedResourceMetadataHandler`, so its `resource` is the URL checked here.
+   * public URL in the same cases. With `verifyToken` and `resourceUrl`, a token whose auth info has a `resource` other
+   * than the URL for the request is rejected with `invalid_token`. Without `verifyToken` it is required: Clerk
+   * rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one
+   * listed URL does not pass on another. Pass the same value to `protectedResourceMetadataHandler`, so its `resource`
+   * is the URL checked here.
    */
   resourceUrl?: McpResourceUrl | undefined;
   /**
@@ -80,8 +84,10 @@ export type ClerkAuthOptions = BaseAuthOptions & {
 export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
   /**
    * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
-   * `McpTokenVerificationError` to reject it with a reason. The token comes first and the request second, the reverse
-   * of the verifier `withMcpAuth` from `mcp-handler` takes.
+   * `McpTokenVerificationError` to reject it with a reason. When the auth info has a `resource` and `resourceUrl` is
+   * set, the token is rejected unless `resource` is the URL for the request; leave `resource` unset when the verifier
+   * does not know it. The token comes first and the request second, the reverse of the verifier `withMcpAuth` from
+   * `mcp-handler` takes.
    * @param token - The bearer token from the request
    * @param request - The framework's request or context
    * @returns The token's auth info, or `undefined` to reject it, or a promise of either
@@ -870,10 +876,11 @@ function requestResourceMetadataUrl(requestUrl: string): string {
  * Applies the response rule the adapters share. With a list of `resourceUrl`s, a request to an origin none of them has
  * gets a 421 without a challenge, before the token is read: no metadata URL there describes this server, and RFC 8707
  * section 3 audience-restricts a token so it cannot be presented to another resource. Otherwise the request uses the
- * listed URL with its origin. A missing or malformed header gets a challenge without an error code,
- * a rejected token adds `error="invalid_token"` (RFC 6750 section 3), and both 401 challenges list `requiredScopes`
- * then `challengeScopes` in `scope` (RFC 6750 section 3). A token without `requiredScopes` gets a 403 with
- * `error="insufficient_scope"` (RFC 6750 section 3.1). When a token lacks a `requiredScopes` entry, the 403 lists the
+ * listed URL with its origin, and a verified token whose auth info reports a `resource` other than that URL gets
+ * `invalid_token`, as in MCP SDK 2's `verifyBearerToken`. A missing or malformed header gets a challenge without an
+ * error code, a rejected token adds `error="invalid_token"` (RFC 6750 section 3), and both 401 challenges list
+ * `requiredScopes` then `challengeScopes` in `scope` (RFC 6750 section 3). A token without `requiredScopes` gets a 403
+ * with `error="insufficient_scope"` (RFC 6750 section 3.1). When a token lacks a `requiredScopes` entry, the 403 lists the
  * granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry, each once, as in
  * `requireAdditionalScopes`, so the new grant keeps the old access and covers the tools that step up to
  * `challengeScopes` too. A token that lacks only `challengeScopes` entries is let through. A verified token's auth info gets `resourceMetadataUrl`, which MCP SDK 2 puts in the
@@ -921,6 +928,9 @@ export async function authenticateBearer({
   verifyToken: (token: string) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
 }): Promise<BearerResult> {
   let resourceMetadataUrl: string;
+  // The resource a token must be for, when `resourceUrl` names it. A URL derived from the request is not checked: it
+  // can be an internal URL that no token names.
+  let expectedResource: string | undefined;
   if (resourceUrl === undefined) {
     resourceMetadataUrl = requestResourceMetadataUrl(requestUrl);
   } else {
@@ -935,6 +945,7 @@ export async function authenticateBearer({
       };
     }
     resourceMetadataUrl = resourceMetadataUrlFor(matched);
+    expectedResource = matched;
   }
 
   const unauthorizedScopes = requestedScopes({
@@ -997,6 +1008,22 @@ export async function authenticateBearer({
     authInfo = undefined;
   }
 
+  // RFC 8707 section 3: "An audience-restricted access token that is legitimately presented to a resource cannot then
+  // be taken by that resource and presented elsewhere". A verifier that reports the token's resource has done the
+  // audience lookup, so a token it reports for another resource is `invalid_token` (RFC 6750 section 3.1, "invalid
+  // for other reasons"). Clerk verification checks `aud` itself and leaves `resource` unset.
+  if (
+    authInfo?.resource !== undefined &&
+    expectedResource !== undefined &&
+    !isSameResource(authInfo.resource, expectedResource)
+  ) {
+    rejection = new McpTokenVerificationError(
+      'resource-mismatch',
+      `The token was issued for ${String(authInfo.resource)}, not ${expectedResource}`,
+    );
+    authInfo = undefined;
+  }
+
   if (!authInfo) {
     return {
       ok: false,
@@ -1026,6 +1053,19 @@ export async function authenticateBearer({
 
   // MCP SDK 2 reads `resourceMetadataUrl` from the auth info for the challenges its `scopeChallenge` tools send
   return { ok: true, authInfo: { ...authInfo, resourceMetadataUrl } };
+}
+
+// Whether a verifier's reported `resource` is the expected resource URL. It mirrors `sameResource` in MCP SDK 2's
+// `verifyBearerToken`, which ignores a fragment and a trailing slash, so `https://mcp.example.com/` matches the bare
+// origin as `verifyClerkOAuthToken` accepts it. Both sides are normalized as URLs first, so a configured
+// `resourceUrl` that differs from the reported `URL` only in letter case or a default port still matches.
+function isSameResource(reported: URL | string, expected: string): boolean {
+  const comparable = (value: URL | string) => {
+    const text = URL.canParse(value) ? new URL(value).href : String(value);
+    const hash = text.indexOf('#');
+    return (hash === -1 ? text : text.slice(0, hash)).replace(/\/$/, '');
+  };
+  return comparable(reported) === comparable(expected);
 }
 
 // The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret
