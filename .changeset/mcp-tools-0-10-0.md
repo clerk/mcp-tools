@@ -29,3 +29,9 @@
 | default export of `./stores/fs`                                          | `createFsStore()`                                                               | `./stores/fs`                   |
 | `./feedback`, `./create-browser-session`                                 | `./tools`                                                                       | subpath                         |
 | `./stores`                                                               | `./stores/fs`, `./stores/redis`, `./stores/postgres`, `./stores/sqlite`         | subpath                         |
+
+Other breaking changes:
+
+- Clerk-verified tokens must have `resourceUrl` as their audience (`aud`), or they get a `401`. Peer minimums are now `@clerk/express` 2.1.70, `@clerk/nextjs` 7.9.5, and `@clerk/backend` 3.19.0.
+- In Next.js, the protected resource metadata's `resource` is `<origin>/mcp` (from the route path) instead of the origin, so tokens issued for the origin are re-challenged.
+- `@modelcontextprotocol/sdk` and `zod` are now optional peers; list them in your own dependencies if you import the SDK or use `./tools`.
