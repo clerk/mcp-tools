@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createMcpHandler } from 'mcp-handler';
+import { NextRequest } from 'next/server';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const defaultAuthenticateRequest = vi.fn();
@@ -60,6 +63,21 @@ describe('protectedResourceMetadataHandler', () => {
 
     expect(() => protectedResourceMetadataHandler()(new Request(`${METADATA_ROOT}/mcp`))).toThrow(
       'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY environment variable is required',
+    );
+  });
+
+  // Next.js calls an exported `GET` with the request and a context, and a request has no own keys to reject as options
+  test.each([
+    ['a NextRequest', new NextRequest(`${METADATA_ROOT}/mcp`)],
+    ['a Request', new Request(`${METADATA_ROOT}/mcp`)],
+  ])('throws a Clerk error when exported as GET without being called, given %s', (_name, req) => {
+    const exportedUncalled = protectedResourceMetadataHandler as unknown as (
+      req: Request,
+      ctx: { params: Promise<object> },
+    ) => unknown;
+
+    expect(() => exportedUncalled(req, { params: Promise.resolve({}) })).toThrow(
+      'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route',
     );
   });
 
@@ -394,6 +412,40 @@ describe('withMcpAuth with Clerk', () => {
       expect(authenticateRequest).not.toHaveBeenCalled();
     },
   );
+
+  // Next.js inlines `process.env.NEXT_PUBLIC_*` at build time only where it is written out, so a publishable key set
+  // only for `next build` is missing from a `process.env[name]` lookup at run time. `vi.stubEnv` sets the run-time
+  // value, so only the source shows which form the check uses.
+  test('reads each key with a written-out process.env access that Next.js can inline', () => {
+    const file = new URL('./index.ts', import.meta.url);
+    const source = ts.createSourceFile(
+      file.pathname,
+      readFileSync(file, 'utf8'),
+      ts.ScriptTarget.Latest,
+    );
+    const isProcessEnv = (node: ts.Node) =>
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'process' &&
+      node.name.text === 'env';
+    const written: string[] = [];
+    const lookedUp: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) {
+        written.push(node.name.text);
+      }
+      if (ts.isElementAccessExpression(node) && isProcessEnv(node.expression)) {
+        lookedUp.push(node.getText(source));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+
+    expect(lookedUp).toEqual([]);
+    expect(written).toEqual(
+      expect.arrayContaining(['CLERK_SECRET_KEY', 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY']),
+    );
+  });
 
   test('does not check the environment for a clerkClient option', async () => {
     vi.stubEnv('CLERK_SECRET_KEY', '');

@@ -55,7 +55,8 @@ export * from '../server';
  * well-known path. `scopes_supported` lists `requiredScopes` then `challengeScopes`, unless `properties` sets it, and
  * then that list must include each of them.
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
- * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is not set.
+ * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is not set. Exporting `protectedResourceMetadataHandler` itself as `GET`,
+ * without calling it, throws a `Clerk error:` on the first request.
  * @example
  * ```ts
  * const handler = protectedResourceMetadataHandler({ resourceUrl: "https://mcp.example.com/mcp" });
@@ -66,6 +67,12 @@ export * from '../server';
 export function protectedResourceMetadataHandler(
   options: ProtectedResourceMetadataOptions = {},
 ): (req: Request) => Response {
+  // Exported uncalled as `GET`, it is called with the request, which has no own keys and so passes as empty options
+  if ((options as unknown) instanceof Request) {
+    throw new Error(
+      'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route, instead of passing protectedResourceMetadataHandler itself',
+    );
+  }
   assertProtectedResourceMetadataOptions(options, withMcpAuthOnlyOptionKeys);
 
   return (req: Request): Response => {
@@ -151,9 +158,12 @@ export type McpAuthOptions = McpAuthFailureOption &
     | (ClerkAuthOptions & {
         /**
          * The client that verifies tokens, or a function that returns one, called once for each request. Defaults to
-         * `clerkClient` from `@clerk/nextjs/server`, loaded on the first request. Pass a client created with both
-         * `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0 or later, the first with a reliable audience
-         * check, to verify with another Clerk instance.
+         * `clerkClient` from `@clerk/nextjs/server`, loaded on the first request, which needs `CLERK_SECRET_KEY` and
+         * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` set. An app that passes its keys to `clerkMiddleware()` instead, or runs
+         * in keyless mode, passes `() => clerkClient()` from `@clerk/nextjs/server`, with the MCP route in the
+         * middleware's matcher. Pass a client created with both `secretKey` and `publishableKey`, from
+         * `@clerk/backend` 3.19.0 or later, the first with a reliable audience check, to verify with another Clerk
+         * instance.
          */
         clerkClient?: ClerkClientOption | undefined;
         verifyToken?: never;
@@ -184,6 +194,8 @@ const withMcpAuthCallForm =
  * or a 500, instead of a challenge that would make the client discard a valid token, and the `McpAuthError` is logged
  * with `console.error`. Without a `clerkClient` option, every request throws a `Clerk error:` naming `CLERK_SECRET_KEY` or
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` when it is not set, or asking to install `@clerk/nextjs` when it can't be loaded.
+ * An app that passes its keys to `clerkMiddleware()`, or runs in keyless mode, passes
+ * `clerkClient: () => clerkClient()`.
  * @example
  * ```ts
  * import { withMcpAuth } from "@clerk/mcp-tools/next";
@@ -293,9 +305,15 @@ async function nextClerkClient(): Promise<ClerkOAuthClient> {
     });
   }
   // `@clerk/backend` checks the keys only when a token is verified, and a missing one would then look like a Clerk
-  // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs
-  for (const name of ['CLERK_SECRET_KEY', 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY']) {
-    if (!process.env[name]) {
+  // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs.
+  // Each is written out, not looked up by name: Next.js inlines `process.env.NEXT_PUBLIC_*` only where it is written
+  // out, so a publishable key set only at build time is missing from `process.env[name]` at run time.
+  const keys = {
+    CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+  };
+  for (const [name, value] of Object.entries(keys)) {
+    if (!value) {
       throw new Error(
         `Clerk error: withMcpAuth needs the ${name} environment variable or a clerkClient option`,
       );
