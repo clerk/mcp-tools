@@ -55,6 +55,39 @@ const initializeBody = JSON.stringify({
   },
 });
 
+/**
+ * A request shaped like @hono/node-server's lightweight request: an object on `Request.prototype` without a native
+ * request's internal state, whose fields and body methods read a native request it wraps. Passing it as the input of
+ * `new Request` throws, as it does on Node with `serve({ overrideGlobalObjects: false })`.
+ * @param input - The URL of the wrapped request
+ * @param init - The options of the wrapped request
+ * @returns The lightweight request
+ */
+function lightweightRequest(input: string, init: RequestInit): Request {
+  const native = new Request(input, init);
+  const fields = [
+    'url',
+    'method',
+    'headers',
+    'body',
+    'bodyUsed',
+    'cache',
+    'credentials',
+    'integrity',
+    'keepalive',
+    'mode',
+    'redirect',
+    'referrer',
+    'referrerPolicy',
+    'signal',
+  ] as const;
+  const methods = ['arrayBuffer', 'blob', 'clone', 'formData', 'json', 'text'] as const;
+  return Object.create(Request.prototype, {
+    ...Object.fromEntries(fields.map((name) => [name, { get: () => native[name] }])),
+    ...Object.fromEntries(methods.map((name) => [name, { value: () => native[name]() }])),
+  });
+}
+
 function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });
 }
@@ -972,6 +1005,49 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
     });
   });
 
+  test('passes CLERK_API_URL, CLERK_API_VERSION, and CLERK_JWT_KEY to the client when they are set', async () => {
+    vi.mocked(env).mockReturnValue({
+      ...keys(7),
+      CLERK_API_URL: 'https://api.clerkstage.dev',
+      CLERK_API_VERSION: 'v2',
+      CLERK_JWT_KEY: 'jwt-key-7',
+    });
+    envClient();
+
+    const res = await post(envApp());
+
+    expect(res.status).toBe(200);
+    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
+      secretKey: 'sk_test_7',
+      publishableKey: `${FAKE_PK}7`,
+      apiUrl: 'https://api.clerkstage.dev',
+      apiVersion: 'v2',
+      jwtKey: 'jwt-key-7',
+    });
+  });
+
+  test('builds another client when CLERK_API_URL changes for the same keys', async () => {
+    envClient();
+    const app = envApp();
+
+    vi.mocked(env).mockReturnValue(keys(8));
+    await post(app);
+    vi.mocked(env).mockReturnValue({ ...keys(8), CLERK_API_URL: 'https://api.clerkstage.dev' });
+    await post(app);
+    await post(app);
+
+    expect(vi.mocked(createClerkClient).mock.calls).toEqual([
+      [{ secretKey: 'sk_test_8', publishableKey: `${FAKE_PK}8` }],
+      [
+        {
+          secretKey: 'sk_test_8',
+          publishableKey: `${FAKE_PK}8`,
+          apiUrl: 'https://api.clerkstage.dev',
+        },
+      ],
+    ]);
+  });
+
   test('reuses the client across requests with the same keys and builds another for other keys', async () => {
     const client = envClient();
     const app = envApp();
@@ -1126,6 +1202,36 @@ describe('streamableHttpHandler', () => {
         expect(forwarded.redirect).toBe('manual');
         abort.abort();
         expect(forwarded.signal.aborted).toBe(true);
+      } finally {
+        handleRequest.mockRestore();
+      }
+    },
+  );
+
+  test.each(['json', 'text'] as const)(
+    'body handoff recovers cached %s from a request that is not a native Request',
+    async (reader) => {
+      const handleRequest = vi.spyOn(Transport.prototype, 'handleRequest');
+      try {
+        const app = new Hono();
+        app.use('/mcp', async (c, next) => {
+          await c.req[reader]();
+          await next();
+        });
+        app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
+
+        const request = lightweightRequest('http://localhost/mcp', {
+          method: 'POST',
+          headers: mcpHeaders,
+          body: initializeBody,
+        });
+        expect(() => new Request(request)).toThrow('Failed to parse URL');
+
+        const response = await app.fetch(request);
+        expect(response.status).toBe(200);
+        await response.text();
+
+        expect(handleRequest.mock.calls[0]![0].url).toBe('http://localhost/mcp');
       } finally {
         handleRequest.mockRestore();
       }

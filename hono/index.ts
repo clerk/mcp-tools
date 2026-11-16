@@ -85,40 +85,65 @@ interface WebStandardStreamableHttpTransport {
 type ClerkEnv = {
   CLERK_PUBLISHABLE_KEY?: string;
   CLERK_SECRET_KEY?: string;
+  CLERK_API_URL?: string;
+  CLERK_API_VERSION?: string;
+  CLERK_JWT_KEY?: string;
 };
 
-// The clients `mcpAuth` built from the environment, by key pair. On Cloudflare Workers the keys are only known per
-// request, on `c.env`, so the client can't be built at setup. The cache key is the secret and publishable key
-// together, so the secret is part of it; the map lives in memory only and is never logged or persisted. Two
-// concurrent first requests for one key pair can each build a client, and the later one replaces the earlier in the
-// map; both work, so the duplicate is harmless.
+// The clients `mcpAuth` built from the environment, by settings. On Cloudflare Workers the settings are only known
+// per request, on `c.env`, so the client can't be built at setup. The cache key is every setting the client is built
+// from, so the secret is part of it; the map lives in memory only and is never logged or persisted. Two concurrent
+// first requests for one set of settings can each build a client, and the later one replaces the earlier in the map;
+// both work, so the duplicate is harmless.
 const envClerkClients = new Map<string, ClerkOAuthClient>();
 
 /**
- * The keys a Clerk client is built from, read from the app's environment through `env(c)`.
+ * The settings a Clerk client is built from, read from the app's environment through `env(c)`: the secret and
+ * publishable keys, and `CLERK_API_URL`, `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as
+ * `clerkMiddleware()` from `@clerk/hono` and the `clerkClient` from `@clerk/express` read them.
  * @param c - The Hono context of the request
- * @returns The secret and publishable keys. It throws a `Clerk error:` naming the first one not set.
+ * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
+ * not set.
  */
 function requireClerkKeys(c: Context) {
-  const { CLERK_SECRET_KEY: secretKey, CLERK_PUBLISHABLE_KEY: publishableKey } = env<ClerkEnv>(c);
+  const {
+    CLERK_SECRET_KEY: secretKey,
+    CLERK_PUBLISHABLE_KEY: publishableKey,
+    CLERK_API_URL: apiUrl,
+    CLERK_API_VERSION: apiVersion,
+    CLERK_JWT_KEY: jwtKey,
+  } = env<ClerkEnv>(c);
   const missingKeyError = (name: string) =>
     new Error(
       `Clerk error: mcpAuth needs the ${name} environment variable or a clerkClient option`,
     );
   if (!secretKey) throw missingKeyError('CLERK_SECRET_KEY');
   if (!publishableKey) throw missingKeyError('CLERK_PUBLISHABLE_KEY');
-  return { secretKey, publishableKey };
+  // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
+  return {
+    secretKey,
+    publishableKey,
+    ...(apiUrl && { apiUrl }),
+    ...(apiVersion && { apiVersion }),
+    ...(jwtKey && { jwtKey }),
+  };
 }
 
 /**
  * The Clerk client built from the environment's keys, loading `@clerk/backend` the first time. The package is an
  * optional peer that only this path needs, so it is loaded with `import()` inside `try`: a bundler such as esbuild
  * fails the build on a bare `import()` of a missing package, but not on one inside `try`.
- * @param keys - The secret and publishable keys
- * @returns The client, the same one for the same keys
+ * @param keys - The settings `requireClerkKeys` read
+ * @returns The client, the same one for the same settings
  */
-async function envClerkClient(keys: { secretKey: string; publishableKey: string }) {
-  const cacheKey = `${keys.secretKey}\n${keys.publishableKey}`;
+async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
+  const cacheKey = JSON.stringify([
+    keys.secretKey,
+    keys.publishableKey,
+    keys.apiUrl,
+    keys.apiVersion,
+    keys.jwtKey,
+  ]);
   const cached = envClerkClients.get(cacheKey);
   if (cached) return cached;
 
@@ -224,7 +249,8 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
  * through. `clerkClient` is a client, or a function that returns one, called once for each request. Without
  * `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
- * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, kept for each key pair. Keep
+ * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, with `CLERK_API_URL`, `CLERK_API_VERSION`,
+ * and `CLERK_JWT_KEY` when they are set, kept for each set of those settings. Keep
  * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from
  * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called
  * with the token and the Hono context, and returns the auth data, or `undefined` to reject it.
@@ -309,7 +335,23 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
 async function requestWithBody(c: Context): Promise<Request> {
   const { raw, bodyCache } = c.req;
   if (!raw.bodyUsed || Object.keys(bodyCache).length === 0) return raw;
-  return new Request(raw, { method: raw.method, body: await c.req.text() });
+  // From the URL and each field, as Hono's own `cloneRawRequest` does, not `new Request(raw, ...)`: on Node,
+  // @hono/node-server's lightweight request is not a native `Request`, and with `overrideGlobalObjects: false` the
+  // global `Request` reads it as a URL string and throws
+  return new Request(raw.url, {
+    method: raw.method,
+    headers: raw.headers,
+    body: await c.req.text(),
+    cache: raw.cache,
+    credentials: raw.credentials,
+    integrity: raw.integrity,
+    keepalive: raw.keepalive,
+    mode: raw.mode,
+    redirect: raw.redirect,
+    referrer: raw.referrer,
+    referrerPolicy: raw.referrerPolicy,
+    signal: raw.signal,
+  });
 }
 
 /**
