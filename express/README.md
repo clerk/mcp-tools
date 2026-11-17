@@ -108,7 +108,7 @@ const resourceUrl = 'https://mcp.example.com/mcp';
 // Return `undefined` to reject the token
 async function verifyToken(token: string): Promise<AuthInfo | undefined> {
   try {
-    // Check the audience: MCP servers must only accept tokens issued for them
+    // Check the audience: MCP servers must only accept tokens issued for them (MCP authorization spec, 2025-06-18 and later)
     const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
       audience: resourceUrl,
       algorithms: ['HS256'],
@@ -203,7 +203,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
   // Your custom token verification logic. It must check that the token's audience is this server's URL: MCP servers
-  // must only accept tokens issued for them
+  // must only accept tokens issued for them (MCP authorization spec, 2025-06-18 and later)
   const user = await verifyMyToken(token);
   if (!user) return undefined; // Return undefined for invalid tokens
   // Return the auth info: `scopes` is what `requiredScopes` is checked against
@@ -363,7 +363,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
   try {
-    // Check the audience: MCP servers must only accept tokens issued for them
+    // Check the audience: MCP servers must only accept tokens issued for them (MCP authorization spec, 2025-06-18 and later)
     const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
       audience: 'https://mcp.example.com/mcp',
       algorithms: ['HS256'],

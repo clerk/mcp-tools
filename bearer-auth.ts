@@ -857,7 +857,8 @@ type BearerRequest = {
  * The response rule the adapters share, for one set of options:
  *
  * 1. With a list of `resourceUrl`s, a request to an origin none of them has gets a 421 without a challenge, before the
- *    token is read (RFC 8707 section 3 audience-restricts a token). Otherwise it uses the listed URL with its origin.
+ *    token is read, since a token is issued for one resource (the 421 is this package's answer, not an RFC 8707 rule).
+ *    Otherwise it uses the listed URL with its origin.
  * 2. With `publicAccess`, a request without an `Authorization` header can pass with `authInfo` `undefined`: a POST
  *    whose every JSON-RPC message is open. A GET gets a 405 when the handshake is public, the transport
  *    specification's answer for "no stream", since a 401 there would make the client sign in before it reached

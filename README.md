@@ -46,7 +46,7 @@ If you are building a server that you'd like to introduce MCP support for, you w
 
 #### Protected resource metadata
 
-In order for the [most up to date authentication flow in the MCP spec](https://modelcontextprotocol.io/specification/draft/basic/authorization#2-6-authorization-flow-steps) to work correctly, your server will need to expose a static metadata file called "protected resource metadata", which is defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728).
+In order for the [most up to date authentication flow in the MCP spec](https://modelcontextprotocol.io/specification/draft/basic/authorization#authorization-flow-steps) to work correctly, your server will need to expose a static metadata file called "protected resource metadata", which is defined by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728).
 
 This library exposes a tool that can quickly generate such a metadata file for you. Here's an example of how to use it:
 
@@ -81,7 +81,7 @@ For framework-specific implementations of protected resource metadata handlers, 
 
 #### Authorization server metadata
 
-An [older version of the MCP spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#2-5-authorization-flow-steps) required MCP servers to publish a separate "authorization server metadata" document, defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). Most deployments no longer need this endpoint when they publish protected resource metadata and use an authorization service with its own metadata endpoint. You may still need it for a custom or embedded authorization server or an older MCP client. With Clerk the route is optional: clients that follow RFC 9728 find Clerk's own metadata from the `authorization_servers` in your protected resource metadata. Mount it only to support clients that look for the metadata on your server's origin. Each adapter's `authorizationServerMetadataHandler()` relays Clerk's metadata, and answers with a JSON `502`, `{"error":"server_error"}`, when it can't be fetched.
+An [older version of the MCP spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#authorization-flow-steps) required MCP servers to publish a separate "authorization server metadata" document, defined by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). Most deployments no longer need this endpoint when they publish protected resource metadata and use an authorization service with its own metadata endpoint. You may still need it for a custom or embedded authorization server or an older MCP client. With Clerk the route is optional: clients that follow RFC 9728 find Clerk's own metadata from the `authorization_servers` in your protected resource metadata. Mount it only to support clients that look for the metadata on your server's origin. Each adapter's `authorizationServerMetadataHandler()` relays Clerk's metadata, and answers with a JSON `502`, `{"error":"server_error"}`, when it can't be fetched.
 
 If you use [Clerk](https://clerk.com) for authentication, fetch the metadata from your Clerk Frontend API and return it from your authorization server metadata endpoint.
 
