@@ -42,9 +42,10 @@ export type AICatalogHandlerOptions = AICatalogOptions & {
 export type DiscoveryRequest = {
   method: string;
   /**
-   * The URL the request was made to, which picks a listed `resourceUrl`
+   * The URL the request was made to, which picks a listed `resourceUrl`, `undefined` when the adapter found none, as
+   * for an Express request without a `Host` header that parses
    */
-  url: string;
+  url: string | undefined;
   /**
    * The request's `If-None-Match` field, its lines joined with commas
    */
@@ -55,7 +56,7 @@ export type DiscoveryRequest = {
  * The status, headers, and serialized body an adapter sends, `null` for no body.
  */
 export type DiscoveryAnswer = {
-  status: 200 | 304 | 405 | 421;
+  status: 200 | 304 | 400 | 405 | 421;
   headers: Record<string, string>;
   body: string | null;
 };
@@ -73,7 +74,12 @@ const discoveryCorsHeaders = {
   'Access-Control-Max-Age': '86400',
 };
 
-const json = (status: 405 | 421, error: string, head: boolean, headers = {}): DiscoveryAnswer => ({
+const json = (
+  status: 400 | 405 | 421,
+  error: string,
+  head: boolean,
+  headers = {},
+): DiscoveryAnswer => ({
   status,
   headers: { ...discoveryCorsHeaders, 'Content-Type': 'application/json', ...headers },
   body: head ? null : JSON.stringify({ error }),
@@ -179,6 +185,8 @@ function discoveryResponder(
     if (method !== 'GET' && !head) {
       return json(405, 'method_not_allowed', false, { Allow: ALLOW });
     }
+    // Without a URL there is no origin to select by, so this is answered as protected resource metadata is
+    if (url === undefined) return json(400, 'invalid_request', head);
     const key = select(url);
     const representation = key === undefined ? undefined : representations.get(key);
     // RFC 9110 section 15.5.20. No representation is selected, so If-None-Match is not evaluated.

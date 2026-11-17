@@ -1410,12 +1410,23 @@ const catalogEntries = [
 
 type DiscoveryHandler = 'serverCardHandler' | 'aiCatalogHandler';
 
-// Each adapter's discovery handler on its path, mounted for every method so OPTIONS and others reach it. Express
-// joins in CLRK-220. The Next.js route is the handler a route file exports for every method.
+// Each adapter's discovery handler on its path, mounted for every method so OPTIONS and others reach it. The Next.js
+// route is the handler a route file exports for every method.
 const discoveryAdapters: [
   Adapter,
   (handler: DiscoveryHandler, path: string, options: Options) => App,
 ][] = [
+  [
+    'express',
+    (handler, path, options) => {
+      const app = express();
+      app.all(
+        path,
+        expressHandler(options, (o) => expressAdapter[handler](o as never)),
+      );
+      return app;
+    },
+  ],
   [
     'hono',
     (handler, path, options) => {
@@ -1502,6 +1513,10 @@ describe.each(discoveryApps)('%s', (_name, mount, doc) => {
 
     expect(head.status).toBe(200);
     expect(head.body).toBeNull();
+    // RFC 9110 section 8.6: a Content-Length on HEAD, if any, is that of the GET's content
+    expect([null, String(Buffer.byteLength(JSON.stringify(get.body)))]).toContain(
+      head.headers.get('content-length'),
+    );
     expectHeaders(head.headers, {
       'content-type': doc.type,
       etag: get.headers.get('etag'),
@@ -1677,10 +1692,8 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
       { type: 'streamable-http', url: `${res.origin}/mcp` },
     ]);
     expect(other.status).toBe(421);
-    const alone = await serve(
-      mount((seen: string) => ({ ...card, resourceUrl: `${seen}/mcp` })),
-      CARD_PATH,
-    );
+    // A scalar, served whatever the origin, as each Express request reaches a listener on another port
+    const alone = await serve(mount({ ...card, resourceUrl: `${res.origin}/mcp` }), CARD_PATH);
     const elsewhere = await serve(
       mount({ ...card, resourceUrl: 'https://other.example.dev/mcp' }),
       CARD_PATH,

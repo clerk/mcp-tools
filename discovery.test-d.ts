@@ -1,3 +1,4 @@
+import type express from 'express';
 import type { Context } from 'hono';
 import { describe, expectTypeOf, test } from 'vitest';
 
@@ -8,6 +9,7 @@ import {
   serverCardHandler,
 } from './hono';
 import * as next from './next';
+import * as expressAdapter from './express';
 
 describe('serverCardHandler types', () => {
   const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
@@ -97,5 +99,48 @@ describe('Next.js discovery route handler types', () => {
     next.aiCatalogHandler({ entries, resourceUrl: [resourceUrl] });
     // @ts-expect-error entries are required
     next.aiCatalogHandler({});
+  });
+});
+
+describe('Express discovery handler types', () => {
+  const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
+  const entries = [
+    { identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' },
+  ];
+
+  test('take the same options as the Hono handlers and return Express handlers', () => {
+    const cardHandler = expressAdapter.serverCardHandler({
+      ...card,
+      resourceUrl: ['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'],
+      maxAge: 0,
+    });
+    const catalogHandler = expressAdapter.aiCatalogHandler({ entries, maxAge: 60 });
+    for (const handler of [cardHandler, catalogHandler]) {
+      expectTypeOf(handler).parameters.toEqualTypeOf<[express.Request, express.Response]>();
+      expectTypeOf(handler).returns.toEqualTypeOf<void>();
+      expectTypeOf(handler).toExtend<express.RequestHandler>();
+    }
+    expectTypeOf<expressAdapter.ServerCardHandlerOptions>().toEqualTypeOf<ServerCardHandlerOptions>();
+    expectTypeOf<expressAdapter.AICatalogHandlerOptions>().toEqualTypeOf<AICatalogHandlerOptions>();
+  });
+
+  test('reject generated fields, unknown keys, and request-time callbacks', () => {
+    const resourceUrl = 'https://mcp.example.com/mcp';
+    // @ts-expect-error remotes are generated
+    expressAdapter.serverCardHandler({ ...card, resourceUrl, remotes: [] });
+    const headers = [{ name: 'Authorization' }];
+    // @ts-expect-error no secret header inputs
+    expressAdapter.serverCardHandler({ ...card, resourceUrl, headers });
+    const perRequest = (req: express.Request) => req.url;
+    // @ts-expect-error the card is fixed: no callback per request
+    expressAdapter.serverCardHandler({ ...card, resourceUrl, card: perRequest });
+    // @ts-expect-error resourceUrl is required
+    expressAdapter.serverCardHandler(card);
+    // @ts-expect-error specVersion is generated
+    expressAdapter.aiCatalogHandler({ entries, specVersion: '1.0' });
+    // @ts-expect-error the catalog is fixed: one handler for each origin
+    expressAdapter.aiCatalogHandler({ entries, resourceUrl });
+    // @ts-expect-error entries are required
+    expressAdapter.aiCatalogHandler({});
   });
 });

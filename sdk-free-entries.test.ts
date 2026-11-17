@@ -120,6 +120,10 @@ vi.mock('@clerk/nextjs/server', () => {
   clerkLoads.push('@clerk/nextjs/server');
   throw new Error('Cannot find package @clerk/nextjs');
 });
+vi.mock('@clerk/express', () => {
+  clerkLoads.push('@clerk/express');
+  throw new Error('Cannot find package @clerk/express');
+});
 
 describe('the adapter entry points without Clerk packages', () => {
   test.each(['hono/index.ts', 'next/index.ts', 'express/index.ts'])(
@@ -263,5 +267,48 @@ describe('the adapter entry points without Clerk packages', () => {
       // So a later test that expects no loads starts from none
       clerkLoads.length = 0;
     }
+  });
+
+  test('serves a Server Card and an AI Catalog through Express without loading a Clerk package', async () => {
+    const { default: express } = await import('express');
+    const { withListening } = await import('./test/mcp-harness');
+    const { aiCatalogHandler, serverCardHandler } = await import('./express/index');
+    const app = express();
+    app.all(
+      '/mcp/server-card',
+      serverCardHandler({
+        name: 'com.example/weather',
+        version: '1.2.0',
+        description: 'Forecasts.',
+        resourceUrl: 'https://mcp.example.com/mcp',
+      }),
+    );
+    app.all(
+      '/.well-known/ai-catalog.json',
+      aiCatalogHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:mcp:weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      }),
+    );
+
+    const [cardBody, catalogBody] = await withListening(app, (baseUrl) =>
+      Promise.all(
+        ['/mcp/server-card', '/.well-known/ai-catalog.json'].map(async (path) => {
+          const res = await fetch(`${baseUrl}${path}`, {
+            headers: { Authorization: 'Bearer token-1' },
+          });
+          expect(res.status).toBe(200);
+          return res.json();
+        }),
+      ),
+    );
+
+    expect(cardBody).toMatchObject({ name: 'com.example/weather' });
+    expect(catalogBody).toMatchObject({ specVersion: '1.0' });
+    expect(clerkLoads).toEqual([]);
   });
 });

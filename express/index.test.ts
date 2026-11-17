@@ -33,8 +33,10 @@ import { FAKE_PK, expiresAt, sendRaw, withListening } from '../test/mcp-harness'
 import {
   McpAuthError,
   type McpAuthOptions,
+  aiCatalogHandler,
   mcpAuth,
   protectedResourceMetadataHandler,
+  serverCardHandler,
   streamableHttpHandler,
 } from './index';
 
@@ -908,4 +910,170 @@ describe('streamableHttpHandler', () => {
       expect(createServer).not.toHaveBeenCalled();
     },
   );
+});
+
+const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
+
+describe.each([
+  [
+    'serverCardHandler',
+    () => serverCardHandler({ ...card, resourceUrl: 'https://mcp.example.com/mcp' }),
+    '/mcp/server-card',
+    'application/mcp-server-card+json',
+  ],
+  [
+    'aiCatalogHandler',
+    () =>
+      aiCatalogHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:mcp:weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      }),
+    '/.well-known/ai-catalog.json',
+    'application/ai-catalog+json',
+  ],
+])('%s', (_name, handler, path, mediaType) => {
+  test('keeps the headers earlier middleware set, on the document and on a 304', async () => {
+    const app = express();
+    app.use((_req, res, next) => {
+      res.setHeader('x-request-id', 'r1');
+      next();
+    });
+    app.all(path, handler());
+
+    const [res, notModified] = await withListening(app, async (baseUrl) => {
+      const first = await fetch(`${baseUrl}${path}`);
+      const second = await fetch(`${baseUrl}${path}`, {
+        headers: { 'if-none-match': first.headers.get('etag')! },
+      });
+      return [first, second];
+    });
+
+    expect(res.headers.get('x-request-id')).toBe('r1');
+    expect(res.headers.get('content-type')).toBe(mediaType);
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('x-request-id')).toBe('r1');
+  });
+
+  // As protectedResourceMetadataHandler's own CORS headers do, unlike Hono, where a cors() middleware's are kept
+  test('replaces an Access-Control-Allow-Origin earlier middleware set with its own', async () => {
+    const app = express();
+    app.use((_req, res, next) => {
+      res.setHeader('access-control-allow-origin', 'https://app.example');
+      next();
+    });
+    app.all(path, handler());
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}${path}`, { headers: { origin: 'https://app.example' } }),
+    );
+
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-expose-headers')).toBe('ETag');
+  });
+
+  test('answers HEAD without a body when mounted with app.get', async () => {
+    const app = express();
+    app.get(path, handler());
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}${path}`, { method: 'HEAD' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('');
+    expect(res.headers.get('etag')).toMatch(/^W\//);
+    expect(res.headers.get('content-type')).toBe(mediaType);
+  });
+
+  // The handler answers conditional requests itself, so Express's own ETag setting and its `req.fresh`, which treats a
+  // request's `Cache-Control: no-cache` as stale, change nothing
+  test("sends its own weak ETag and 304 whatever the app's etag setting or the request's Cache-Control", async () => {
+    const app = express();
+    app.set('etag', 'strong');
+    app.all(path, handler());
+
+    const [res, notModified] = await withListening(app, async (baseUrl) => {
+      const first = await fetch(`${baseUrl}${path}`);
+      const second = await fetch(`${baseUrl}${path}`, {
+        headers: { 'if-none-match': first.headers.get('etag')!, 'cache-control': 'no-cache' },
+      });
+      return [first, second];
+    });
+
+    expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('etag')).toBe(res.headers.get('etag'));
+    expect(await notModified.text()).toBe('');
+  });
+
+  test.each([
+    [
+      'a Host header that does not parse',
+      `GET ${path} HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n`,
+    ],
+    ['an HTTP/1.0 request without a Host header', `GET ${path} HTTP/1.0\r\n\r\n`],
+  ])(
+    'answers %s with an uncached JSON 400, as protectedResourceMetadataHandler does',
+    async (_case, raw) => {
+      const app = express();
+      app.all(path, handler());
+
+      const response = await withListening(app, (baseUrl) => sendRaw(baseUrl, raw));
+      const [head, body] = response.split('\r\n\r\n');
+
+      expect(head).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
+      expect(head).toMatch(/^access-control-allow-origin: \*$/im);
+      expect(head).not.toMatch(/^(cache-control|etag):/im);
+      expect(body).toBe('{"error":"invalid_request"}');
+    },
+  );
+});
+
+// The origin a listed resourceUrl is selected by is Express's: `X-Forwarded-*` headers count only under `trust proxy`
+describe('serverCardHandler behind a proxy', () => {
+  const listed = { ...card, resourceUrl: ['https://mcp.example.com/mcp'] };
+
+  async function fetchCard(trustProxy: boolean, forwarded: Record<string, string>) {
+    const app = express();
+    if (trustProxy) app.set('trust proxy', true);
+    app.all('/mcp/server-card', serverCardHandler(listed));
+    return withListening(app, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/mcp/server-card`, { headers: forwarded });
+      return { status: res.status, body: await res.json() };
+    });
+  }
+
+  const forwarded = { 'x-forwarded-host': 'mcp.example.com', 'x-forwarded-proto': 'https' };
+
+  test('selects the listed URL from the forwarded origin under trust proxy', async () => {
+    const res = await fetchCard(true, forwarded);
+
+    expect(res.status).toBe(200);
+    expect(res.body.remotes).toEqual([
+      { type: 'streamable-http', url: 'https://mcp.example.com/mcp' },
+    ]);
+  });
+
+  test.each([
+    ['forwarded headers without trust proxy', false, forwarded],
+    [
+      'a forwarded port the list lacks',
+      true,
+      { ...forwarded, 'x-forwarded-host': 'mcp.example.com:8443' },
+    ],
+    ['a forwarded scheme the list lacks', true, { ...forwarded, 'x-forwarded-proto': 'http' }],
+    [
+      'only an Origin header naming the listed origin',
+      false,
+      { origin: 'https://mcp.example.com' },
+    ],
+  ])('answers %s with a 421', async (_case, trustProxy, headers) => {
+    const res = await fetchCard(trustProxy, headers);
+
+    expect(res).toEqual({ status: 421, body: { error: 'misdirected_request' } });
+  });
 });

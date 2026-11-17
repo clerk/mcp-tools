@@ -16,6 +16,14 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
+import {
+  type AICatalogHandlerOptions,
+  type DiscoveryAnswer,
+  type DiscoveryRequest,
+  type ServerCardHandlerOptions,
+  aiCatalogResponder,
+  serverCardResponder,
+} from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 declare global {
@@ -31,6 +39,8 @@ declare global {
 
 // Everything in the core subpath, so an Express app imports from this subpath alone
 export * from '../server';
+
+export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -245,6 +255,84 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
         url: getRequestUrl(req),
       }),
     );
+  };
+}
+
+/**
+ * An Express handler that serves an MCP Server Card, the public document a client reads before it connects to learn
+ * what the server is and where to connect. It validates the options and generates the card when it is created, so it
+ * needs no Clerk keys or MCP SDK and makes no request, and later changes to the options change nothing. Mount it with
+ * `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
+ *
+ * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
+ * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body.
+ * OPTIONS gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has an
+ * uncached 421. The origin is `req.protocol` and `req.host`, which come from `X-Forwarded-*` headers only when the
+ * app sets `trust proxy`; a request without a `Host` header that parses gets a 400.
+ * @see https://github.com/modelcontextprotocol/ext-server-card
+ * @param options - See `ServerCardHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the card cannot have.
+ * @example
+ * ```ts
+ * app.all(
+ *   "/mcp/server-card",
+ *   serverCardHandler({
+ *     name: "com.example/weather",
+ *     version: "1.2.0",
+ *     description: "Forecasts and current conditions.",
+ *     resourceUrl: "https://mcp.example.com/mcp",
+ *   }),
+ * );
+ * ```
+ */
+export function serverCardHandler(options: ServerCardHandlerOptions) {
+  return discoveryHandler(serverCardResponder('serverCardHandler', options));
+}
+
+/**
+ * An Express handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
+ * `/.well-known/ai-catalog.json` to find a domain's MCP servers. It validates the options and generates the catalog
+ * when it is created, so it needs no Clerk keys or MCP SDK and never fetches the cards it links to, and later changes
+ * to the options change nothing. The catalog is the same for every request: to answer on several origins with their
+ * own cards, create one handler for each and pick it by origin. Mount it with `app.all` so OPTIONS and other methods
+ * reach it; importing it mounts nothing.
+ *
+ * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
+ * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
+ * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, another method a 405, and a request
+ * without a `Host` header that parses a 400.
+ * @see https://github.com/Agent-Card/ai-catalog
+ * @param options - See `AICatalogHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
+ * @example
+ * ```ts
+ * app.all(
+ *   "/.well-known/ai-catalog.json",
+ *   aiCatalogHandler({
+ *     entries: [
+ *       { identifier: "urn:air:example.com:mcp:weather", url: "https://mcp.example.com/mcp/server-card" },
+ *     ],
+ *   }),
+ * );
+ * ```
+ */
+export function aiCatalogHandler(options: AICatalogHandlerOptions) {
+  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
+}
+
+function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
+  return (req: express.Request, res: express.Response): void => {
+    const { status, headers, body } = respond({
+      method: req.method,
+      url: getRequestUrl(req),
+      // Node joins repeated If-None-Match headers with commas
+      ifNoneMatch: req.get('if-none-match'),
+    });
+    // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,
+    // which add an ETag of their own and answer a 304 by Express's own freshness rules
+    res.status(status);
+    for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+    res.end(body ?? undefined);
   };
 }
 

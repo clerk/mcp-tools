@@ -51,12 +51,19 @@ const withServer = (values: string[], types: string[]): Surface => ({
 // The Express and Hono adapters export the same names on top of `./server`
 const ADAPTER: Surface = {
   values: [
+    'aiCatalogHandler',
     'authorizationServerMetadataHandler',
     'mcpAuth',
     'protectedResourceMetadataHandler',
+    'serverCardHandler',
     'streamableHttpHandler',
   ],
-  types: ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
+  types: [
+    'AICatalogHandlerOptions',
+    'McpAuthOptions',
+    'ProtectedResourceMetadataOptions',
+    'ServerCardHandlerOptions',
+  ],
 };
 
 const PINNED: Record<string, Surface> = {
@@ -131,11 +138,7 @@ const PINNED: Record<string, Surface> = {
     types: [],
   },
   './express': withServer(ADAPTER.values, ADAPTER.types),
-  // The discovery handlers reach Express in CLRK-220
-  './hono': withServer(
-    [...ADAPTER.values, 'aiCatalogHandler', 'serverCardHandler'],
-    [...ADAPTER.types, 'AICatalogHandlerOptions', 'ServerCardHandlerOptions'],
-  ),
+  './hono': withServer(ADAPTER.values, ADAPTER.types),
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
   './stores/redis': { values: ['createRedisStore'], types: ['RedisStoreConfig'] },
   './stores/postgres': { values: ['createPostgresStore'], types: ['PostgresStoreConfig'] },

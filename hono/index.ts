@@ -272,7 +272,7 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
     });
     // `c.body`, not `c.json` or a new Response, keeps the media type and the headers earlier middleware set
     if (answer.body === null) return c.body(null, answer.status, answer.headers);
-    return c.body(answer.body, answer.status as 200 | 405 | 421, answer.headers);
+    return c.body(answer.body, answer.status as 200 | 400 | 405 | 421, answer.headers);
   };
 }
 
