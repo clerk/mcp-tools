@@ -375,6 +375,14 @@ export { requireAdditionalScopes } from './scope-challenge';
 
 export { type McpResourceUrl, matchResourceUrl } from './resource-url';
 
+export {
+  type ServerCard,
+  type ServerCardIcon,
+  type ServerCardOptions,
+  type ServerCardRepository,
+  generateServerCard,
+} from './server-card';
+
 /**
  * CORS headers for OAuth metadata endpoints
  */

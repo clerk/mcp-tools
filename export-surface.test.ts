@@ -16,6 +16,7 @@ const SERVER: Surface = {
     'McpTokenVerificationError',
     'fetchAuthorizationServerMetadata',
     'generateProtectedResourceMetadata',
+    'generateServerCard',
     'isClerkAuthInfo',
     'matchResourceUrl',
     'metadataCorsHeaders',
@@ -30,6 +31,10 @@ const SERVER: Surface = {
     'McpPublicMethod',
     'McpResourceUrl',
     'PublicAccess',
+    'ServerCard',
+    'ServerCardIcon',
+    'ServerCardOptions',
+    'ServerCardRepository',
   ],
 };
 
