@@ -72,7 +72,6 @@ const discoveryCorsHeaders = {
   'Access-Control-Allow-Methods': ALLOW,
   'Access-Control-Allow-Headers': 'Content-Type, If-None-Match',
   'Access-Control-Expose-Headers': 'ETag',
-  'Access-Control-Max-Age': '86400',
 };
 
 // The JSON error a request gets, with its body even for HEAD: the responder drops a HEAD answer's body in one place.

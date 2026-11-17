@@ -1485,7 +1485,8 @@ const discoveryCors = {
   'access-control-allow-methods': 'GET, HEAD, OPTIONS',
   'access-control-allow-headers': 'Content-Type, If-None-Match',
   'access-control-expose-headers': 'ETag',
-  'access-control-max-age': '86400',
+  // The pinned discovery CORS block sets no preflight lifetime
+  'access-control-max-age': null,
 };
 
 const expectHeaders = (headers: Headers, expected: Record<string, string | null>) => {
