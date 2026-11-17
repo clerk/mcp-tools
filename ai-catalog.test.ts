@@ -72,6 +72,15 @@ describe('generateAICatalog', () => {
       ],
     });
   });
+
+  // For local development only: everywhere else a card URL is https
+  test.each([
+    'http://localhost:3000/mcp/server-card',
+    'http://127.0.0.1:3000/mcp/server-card',
+    'http://[::1]:3000/mcp/server-card',
+  ])('links a card at the loopback URL %s over http', (url) => {
+    expect(generateAICatalog({ entries: [{ ...weather, url }] }).entries[0]?.url).toBe(url);
+  });
 });
 
 describe('generateAICatalog contract', () => {
@@ -229,6 +238,21 @@ describe('generateAICatalog options', () => {
       'a relative url',
       { entries: [{ ...weather, url: '/mcp/server-card' }] },
       'entries[0].url must be',
+    ],
+    [
+      'an http url off a loopback host',
+      { entries: [{ ...weather, url: 'http://example.com/card' }] },
+      'entries[0].url must be an absolute https URL',
+    ],
+    [
+      'an http url on a localhost subdomain',
+      { entries: [{ ...weather, url: 'http://app.localhost/card' }] },
+      'entries[0].url must be an absolute https URL',
+    ],
+    [
+      'an http url on another loopback address',
+      { entries: [{ ...weather, url: 'http://127.0.0.2/card' }] },
+      'entries[0].url must be an absolute https URL',
     ],
     [
       'a url of another scheme',

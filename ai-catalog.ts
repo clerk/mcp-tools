@@ -20,7 +20,8 @@ export type AICatalogEntryOptions = {
   identifier: string;
   /**
    * The exact URL the Server Card is retrieved from, such as `https://example.com/mcp/server-card`. It may be on
-   * another host. It is never fetched.
+   * another host. It must be https, except on `localhost`, `127.0.0.1`, or `[::1]`, where http is allowed for local
+   * development. It is never fetched.
    */
   url: string;
   /**
@@ -144,15 +145,26 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       );
     }
     identifiers.add(identifier as string);
-    if (typeof url !== 'string' || !isResourceUrl(url) || /\s/.test(url)) {
+    if (!isCardUrl(url)) {
       fail(
-        `${at}.url must be an absolute http or https URL without credentials, a fragment, or spaces`,
+        `${at}.url must be an absolute https URL, or http on localhost, 127.0.0.1, or [::1] for local development, without credentials, a fragment, or spaces`,
       );
     }
     return { identifier: identifier as string, type: SERVER_CARD_TYPE, url: url as string };
   });
 
   return deepFreeze({ specVersion: '1.0', entries: linked });
+}
+
+// The hosts a card URL may use plain http on, for local development. `URL` keeps an IPv6 hostname's brackets.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+// A card URL is https, so a client reads the card it links over TLS, except on a loopback host, which a local
+// development server answers on
+function isCardUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !isResourceUrl(value) || /\s/.test(value)) return false;
+  const { protocol, hostname } = new URL(value);
+  return protocol === 'https:' || LOOPBACK_HOSTS.has(hostname);
 }
 
 // Open text in the specification, so only what can't be a logical identifier is rejected: nothing, whitespace or
