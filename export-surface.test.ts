@@ -112,19 +112,26 @@ const PINNED: Record<string, Surface> = {
   './server': SERVER,
   './next': withServer(
     [
+      'aiCatalogHandler',
       'authorizationServerMetadataHandler',
       'metadataCorsHandler',
       'protectedResourceMetadataHandler',
+      'serverCardHandler',
       'withClerkMcpAuth',
     ],
-    ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
+    [
+      'AICatalogHandlerOptions',
+      'McpAuthOptions',
+      'ProtectedResourceMetadataOptions',
+      'ServerCardHandlerOptions',
+    ],
   ),
   './next/client': {
     values: ['completeOAuthHandler'],
     types: [],
   },
   './express': withServer(ADAPTER.values, ADAPTER.types),
-  // The discovery handlers reach Express and Next.js in CLRK-220 and CLRK-221
+  // The discovery handlers reach Express in CLRK-220
   './hono': withServer(
     [...ADAPTER.values, 'aiCatalogHandler', 'serverCardHandler'],
     [...ADAPTER.types, 'AICatalogHandlerOptions', 'ServerCardHandlerOptions'],

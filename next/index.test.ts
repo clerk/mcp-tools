@@ -1,4 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createMcpHandler } from 'mcp-handler';
 import { NextRequest } from 'next/server';
@@ -29,10 +32,13 @@ vi.mock('@clerk/nextjs/server', () => clerkNextjsLoad.factory());
 import {
   McpAuthError,
   type McpAuthFailure,
+  aiCatalogHandler,
   protectedResourceMetadataHandler,
+  serverCardHandler,
   withClerkMcpAuth,
 } from './index';
 import { clerkAuthenticated, expiresAt, FAKE_PK } from '../test/mcp-harness';
+import { linkedCardCatalogErrors } from '../test/ai-catalog-contract';
 
 const METADATA_ROOT = 'https://mcp.example.com/.well-known/oauth-protected-resource';
 const resourceUrl = 'https://mcp.example.com/mcp';
@@ -437,5 +443,88 @@ describe('withClerkMcpAuth with Clerk', () => {
       extra: { userId: 'user-1', verifiedBy: 'clerk' },
       resourceMetadataUrl: RESOURCE_METADATA_URL,
     });
+  });
+});
+
+describe('discovery route handlers', () => {
+  // The pinned Card schema, as server-card.test.ts validates it, at the ServerCard definition
+  const schema = JSON.parse(
+    readFileSync(join(import.meta.dirname, '../test/fixtures/server-card.schema.json'), 'utf8'),
+  );
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  addFormats.default(ajv);
+  ajv.addSchema(schema, 'schema.json');
+  const validateServerCard = ajv.getSchema('schema.json#/$defs/ServerCard')!;
+
+  const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
+  const CARD_URL = 'https://mcp.example.com/mcp/server-card';
+  const CATALOG_URL = 'https://mcp.example.com/.well-known/ai-catalog.json';
+  // Next.js calls an exported method with the request and a context holding the route params
+  const context = { params: Promise.resolve({}) };
+
+  test('serve a Server Card the pinned schema accepts, and an AI Catalog of linked cards, to a NextRequest', async () => {
+    const GET = serverCardHandler({ ...card, resourceUrl: 'https://mcp.example.com/mcp' });
+    const catalogGET = aiCatalogHandler({
+      entries: [{ identifier: 'urn:air:example.com:mcp:weather', url: CARD_URL }],
+    });
+
+    const res = await (GET as (req: Request, ctx: unknown) => Response)(
+      new NextRequest(CARD_URL),
+      context,
+    );
+    const catalog = await (catalogGET as (req: Request, ctx: unknown) => Response)(
+      new NextRequest(CATALOG_URL),
+      context,
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(validateServerCard(body), JSON.stringify(validateServerCard.errors)).toBe(true);
+    expect(body.remotes).toEqual([{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]);
+    expect(catalog.status).toBe(200);
+    expect(catalog.headers.get('content-type')).toBe('application/ai-catalog+json');
+    expect(linkedCardCatalogErrors(await catalog.json())).toEqual([]);
+  });
+
+  // The control for the schema check above: a card the schema rejects fails it
+  test('the schema check rejects a card without remotes urls', () => {
+    expect(
+      validateServerCard({
+        $schema: 'https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json',
+        ...card,
+        remotes: [{ type: 'streamable-http' }],
+      }),
+    ).toBe(false);
+  });
+
+  // Only the request's own URL selects a listed URL, as for protectedResourceMetadataHandler
+  test('select a listed resourceUrl by the request URL, not by Host or X-Forwarded-* headers', async () => {
+    const GET = serverCardHandler({
+      ...card,
+      resourceUrl: ['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'],
+    });
+    const headers = {
+      host: 'mcp.example.dev',
+      'x-forwarded-host': 'mcp.example.dev',
+      'x-forwarded-proto': 'https',
+    };
+
+    const res = GET(new Request(CARD_URL, { headers }));
+    const unlisted = GET(new Request('https://evil.example/mcp/server-card', { headers }));
+
+    expect((await res.json()).remotes).toEqual([
+      { type: 'streamable-http', url: 'https://mcp.example.com/mcp' },
+    ]);
+    expect(unlisted.status).toBe(421);
+    expect(await unlisted.json()).toEqual({ error: 'misdirected_request' });
+  });
+
+  test.each([
+    ['serverCardHandler', serverCardHandler],
+    ['aiCatalogHandler', aiCatalogHandler],
+  ] as const)('%s exported uncalled throws a Clerk error on the first request', (name, factory) => {
+    expect(() => (factory as unknown as (req: Request) => unknown)(new Request(CARD_URL))).toThrow(
+      `Clerk error: call ${name}(options) and export its result from the route, instead of exporting ${name} itself`,
+    );
   });
 });

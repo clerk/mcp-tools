@@ -116,6 +116,10 @@ vi.mock('@clerk/backend', () => {
   clerkLoads.push('@clerk/backend');
   throw new Error('Cannot find package @clerk/backend');
 });
+vi.mock('@clerk/nextjs/server', () => {
+  clerkLoads.push('@clerk/nextjs/server');
+  throw new Error('Cannot find package @clerk/nextjs');
+});
 
 describe('the adapter entry points without Clerk packages', () => {
   test.each(['hono/index.ts', 'next/index.ts', 'express/index.ts'])(
@@ -204,5 +208,60 @@ describe('the adapter entry points without Clerk packages', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ specVersion: '1.0' });
     expect(clerkLoads).toEqual([]);
+  });
+
+  test('serves a Server Card and an AI Catalog from Next.js routes without loading a Clerk package', async () => {
+    vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', '');
+    vi.stubEnv('CLERK_SECRET_KEY', '');
+    const { aiCatalogHandler, serverCardHandler } = await import('./next/index');
+    const cardRoute = serverCardHandler({
+      name: 'com.example/weather',
+      version: '1.2.0',
+      description: 'Forecasts.',
+      resourceUrl: 'https://mcp.example.com/mcp',
+    });
+    const catalogRoute = aiCatalogHandler({
+      entries: [
+        {
+          identifier: 'urn:air:example.com:mcp:weather',
+          url: 'https://mcp.example.com/mcp/server-card',
+        },
+      ],
+    });
+    const headers = { Authorization: 'Bearer token-1' };
+
+    const card = cardRoute(new Request('https://mcp.example.com/mcp/server-card', { headers }));
+    const catalog = catalogRoute(
+      new Request('https://mcp.example.com/.well-known/ai-catalog.json', { headers }),
+    );
+
+    expect(card.status).toBe(200);
+    expect(await card.json()).toMatchObject({ name: 'com.example/weather' });
+    expect(catalog.status).toBe(200);
+    expect(await catalog.json()).toMatchObject({ specVersion: '1.0' });
+    expect(clerkLoads).toEqual([]);
+    vi.unstubAllEnvs();
+  });
+
+  // The control for the test above: the Next.js Clerk path does load the mocked package, so its absence is recorded
+  test('records a load of @clerk/nextjs/server where the Next.js entry loads it', async () => {
+    const { withMcpAuth } = await import('./next/index');
+    const route = withMcpAuth(() => new Response('reached'), {
+      resourceUrl: 'https://mcp.example.com/mcp',
+    });
+
+    try {
+      await route(
+        new Request('https://mcp.example.com/mcp', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer token-1' },
+        }),
+      ).catch(() => undefined);
+
+      expect(clerkLoads).toContain('@clerk/nextjs/server');
+    } finally {
+      // So a later test that expects no loads starts from none
+      clerkLoads.length = 0;
+    }
   });
 });

@@ -1410,8 +1410,8 @@ const catalogEntries = [
 
 type DiscoveryHandler = 'serverCardHandler' | 'aiCatalogHandler';
 
-// Each adapter's discovery handler on its path, mounted for every method so OPTIONS and others reach it. Express and
-// Next.js join in CLRK-220 and CLRK-221.
+// Each adapter's discovery handler on its path, mounted for every method so OPTIONS and others reach it. Express
+// joins in CLRK-220. The Next.js route is the handler a route file exports for every method.
 const discoveryAdapters: [
   Adapter,
   (handler: DiscoveryHandler, path: string, options: Options) => App,
@@ -1422,6 +1422,13 @@ const discoveryAdapters: [
       const app = new Hono();
       app.all(path, honoAdapter[handler](at(options, origin) as never));
       return app.fetch;
+    },
+  ],
+  [
+    'next',
+    (handler, _path, options) => {
+      const route = nextAdapter[handler](at(options, origin) as never);
+      return (req: Request) => route(req);
     },
   ],
 ];
