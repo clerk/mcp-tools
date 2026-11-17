@@ -16,7 +16,14 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
-import { type ServerCardHandlerOptions, serverCardResponder } from '../discovery-response';
+import {
+  type AICatalogHandlerOptions,
+  type DiscoveryAnswer,
+  type DiscoveryRequest,
+  type ServerCardHandlerOptions,
+  aiCatalogResponder,
+  serverCardResponder,
+} from '../discovery-response';
 import {
   type ClerkOAuthClient,
   type McpAuthError,
@@ -41,7 +48,7 @@ declare module 'hono' {
 // Everything in the core subpath, so a Hono app imports from this subpath alone
 export * from '../server';
 
-export type { ServerCardHandlerOptions };
+export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -223,7 +230,40 @@ export function authorizationServerMetadataHandler() {
  * ```
  */
 export function serverCardHandler(options: ServerCardHandlerOptions) {
-  const respond = serverCardResponder('serverCardHandler', options);
+  return discoveryHandler(serverCardResponder('serverCardHandler', options));
+}
+
+/**
+ * A Hono handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
+ * `/.well-known/ai-catalog.json` to find a domain's MCP servers. It validates the options and generates the catalog
+ * when it is created, so it needs no Clerk keys or MCP SDK and never fetches the cards it links to, and later changes
+ * to the options change nothing. The catalog is the same for every request: to answer on several origins with their
+ * own cards, create one handler for each and pick it by origin. Mount it with `app.all` so OPTIONS and other methods
+ * reach it; importing it mounts nothing.
+ *
+ * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
+ * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
+ * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405.
+ * @see https://github.com/Agent-Card/ai-catalog
+ * @param options - See `AICatalogHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
+ * @example
+ * ```ts
+ * app.all(
+ *   '/.well-known/ai-catalog.json',
+ *   aiCatalogHandler({
+ *     entries: [
+ *       { identifier: 'urn:air:example.com:mcp:weather', url: 'https://mcp.example.com/mcp/server-card' },
+ *     ],
+ *   }),
+ * );
+ * ```
+ */
+export function aiCatalogHandler(options: AICatalogHandlerOptions) {
+  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
+}
+
+function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
   return (c: Context) => {
     const answer = respond({
       method: c.req.method,

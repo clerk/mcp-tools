@@ -126,8 +126,8 @@ const PINNED: Record<string, Surface> = {
   './express': withServer(ADAPTER.values, ADAPTER.types),
   // The discovery handlers reach Express and Next.js in CLRK-220 and CLRK-221
   './hono': withServer(
-    [...ADAPTER.values, 'serverCardHandler'],
-    [...ADAPTER.types, 'ServerCardHandlerOptions'],
+    [...ADAPTER.values, 'aiCatalogHandler', 'serverCardHandler'],
+    [...ADAPTER.types, 'AICatalogHandlerOptions', 'ServerCardHandlerOptions'],
   ),
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
   './stores/redis': { values: ['createRedisStore'], types: ['RedisStoreConfig'] },

@@ -3,6 +3,7 @@
 // read the request and send the answer. It imports nothing from `./server`, which re-exports the builders.
 // This module is not a package entry point.
 import { type McpResourceUrl, assertResourceUrls, matchResourceUrl } from './resource-url';
+import { type AICatalogOptions, buildAICatalog } from './ai-catalog';
 import { type ServerCardOptions, buildServerCard } from './server-card';
 
 /**
@@ -18,6 +19,18 @@ export type ServerCardHandlerOptions = Omit<ServerCardOptions, 'resourceUrl'> & 
   resourceUrl: McpResourceUrl;
   /**
    * How many seconds a client or cache may reuse the card before revalidating it with its ETag, a whole number. The
+   * default is 3600, an hour. `0` lets caches store it but has them revalidate it on every use.
+   */
+  maxAge?: number | undefined;
+};
+
+/**
+ * Options for an `aiCatalogHandler`: the `generateAICatalog` options and the cache lifetime. The catalog is the same
+ * for every request; an app that answers on several origins mounts one handler for each.
+ */
+export type AICatalogHandlerOptions = AICatalogOptions & {
+  /**
+   * How many seconds a client or cache may reuse the catalog before revalidating it with its ETag, a whole number. The
    * default is 3600, an hour. `0` lets caches store it but has them revalidate it on every use.
    */
   maxAge?: number | undefined;
@@ -97,6 +110,28 @@ export function serverCardResponder(caller: string, options: unknown) {
         select: (url) => matchResourceUrl(resourceUrl, url),
       };
     },
+  });
+}
+
+/**
+ * Validates an `aiCatalogHandler`'s options and generates its catalog once, so the answers are fixed: changing the
+ * options afterward changes nothing.
+ * @param caller - The entry point named in error messages
+ * @param options - The handler's options, unchecked
+ * @returns The function that answers each request
+ */
+export function aiCatalogResponder(caller: string, options: unknown) {
+  // Anything but an object goes to the builder as it is, which names the options it takes
+  const isObject = typeof options === 'object' && options !== null && !Array.isArray(options);
+  const { maxAge, ...catalog } = isObject ? (options as AICatalogHandlerOptions) : {};
+  return discoveryResponder(caller, {
+    maxAge,
+    mediaType: 'application/ai-catalog+json',
+    // One catalog, whatever the request's URL
+    documents: () => ({
+      documents: new Map([['', buildAICatalog(caller, isObject ? catalog : options)]]),
+      select: () => '',
+    }),
   });
 }
 

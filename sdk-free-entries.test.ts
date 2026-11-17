@@ -65,8 +65,8 @@ describe('server entry points', () => {
     expect(sdkImports(entry)).toEqual([]);
   });
 
-  // Public discovery needs no schema validator, Clerk package, or MCP SDK: the Server Card modules import only other
-  // package files
+  // Public discovery needs no schema validator, Clerk package, or MCP SDK: the Server Card and AI Catalog modules
+  // import only other package files
   test('the discovery modules import no package at all', () => {
     const packages = reachableFiles('discovery-response.ts').flatMap((file) =>
       importedSpecifiers(file)
@@ -178,6 +178,31 @@ describe('the adapter entry points without Clerk packages', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ name: 'com.example/weather' });
+    expect(clerkLoads).toEqual([]);
+  });
+
+  test('serves an AI Catalog with aiCatalogHandler without loading a Clerk package', async () => {
+    const { Hono } = await import('hono');
+    const { aiCatalogHandler } = await import('./hono/index');
+    const app = new Hono();
+    app.all(
+      '/.well-known/ai-catalog.json',
+      aiCatalogHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:mcp:weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      }),
+    );
+
+    const res = await app.request('https://mcp.example.com/.well-known/ai-catalog.json', {
+      headers: { Authorization: 'Bearer token-1' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ specVersion: '1.0' });
     expect(clerkLoads).toEqual([]);
   });
 });

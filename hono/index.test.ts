@@ -34,6 +34,7 @@ import {
   protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
   mcpAuth,
+  aiCatalogHandler,
   serverCardHandler,
   streamableHttpHandler,
 } from './index';
@@ -178,51 +179,71 @@ describe('protectedResourceMetadataHandler', () => {
   });
 });
 
-describe('serverCardHandler', () => {
-  const options = {
-    name: 'com.example/weather',
-    version: '1.2.0',
-    description: 'Forecasts.',
-    resourceUrl: 'https://mcp.example.com/mcp',
-  };
-
-  test('keeps the headers earlier middleware set, on the card and on a 304', async () => {
+describe.each([
+  [
+    'serverCardHandler',
+    () =>
+      serverCardHandler({
+        name: 'com.example/weather',
+        version: '1.2.0',
+        description: 'Forecasts.',
+        resourceUrl: 'https://mcp.example.com/mcp',
+      }),
+    '/mcp/server-card',
+    'application/mcp-server-card+json',
+  ],
+  [
+    'aiCatalogHandler',
+    () =>
+      aiCatalogHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:mcp:weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      }),
+    '/.well-known/ai-catalog.json',
+    'application/ai-catalog+json',
+  ],
+])('%s', (_name, handler, path, mediaType) => {
+  test('keeps the headers earlier middleware set, on the document and on a 304', async () => {
     const app = new Hono();
     app.use('*', async (c, next) => {
       c.header('x-request-id', 'r1');
       await next();
     });
-    app.all('/mcp/server-card', serverCardHandler(options));
+    app.all(path, handler());
 
-    const res = await app.request('http://myapp.com/mcp/server-card');
-    const notModified = await app.request('http://myapp.com/mcp/server-card', {
+    const res = await app.request(`http://myapp.com${path}`);
+    const notModified = await app.request(`http://myapp.com${path}`, {
       headers: { 'if-none-match': res.headers.get('etag')! },
     });
 
     expect(res.headers.get('x-request-id')).toBe('r1');
-    expect(res.headers.get('content-type')).toBe('application/mcp-server-card+json');
+    expect(res.headers.get('content-type')).toBe(mediaType);
     expect(notModified.status).toBe(304);
     expect(notModified.headers.get('x-request-id')).toBe('r1');
   });
 
   test('answers HEAD without a body when mounted with app.get', async () => {
     const app = new Hono();
-    app.get('/mcp/server-card', serverCardHandler(options));
+    app.get(path, handler());
 
-    const res = await app.request('http://myapp.com/mcp/server-card', { method: 'HEAD' });
+    const res = await app.request(`http://myapp.com${path}`, { method: 'HEAD' });
 
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('');
     expect(res.headers.get('etag')).toMatch(/^W\//);
-    expect(res.headers.get('content-type')).toBe('application/mcp-server-card+json');
+    expect(res.headers.get('content-type')).toBe(mediaType);
   });
 
   test('keeps the CORS headers a cors() middleware in front of it sets, as the metadata handlers do', async () => {
     const app = new Hono();
     app.use('*', cors({ origin: 'https://app.example' }));
-    app.all('/mcp/server-card', serverCardHandler(options));
+    app.all(path, handler());
 
-    const res = await app.request('http://myapp.com/mcp/server-card', {
+    const res = await app.request(`http://myapp.com${path}`, {
       headers: { origin: 'https://app.example' },
     });
 

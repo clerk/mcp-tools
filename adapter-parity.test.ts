@@ -10,6 +10,7 @@ vi.mock('@clerk/backend', () => ({ createClerkClient: () => defaultClient }));
 vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient }));
 
 import { FAKE_PK, clerkAuthenticated, expiresAt, sendRaw, withListening } from './test/mcp-harness';
+import { linkedCardCatalogErrors } from './test/ai-catalog-contract';
 import type { AuthInfo } from './mcp-types';
 import { type McpAuthFailure, McpTokenVerificationError, toClerkAuthInfo } from './server';
 import { resourceMetadataUrlFor } from './bearer-auth';
@@ -1388,26 +1389,79 @@ test('hono publicAccess throws a setup error when a middleware before it read th
 
 const CARD_PATH = '/mcp/server-card';
 const CARD_TYPE = 'application/mcp-server-card+json';
+const CATALOG_PATH = '/.well-known/ai-catalog.json';
+const CATALOG_TYPE = 'application/ai-catalog+json';
 const card = {
   name: 'com.example/weather',
   version: '1.2.0',
   description: 'Forecasts and current conditions.',
 };
+// One card on this host and one on another, which the catalog links to without fetching it
+const catalogEntries = [
+  {
+    identifier: 'urn:air:example.com:mcp:weather',
+    url: 'https://public.example.com/mcp/server-card',
+  },
+  {
+    identifier: 'urn:air:saas.example:mcp:search',
+    url: 'https://cards.saas.example/search/server-card',
+  },
+];
 
-// Each adapter's Server Card handler on CARD_PATH, mounted for every method so OPTIONS and others reach it. Express and
+type DiscoveryHandler = 'serverCardHandler' | 'aiCatalogHandler';
+
+// Each adapter's discovery handler on its path, mounted for every method so OPTIONS and others reach it. Express and
 // Next.js join in CLRK-220 and CLRK-221.
-const serverCardApps: [Adapter, (options: Options) => App][] = [
+const discoveryAdapters: [
+  Adapter,
+  (handler: DiscoveryHandler, path: string, options: Options) => App,
+][] = [
   [
     'hono',
-    (options) => {
+    (handler, path, options) => {
       const app = new Hono();
-      app.all(CARD_PATH, honoAdapter.serverCardHandler(at(options, origin) as never));
+      app.all(path, honoAdapter[handler](at(options, origin) as never));
       return app.fetch;
     },
   ],
 ];
 
-// The discovery CORS headers: any origin may read the card and revalidate it, with If-None-Match and the ETag
+const serverCardApps = discoveryAdapters.map(
+  ([name, mount]) =>
+    [name, (options: Options) => mount('serverCardHandler', CARD_PATH, options)] as const,
+);
+const aiCatalogApps = discoveryAdapters.map(
+  ([name, mount]) =>
+    [name, (options: Options) => mount('aiCatalogHandler', CATALOG_PATH, options)] as const,
+);
+
+// The contract both discovery documents share, with the options that make one and what it should serve
+const discoveryApps = discoveryAdapters.flatMap(([name, mount]) => [
+  [
+    `${name} serverCardHandler`,
+    (options: Options) => mount('serverCardHandler', CARD_PATH, options),
+    {
+      handler: 'serverCardHandler',
+      path: CARD_PATH,
+      type: CARD_TYPE,
+      options: { ...card, resourceUrl: 'https://public.example.com/mcp' },
+      served: card,
+    },
+  ] as const,
+  [
+    `${name} aiCatalogHandler`,
+    (options: Options) => mount('aiCatalogHandler', CATALOG_PATH, options),
+    {
+      handler: 'aiCatalogHandler',
+      path: CATALOG_PATH,
+      type: CATALOG_TYPE,
+      options: { entries: catalogEntries },
+      served: { specVersion: '1.0' },
+    },
+  ] as const,
+]);
+
+// The discovery CORS headers: any origin may read the document and revalidate it, with If-None-Match and the ETag
 const discoveryCors = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, OPTIONS',
@@ -1433,6 +1487,143 @@ async function serveWith(app: App, path: string, method: string, headers: Record
   );
 }
 
+describe.each(discoveryApps)('%s', (_name, mount, doc) => {
+  test('answers HEAD with the GET headers and no body', async () => {
+    const app = mount(doc.options);
+    const get = await serve(app, doc.path);
+    const head = await serve(app, doc.path, { method: 'HEAD' });
+
+    expect(head.status).toBe(200);
+    expect(head.body).toBeNull();
+    expectHeaders(head.headers, {
+      'content-type': doc.type,
+      etag: get.headers.get('etag'),
+      'cache-control': 'public, max-age=3600',
+      ...discoveryCors,
+    });
+  });
+
+  test('answers the CORS preflight without caching or a body', async () => {
+    const res = await serve(mount(doc.options), doc.path, { method: 'OPTIONS' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+    expect(res.allow).toBe('GET, HEAD, OPTIONS');
+    expectHeaders(res.headers, { ...discoveryCors, 'cache-control': null, etag: null });
+  });
+
+  test.each(['POST', 'PUT', 'DELETE', 'PATCH'])(
+    'answers %s with a JSON 405 and Allow, uncached',
+    async (method) => {
+      const res = await serve(mount(doc.options), doc.path, { method });
+
+      expect(res.status).toBe(405);
+      expect(res.allow).toBe('GET, HEAD, OPTIONS');
+      expect(res.body).toEqual({ error: 'method_not_allowed' });
+      expectHeaders(res.headers, {
+        'content-type': 'application/json',
+        'access-control-allow-origin': '*',
+        'cache-control': null,
+        etag: null,
+      });
+    },
+  );
+
+  test('serves a request carrying a token without Clerk keys, a verifier, or any fetch', async () => {
+    vi.unstubAllEnvs();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const app = mount(doc.options);
+
+    const res = await serve(app, doc.path, { authorization: 'Bearer some-token' });
+
+    expect(res.status).toBe(200);
+    expect(defaultClient.authenticateRequest).not.toHaveBeenCalled();
+    expect(
+      fetchSpy.mock.calls.filter(([input]) => !String(input).startsWith('http://127.0.0.1')),
+    ).toEqual([]);
+  });
+});
+
+describe.each(discoveryApps)('%s conditional requests and caching', (_name, mount, doc) => {
+  async function tagOf(app: App) {
+    const etag = (await serve(app, doc.path)).headers.get('etag')!;
+    return { etag, opaque: etag.replace(/^W\//, '') };
+  }
+
+  // RFC 9110 section 13.1.2 compares with the weak function of section 8.8.3.2, over a list of entity-tags
+  test.each([
+    ['the ETag itself', ({ etag }: { etag: string }) => etag],
+    ['its opaque-tag without W/', ({ opaque }: { opaque: string }) => opaque],
+    ['a list holding it', ({ etag }: { etag: string }) => `"other", ${etag}`],
+    ['a list with empty elements', ({ etag }: { etag: string }) => ` , ,${etag},`],
+    ['a list after a tag with a comma in it', ({ etag }: { etag: string }) => `"a,b",${etag}`],
+    ['*', () => '*'],
+  ])(
+    'answers GET and HEAD whose If-None-Match is %s with a bodyless 304',
+    async (_case, header) => {
+      const app = mount(doc.options);
+      const tag = await tagOf(app);
+      for (const method of ['GET', 'HEAD']) {
+        const res = await serveWith(app, doc.path, method, { 'if-none-match': header(tag) });
+
+        expect(res.status, method).toBe(304);
+        expect(res.body, method).toBeNull();
+        expectHeaders(res.headers, {
+          etag: tag.etag,
+          'cache-control': 'public, max-age=3600',
+          'content-type': null,
+          ...discoveryCors,
+        });
+      }
+    },
+  );
+
+  test.each([
+    ['another tag', () => '"other"'],
+    ['the tag with a suffix', ({ opaque }: { opaque: string }) => `W/${opaque.slice(0, -1)}-gzip"`],
+    ['the tag unquoted', ({ opaque }: { opaque: string }) => `W/${opaque.slice(1, -1)}`],
+    ['the tag inside a longer one', ({ opaque }: { opaque: string }) => `"x${opaque.slice(1)}`],
+    ['a list mixing * with the tag', ({ etag }: { etag: string }) => `*, ${etag}`],
+  ])('sends the document in full when If-None-Match is %s', async (_case, header) => {
+    const app = mount(doc.options);
+    const res = await serveWith(app, doc.path, 'GET', {
+      'if-none-match': header(await tagOf(app)),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject(doc.served);
+  });
+
+  test('caches for a custom maxAge', async () => {
+    const res = await serve(mount({ ...doc.options, maxAge: 60 }), doc.path);
+
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+  });
+
+  // RFC 9111 section 5.2.2.4: caches may store it, but must revalidate it before each reuse
+  test('with maxAge 0, has caches revalidate before each reuse, keeping the ETag', async () => {
+    const app = mount({ ...doc.options, maxAge: 0 });
+    const res = await serve(app, doc.path);
+    const revalidated = await serveWith(app, doc.path, 'GET', {
+      'if-none-match': res.headers.get('etag')!,
+    });
+
+    expect(res.headers.get('cache-control')).toBe('public, no-cache');
+    expect(res.headers.get('etag')).toMatch(/^W\//);
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get('cache-control')).toBe('public, no-cache');
+  });
+
+  test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '60'])(
+    'throws at setup for the maxAge %s',
+    (maxAge) => {
+      expect(() => mount({ ...doc.options, maxAge })).toThrow(
+        `Clerk error: ${doc.handler} maxAge must be a whole number of seconds, 0 or more`,
+      );
+    },
+  );
+});
+
 describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
   const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
 
@@ -1452,47 +1643,6 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
     });
     expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
   });
-
-  test('answers HEAD with the GET headers and no body', async () => {
-    const app = mount(scalar);
-    const get = await serve(app, CARD_PATH);
-    const head = await serve(app, CARD_PATH, { method: 'HEAD' });
-
-    expect(head.status).toBe(200);
-    expect(head.body).toBeNull();
-    expectHeaders(head.headers, {
-      'content-type': CARD_TYPE,
-      etag: get.headers.get('etag'),
-      'cache-control': 'public, max-age=3600',
-      ...discoveryCors,
-    });
-  });
-
-  test('answers the CORS preflight without caching or a body', async () => {
-    const res = await serve(mount(scalar), CARD_PATH, { method: 'OPTIONS' });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toBeNull();
-    expect(res.allow).toBe('GET, HEAD, OPTIONS');
-    expectHeaders(res.headers, { ...discoveryCors, 'cache-control': null, etag: null });
-  });
-
-  test.each(['POST', 'PUT', 'DELETE', 'PATCH'])(
-    'answers %s with a JSON 405 and Allow, uncached',
-    async (method) => {
-      const res = await serve(mount(scalar), CARD_PATH, { method });
-
-      expect(res.status).toBe(405);
-      expect(res.allow).toBe('GET, HEAD, OPTIONS');
-      expect(res.body).toEqual({ error: 'method_not_allowed' });
-      expectHeaders(res.headers, {
-        'content-type': 'application/json',
-        'access-control-allow-origin': '*',
-        'cache-control': null,
-        etag: null,
-      });
-    },
-  );
 
   // A scalar is the configured address, whatever origin the request reaches the app at, as behind a proxy
   test('advertises a single resourceUrl whatever origin the request has', async () => {
@@ -1561,113 +1711,29 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
     expect(res.status).toBe(421);
     expect(res.body).toBeNull();
   });
+
+  async function tagOf(app: App) {
+    return (await serve(app, CARD_PATH)).headers.get('etag')!;
+  }
+
+  test('revalidates against the card for the origin of the request', async () => {
+    const res = await serveWith(
+      mount((seen: string) => ({
+        ...card,
+        resourceUrl: ['https://other.example.dev/mcp', `${seen}/mcp`],
+      })),
+      CARD_PATH,
+      'GET',
+      {
+        'if-none-match': await tagOf(
+          mount({ ...card, resourceUrl: 'https://other.example.dev/mcp' }),
+        ),
+      },
+    );
+
+    expect(res.status).toBe(200);
+  });
 });
-
-describe.each(serverCardApps)(
-  '%s serverCardHandler conditional requests and caching',
-  (_name, mount) => {
-    const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
-
-    async function tagOf(app: App) {
-      const etag = (await serve(app, CARD_PATH)).headers.get('etag')!;
-      return { etag, opaque: etag.replace(/^W\//, '') };
-    }
-
-    // RFC 9110 section 13.1.2 compares with the weak function of section 8.8.3.2, over a list of entity-tags
-    test.each([
-      ['the ETag itself', ({ etag }: { etag: string }) => etag],
-      ['its opaque-tag without W/', ({ opaque }: { opaque: string }) => opaque],
-      ['a list holding it', ({ etag }: { etag: string }) => `"other", ${etag}`],
-      ['a list with empty elements', ({ etag }: { etag: string }) => ` , ,${etag},`],
-      ['a list after a tag with a comma in it', ({ etag }: { etag: string }) => `"a,b",${etag}`],
-      ['*', () => '*'],
-    ])(
-      'answers GET and HEAD whose If-None-Match is %s with a bodyless 304',
-      async (_case, header) => {
-        const app = mount(scalar);
-        const tag = await tagOf(app);
-        for (const method of ['GET', 'HEAD']) {
-          const res = await serveWith(app, CARD_PATH, method, { 'if-none-match': header(tag) });
-
-          expect(res.status, method).toBe(304);
-          expect(res.body, method).toBeNull();
-          expectHeaders(res.headers, {
-            etag: tag.etag,
-            'cache-control': 'public, max-age=3600',
-            'content-type': null,
-            ...discoveryCors,
-          });
-        }
-      },
-    );
-
-    test.each([
-      ['another tag', () => '"other"'],
-      [
-        'the tag with a suffix',
-        ({ opaque }: { opaque: string }) => `W/${opaque.slice(0, -1)}-gzip"`,
-      ],
-      ['the tag unquoted', ({ opaque }: { opaque: string }) => `W/${opaque.slice(1, -1)}`],
-      ['the tag inside a longer one', ({ opaque }: { opaque: string }) => `"x${opaque.slice(1)}`],
-      ['a list mixing * with the tag', ({ etag }: { etag: string }) => `*, ${etag}`],
-    ])('sends the card in full when If-None-Match is %s', async (_case, header) => {
-      const app = mount(scalar);
-      const res = await serveWith(app, CARD_PATH, 'GET', {
-        'if-none-match': header(await tagOf(app)),
-      });
-
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject(card);
-    });
-
-    test('revalidates against the card for the origin of the request', async () => {
-      const res = await serveWith(
-        mount((seen: string) => ({
-          ...card,
-          resourceUrl: ['https://other.example.dev/mcp', `${seen}/mcp`],
-        })),
-        CARD_PATH,
-        'GET',
-        {
-          'if-none-match': (
-            await tagOf(mount({ ...card, resourceUrl: 'https://other.example.dev/mcp' }))
-          ).etag,
-        },
-      );
-
-      expect(res.status).toBe(200);
-    });
-
-    test('caches for a custom maxAge', async () => {
-      const res = await serve(mount({ ...scalar, maxAge: 60 }), CARD_PATH);
-
-      expect(res.headers.get('cache-control')).toBe('public, max-age=60');
-    });
-
-    // RFC 9111 section 5.2.2.4: caches may store it, but must revalidate it before each reuse
-    test('with maxAge 0, has caches revalidate before each reuse, keeping the ETag', async () => {
-      const app = mount({ ...scalar, maxAge: 0 });
-      const res = await serve(app, CARD_PATH);
-      const revalidated = await serveWith(app, CARD_PATH, 'GET', {
-        'if-none-match': res.headers.get('etag')!,
-      });
-
-      expect(res.headers.get('cache-control')).toBe('public, no-cache');
-      expect(res.headers.get('etag')).toMatch(/^W\//);
-      expect(revalidated.status).toBe(304);
-      expect(revalidated.headers.get('cache-control')).toBe('public, no-cache');
-    });
-
-    test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '60'])(
-      'throws at setup for the maxAge %s',
-      (maxAge) => {
-        expect(() => mount({ ...scalar, maxAge })).toThrow(
-          'Clerk error: serverCardHandler maxAge must be a whole number of seconds, 0 or more',
-        );
-      },
-    );
-  },
-);
 
 describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
   const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
@@ -1707,20 +1773,6 @@ describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
     ]);
   });
 
-  test('serves a request carrying a token without Clerk keys, a verifier, or any fetch', async () => {
-    vi.unstubAllEnvs();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    const app = mount(scalar);
-
-    const res = await serve(app, CARD_PATH, { authorization: 'Bearer some-token' });
-
-    expect(res.status).toBe(200);
-    expect(defaultClient.authenticateRequest).not.toHaveBeenCalled();
-    expect(
-      fetchSpy.mock.calls.filter(([input]) => !String(input).startsWith('http://127.0.0.1')),
-    ).toEqual([]);
-  });
-
   test.each([
     ['no options', undefined, 'serverCardHandler takes an options object'],
     [
@@ -1748,5 +1800,112 @@ describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
     ['remotes', { ...scalar, remotes: [] }, 'serverCardHandler cannot set remotes'],
   ])('throws at setup for %s', (_case, options, message) => {
     expect(() => mount(options as never)).toThrow(`Clerk error: ${message}`);
+  });
+});
+
+describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
+  const options = { entries: catalogEntries };
+
+  test('serves the catalog with its media type, a weak ETag, an hour of public caching, and public CORS', async () => {
+    const res = await serve(mount(options), CATALOG_PATH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      specVersion: '1.0',
+      entries: [
+        {
+          identifier: 'urn:air:example.com:mcp:weather',
+          type: CARD_TYPE,
+          url: 'https://public.example.com/mcp/server-card',
+        },
+        {
+          identifier: 'urn:air:saas.example:mcp:search',
+          type: CARD_TYPE,
+          url: 'https://cards.saas.example/search/server-card',
+        },
+      ],
+    });
+    expect(linkedCardCatalogErrors(res.body)).toEqual([]);
+    expectHeaders(res.headers, {
+      'content-type': CATALOG_TYPE,
+      'cache-control': 'public, max-age=3600',
+      ...discoveryCors,
+    });
+    expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
+  });
+
+  test('tags each catalog by its content', async () => {
+    const same = await serve(
+      mount({ entries: catalogEntries.map((entry) => ({ ...entry })) }),
+      CATALOG_PATH,
+    );
+    const fewer = await serve(mount({ entries: catalogEntries.slice(0, 1) }), CATALOG_PATH);
+    const first = await serve(mount(options), CATALOG_PATH);
+
+    expect(same.headers.get('etag')).toBe(first.headers.get('etag'));
+    expect(fewer.headers.get('etag')).not.toBe(first.headers.get('etag'));
+  });
+
+  // The catalog is fixed: it has no resourceUrl to choose by, so the request's origin and Origin header change nothing
+  test('serves the same catalog whatever the request origin and Origin header', async () => {
+    const app = mount(options);
+    const plain = await serve(app, CATALOG_PATH);
+    const fromElsewhere = await serveWith(app, CATALOG_PATH, 'GET', {
+      origin: 'https://other.example.dev',
+    });
+
+    expect(fromElsewhere.status).toBe(200);
+    expect(fromElsewhere.body).toEqual(plain.body);
+    expect(fromElsewhere.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  test('serves the catalog it was created with when the options change later', async () => {
+    const entry = { ...catalogEntries[0]! };
+    const changing = { entries: [entry] };
+    const app = mount(changing);
+    entry.url = 'https://evil.example/card';
+    changing.entries.push({
+      identifier: 'urn:air:evil.example:mcp:x',
+      url: 'https://evil.example/x',
+    });
+
+    const res = await serve(app, CATALOG_PATH);
+
+    expect(res.body).toEqual({
+      specVersion: '1.0',
+      entries: [{ ...catalogEntries[0], type: CARD_TYPE }],
+    });
+  });
+
+  test.each([
+    ['no options', undefined, 'aiCatalogHandler takes an options object with entries'],
+    ['no entries', {}, 'aiCatalogHandler entries must be a non-empty list'],
+    [
+      'a specVersion',
+      { ...options, specVersion: '1.0' },
+      'aiCatalogHandler cannot set specVersion',
+    ],
+    [
+      'a host',
+      { ...options, host: { displayName: 'Example' } },
+      'aiCatalogHandler does not take host',
+    ],
+    [
+      'a resourceUrl',
+      { ...options, resourceUrl: 'https://mcp.example.com/mcp' },
+      'aiCatalogHandler does not take resourceUrl',
+    ],
+    [
+      'an inline document',
+      { entries: [{ identifier: 'urn:air:x', data: {} }] },
+      'aiCatalogHandler entries[0] does not take data',
+    ],
+    [
+      'a relative card url',
+      { entries: [{ identifier: 'urn:air:x', url: '/mcp/server-card' }] },
+      'aiCatalogHandler entries[0].url must be',
+    ],
+  ])('throws at setup for %s', (_case, invalid, message) => {
+    expect(() => mount(invalid as never)).toThrow(`Clerk error: ${message}`);
   });
 });
