@@ -91,6 +91,7 @@ export function generateAICatalog(options: AICatalogOptions): AICatalog {
  * shares nothing with the options.
  * @param caller - The entry point named in error messages
  * @param options - The options, unchecked
+ * @returns The catalog, frozen. It throws a `Clerk error:` naming the first option the catalog cannot have.
  */
 export function buildAICatalog(caller: string, options: unknown): AICatalog {
   const fail = (message: string): never => {

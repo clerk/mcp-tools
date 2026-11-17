@@ -183,6 +183,7 @@ const RESERVED_META_PREFIX = /(^|\.)(modelcontextprotocol|mcp)\.[^.]+$/;
  * card, a frozen copy that shares nothing with the options.
  * @param caller - The entry point named in error messages
  * @param options - The options, unchecked
+ * @returns The card, frozen. It throws a `Clerk error:` naming the first option the card cannot have.
  */
 export function buildServerCard(caller: string, options: unknown): ServerCard {
   const fail = (message: string): never => {

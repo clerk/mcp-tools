@@ -30,7 +30,13 @@ export function matchResourceUrl(
   return resourceUrl.find((url) => URL.canParse(url) && new URL(url).origin === origin);
 }
 
-// Each URL is checked once here, so a request only has to find the one with its origin.
+/**
+ * Throws a `Clerk error:` message unless `resourceUrl` is one URL or a non-empty list of them that each pass
+ * `isResourceUrl`, with no two sharing an origin. Each URL is checked once here, at setup, so a request only has to
+ * find the one with its origin.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param resourceUrl - The option's value, unchecked
+ */
 export function assertResourceUrls(caller: string, resourceUrl: unknown) {
   const urls: unknown = typeof resourceUrl === 'string' ? [resourceUrl] : resourceUrl;
   if (!Array.isArray(urls) || urls.length === 0) {
@@ -55,8 +61,13 @@ export function assertResourceUrls(caller: string, resourceUrl: unknown) {
   }
 }
 
-// A URL with another scheme, such as `mailto:`, has no origin for the challenge, `new Request` throws on a URL with
-// credentials, and a resource identifier must not have a fragment (RFC 8707 section 2).
+/**
+ * Whether a string can be a `resourceUrl`: an absolute http or https URL without credentials or a fragment. A URL with
+ * another scheme, such as `mailto:`, has no origin for the challenge, `new Request` throws on a URL with credentials,
+ * and a resource identifier must not have a fragment (RFC 8707 section 2).
+ * @param value - The string to check
+ * @returns `true` when it can be a `resourceUrl`
+ */
 export function isResourceUrl(value: string): boolean {
   if (!URL.canParse(value) || value.includes('#')) return false;
   const url = new URL(value);
