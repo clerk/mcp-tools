@@ -79,50 +79,60 @@ export function serverCardResponder(caller: string, options: unknown) {
       `Clerk error: ${caller} takes an options object with name, version, description, and resourceUrl, as ${caller}({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })`,
     );
   }
-  const { resourceUrl, maxAge, ...card } = options as ServerCardHandlerOptions;
+  const { resourceUrl: configured, maxAge, ...card } = options as ServerCardHandlerOptions;
+  assertResourceUrls(caller, configured);
   return discoveryResponder(caller, {
-    resourceUrl,
     maxAge,
     mediaType: 'application/mcp-server-card+json',
-    build: (url) => buildServerCard(caller, { ...card, resourceUrl: url }),
+    documents: () => {
+      // A copy, so a list changed after setup can't select a URL without a built document
+      const resourceUrl: McpResourceUrl =
+        typeof configured === 'string' ? configured : [...configured];
+      return {
+        documents: new Map(
+          [resourceUrl]
+            .flat()
+            .map((url) => [url, buildServerCard(caller, { ...card, resourceUrl: url })] as const),
+        ),
+        select: (url) => matchResourceUrl(resourceUrl, url),
+      };
+    },
   });
 }
 
 /**
- * The answers of a discovery handler, from a document for each configured URL.
+ * The answers of a discovery handler, from the document a request's URL selects.
  * @param caller - The entry point named in error messages
- * @param config - The configured URL or URLs, the cache lifetime, the document's media type, and its builder
+ * @param config - The cache lifetime, the documents' media type, and a function, called once after `maxAge` is
+ * checked, that builds the documents by key and returns how a request URL selects one, `undefined` for none
  */
 function discoveryResponder(
   caller: string,
   config: {
-    resourceUrl: unknown;
     maxAge: unknown;
     mediaType: string;
-    build: (url: string) => unknown;
+    documents: () => {
+      documents: ReadonlyMap<string, unknown>;
+      select: (url: string) => string | undefined;
+    };
   },
 ) {
-  assertResourceUrls(caller, config.resourceUrl);
   const maxAge = config.maxAge ?? DEFAULT_MAX_AGE;
   if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
     throw new Error(
       `Clerk error: ${caller} maxAge must be a whole number of seconds, 0 or more, or left out for 3600`,
     );
   }
-  // A copy, so a list changed after setup can't select a URL without a built document
-  const resourceUrl: McpResourceUrl =
-    typeof config.resourceUrl === 'string'
-      ? config.resourceUrl
-      : [...(config.resourceUrl as string[])];
   // RFC 9111 section 5.2.2.9: `public` explicitly marks the document cacheable, including for a shared cache and a
   // request with an Authorization header (section 3.5). With 0, `no-cache` has a cache revalidate before each reuse
   // (section 5.2.2.4), which the ETag makes cheap.
   const cacheControl = maxAge === 0 ? 'public, no-cache' : `public, max-age=${maxAge}`;
 
+  const { documents, select } = config.documents();
   const representations = new Map(
-    [resourceUrl].flat().map((url) => {
-      const body = JSON.stringify(config.build(url));
-      return [url, { body, etag: weakEtag(body) }] as const;
+    [...documents].map(([key, document]) => {
+      const body = JSON.stringify(document);
+      return [key, { body, etag: weakEtag(body) }] as const;
     }),
   );
 
@@ -134,10 +144,11 @@ function discoveryResponder(
     if (method !== 'GET' && !head) {
       return json(405, 'method_not_allowed', false, { Allow: ALLOW });
     }
-    const selected = matchResourceUrl(resourceUrl, url);
+    const key = select(url);
+    const representation = key === undefined ? undefined : representations.get(key);
     // RFC 9110 section 15.5.20. No representation is selected, so If-None-Match is not evaluated.
-    if (selected === undefined) return json(421, 'misdirected_request', head);
-    const { body, etag } = representations.get(selected)!;
+    if (representation === undefined) return json(421, 'misdirected_request', head);
+    const { body, etag } = representation;
 
     const validators = { ...discoveryCorsHeaders, ETag: etag, 'Cache-Control': cacheControl };
     // RFC 9110 section 15.4.5: a 304 has the ETag and Cache-Control a 200 would have, but no content or Content-Type
