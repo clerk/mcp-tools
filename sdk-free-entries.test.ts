@@ -127,7 +127,12 @@ describe('the adapter entry points without Clerk packages', () => {
     app.post(
       '/mcp',
       mcpAuth({
-        verifyToken: async () => ({ token: 'token-1', clientId: 'client-1', scopes: [] }),
+        verifyToken: async () => ({
+          token: 'token-1',
+          clientId: 'client-1',
+          scopes: [],
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        }),
       }),
       (c) => c.json({ clientId: c.get('mcpAuth')?.clientId }),
     );

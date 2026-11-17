@@ -109,6 +109,7 @@ const authInfo = (scopes: string[]): AuthInfo => ({
   token: 'token-1',
   clientId: 'client-1',
   scopes,
+  expiresAt: Math.floor(Date.now() / 1000) + 3600,
 });
 
 describe('withMcpAuth with verifyToken', () => {

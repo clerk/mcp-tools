@@ -14,7 +14,12 @@ import {
 import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './server';
 import { FAKE_PK, clerkAuthenticated } from './test/mcp-harness';
 
-const authInfo = { token: 't', clientId: 'client-1', scopes: ['profile'] };
+const authInfo = {
+  token: 't',
+  clientId: 'client-1',
+  scopes: ['profile'],
+  expiresAt: Math.floor(Date.now() / 1000) + 3600,
+};
 
 type Authenticate = ReturnType<typeof bearerAuthenticator>;
 
@@ -197,15 +202,15 @@ describe('bearerAuthenticator', () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  // Passed, outside the Date range, or not a finite number
+  // Passed, or outside the Date range. One that is not a finite number is `token-claims-missing` instead.
   test.each([
-    now - 1,
-    -8_640_000_000_001,
-    -1e300,
-    -Number.MAX_VALUE,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ])('rejects a token whose expiresAt is %d with invalid_token', async (expiresAt) => {
+    [now - 1, 'token-expired'],
+    [-8_640_000_000_001, 'token-expired'],
+    [-1e300, 'token-expired'],
+    [-Number.MAX_VALUE, 'token-expired'],
+    [Number.NaN, 'token-claims-missing'],
+    [Number.POSITIVE_INFINITY, 'token-claims-missing'],
+  ])('rejects a token whose expiresAt is %d with invalid_token (%s)', async (expiresAt, code) => {
     const result = await authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt }) });
 
     expect(result).toMatchObject({
@@ -215,7 +220,7 @@ describe('bearerAuthenticator', () => {
         'WWW-Authenticate':
           'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
       },
-      failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
+      failure: { reason: 'invalid_token', cause: { code } },
     });
   });
 

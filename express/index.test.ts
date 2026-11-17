@@ -37,6 +37,9 @@ import {
   streamableHttpHandler,
 } from './index';
 
+// An expiry an hour away, which a custom verifier's result must have
+const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+
 function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });
 }
@@ -122,6 +125,7 @@ describe('mcpAuth', () => {
         token,
         scopes: [],
         clientId: req.path,
+        expiresAt,
       }));
       const app = express();
       app.set('trust proxy', true);
@@ -146,7 +150,13 @@ describe('mcpAuth', () => {
       expect(verifyToken.mock.calls[0]?.[1].path).toBe('/mcp');
       expect(authenticateRequest).not.toHaveBeenCalled();
       expect(await res.json()).toEqual({
-        auth: { token: 'my-token', scopes: [], clientId: '/mcp', resourceMetadataUrl: metadataUrl },
+        auth: {
+          token: 'my-token',
+          scopes: [],
+          clientId: '/mcp',
+          expiresAt,
+          resourceMetadataUrl: metadataUrl,
+        },
       });
     },
   );
@@ -161,7 +171,7 @@ describe('mcpAuth', () => {
     ['missing_token', undefined, undefined],
     ['malformed_token', 'Basic abc', undefined],
     ['invalid_token', 'Bearer bad', undefined],
-    ['insufficient_scope', 'Bearer t', { token: 't', scopes: [], clientId: 'c' }],
+    ['insufficient_scope', 'Bearer t', { token: 't', scopes: [], clientId: 'c', expiresAt }],
   ])('records %s on res.locals.mcpAuthFailure', async (reason, authorization, authInfo) => {
     const failures: unknown[] = [];
     const app = express();
@@ -335,7 +345,12 @@ describe('mcpAuth', () => {
   });
 
   test('verifies a token sent with an absolute-form request-target against the listed resourceUrl', async () => {
-    const verifyToken = vi.fn(async (token: string) => ({ token, clientId: 'c', scopes: [] }));
+    const verifyToken = vi.fn(async (token: string) => ({
+      token,
+      clientId: 'c',
+      scopes: [],
+      expiresAt,
+    }));
     const response = await sendRawTo(
       mcpAuth({ verifyToken, resourceUrl: ['http://mcp.example.com/mcp'] }),
       'POST http://mcp.example.com/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',

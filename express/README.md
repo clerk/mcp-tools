@@ -175,7 +175,7 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 - `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them. When a token lacks a `requiredScopes` entry, the `403` lists the granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry. List each tool's `requireAdditionalScopes` scopes here to have the client reauthorize once instead of twice. A token that lacks only `challengeScopes` entries is let through.
 - `publicAccess` (optional) - What a request without a token may do: `methods` (`true`, or a list of protocol methods), `tools` (tool names), and `resources` and `prompts` (`true`, or a list of resource URIs or prompt names). Without it, every such request gets the `401`. See [Public access](#public-access).
 - `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `mcpAuth` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here, or a function that returns one (or a promise of one), which is called once per request. A value without `authenticateRequest` throws a `Clerk error:` when `mcpAuth` is called. Create it with both `secretKey` and `publishableKey`. Without this option, a missing `CLERK_SECRET_KEY` or `CLERK_PUBLISHABLE_KEY` makes every request throw a `Clerk error:` naming it, as in the Hono adapter. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
-- `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it.
+- `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it. The result must have a finite `expiresAt`, in seconds since the epoch, and a non-empty `clientId`, or the token gets the `401` `invalid_token` challenge, with an `McpTokenVerificationError` cause whose `code` is `token-claims-missing` and whose `message` names the missing field. [MCP authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-handling), 2025-06-18 and later, has servers validate tokens as [OAuth 2.1 section 5.2](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13#section-5.2) describes, which includes checking that the token is not expired, and [RFC 9068 section 2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) makes `exp` and `client_id` REQUIRED in a JWT access token. JWT libraries such as `jsonwebtoken` and `jose` check `exp` only when the token has one, so pass it through as `expiresAt`. Auth info from `toClerkAuthInfo` needs no `expiresAt`, since Clerk checks `exp` itself.
 
 **Example:**
 
@@ -207,7 +207,13 @@ async function verifyToken(token: string, req: express.Request): Promise<AuthInf
   const user = await verifyMyToken(token);
   if (!user) return undefined; // Return undefined for invalid tokens
   // Return the auth info: `scopes` is what `requiredScopes` is checked against
-  return { token, clientId: user.clientId, scopes: user.scopes, extra: { userId: user.id } };
+  return {
+    token,
+    clientId: user.clientId,
+    scopes: user.scopes,
+    expiresAt: user.expiresAt,
+    extra: { userId: user.id },
+  };
 }
 
 app.use(express.json());
@@ -372,6 +378,7 @@ async function verifyToken(token: string, req: express.Request): Promise<AuthInf
       token,
       clientId: decoded.azp,
       scopes: typeof decoded.scope === 'string' ? decoded.scope.split(' ') : [],
+      expiresAt: decoded.exp,
       extra: { userId: decoded.sub, email: decoded.email },
     };
   } catch {

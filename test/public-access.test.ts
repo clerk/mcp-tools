@@ -18,7 +18,15 @@ const TOKENS: Record<string, string[]> = {
 
 function verifyToken(token: string): AuthInfo | undefined {
   const scopes = TOKENS[token];
-  return scopes && { token, clientId: 'client_1', scopes, extra: { userId: 'user_1' } };
+  return (
+    scopes && {
+      token,
+      clientId: 'client_1',
+      scopes,
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      extra: { userId: 'user_1' },
+    }
+  );
 }
 
 type ReadBody = (context: Context) => Promise<unknown>;

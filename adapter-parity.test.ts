@@ -11,6 +11,7 @@ vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient 
 
 import { FAKE_PK, clerkAuthenticated, sendRaw, withListening } from './test/mcp-harness';
 import type { AuthInfo } from './mcp-types';
+import { type McpAuthFailure, toClerkAuthInfo } from './server';
 import { resourceMetadataUrlFor } from './bearer-auth';
 import * as expressAdapter from './express';
 import * as honoAdapter from './hono';
@@ -504,8 +505,10 @@ describe('metadata handler headers', () => {
   });
 });
 
+// An expiry an hour away, which a custom verifier's result must have
+const expiresAt = Math.floor(Date.now() / 1000) + 3600;
 const TOKENS: Record<string, AuthInfo> = {
-  'token-1': { token: 'token-1', clientId: 'client-1', scopes: ['profile'] },
+  'token-1': { token: 'token-1', clientId: 'client-1', scopes: ['profile'], expiresAt },
   expired: {
     token: 'expired',
     clientId: 'client-1',
@@ -517,10 +520,63 @@ const TOKENS: Record<string, AuthInfo> = {
 const verifyToken = (token: string): AuthInfo | undefined => {
   const scopes = /^scoped:(.*)$/.exec(token)?.[1];
   if (scopes === undefined) return TOKENS[token];
-  return { token, clientId: 'client-1', scopes: scopes.split(',').filter(Boolean) };
+  return { token, clientId: 'client-1', scopes: scopes.split(',').filter(Boolean), expiresAt };
 };
 
-describe.each(authApps)('%s auth entry point with verifyToken', (_name, mount) => {
+/** Each adapter's auth entry point on /mcp, calling `record` with the failure it reports for a request it answers. */
+const failureApps: Record<Adapter, (options: object, record: (failure: unknown) => void) => App> = {
+  express: (options, record) => {
+    const app = express();
+    // The adapter sets `res.locals.mcpAuthFailure` just before it sends the answer
+    app.use((_req, res, next) => {
+      const json = res.json.bind(res);
+      res.json = (body) => {
+        record(res.locals.mcpAuthFailure);
+        return json(body);
+      };
+      next();
+    });
+    app.post(
+      '/mcp',
+      expressAdapter.mcpAuth(options as expressAdapter.McpAuthOptions),
+      (_req, res) => {
+        res.json({ reached: true });
+      },
+    );
+    return app;
+  },
+  hono: (options, record) => {
+    const app = new Hono();
+    app.use(async (c, next) => {
+      await next();
+      record(c.get('mcpAuthFailure'));
+    });
+    app.post('/mcp', honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions), (c) =>
+      c.json({ reached: true }),
+    );
+    return app.fetch;
+  },
+  next: (options, record) =>
+    nextAdapter.withMcpAuth(async () => Response.json({ reached: true }), {
+      ...(options as nextAdapter.McpAuthOptions),
+      onAuthFailure: record,
+    }),
+};
+
+/** POSTs a bearer token to the adapter's auth entry point with `verifyToken`, with the failure it reported. */
+async function verifiedWith(adapter: Adapter, authInfo: AuthInfo) {
+  let failure: McpAuthFailure | undefined;
+  const app = failureApps[adapter]({ verifyToken: () => authInfo }, (reported) => {
+    failure = reported as McpAuthFailure | undefined;
+  });
+  const res = await serve(app, '/mcp', {
+    method: 'POST',
+    authorization: `Bearer ${authInfo.token}`,
+  });
+  return { ...res, failure };
+}
+
+describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) => {
   test('challenges a request without a token with only resource_metadata', async () => {
     const res = await post(mount, { verifyToken });
 
@@ -617,6 +673,46 @@ describe.each(authApps)('%s auth entry point with verifyToken', (_name, mount) =
       reached: true,
       auth: { ...TOKENS['token-1'], resourceMetadataUrl: `${res.origin}${WELL_KNOWN}/mcp` },
     });
+  });
+
+  // OAuth 2.1 section 5.2, which MCP authorization 2025-06-18 and later points to: the resource server MUST check that
+  // the token is not expired, which a result without an expiry can't show. RFC 9068 section 2.2 makes `exp` and
+  // `client_id` REQUIRED in a JWT access token. The messages follow MCP SDK's `requireBearerAuth`.
+  const issued = { token: 't', clientId: 'client-1', scopes: [], expiresAt };
+  test.each([
+    ['no expiresAt', { expiresAt: undefined }, 'Token has no expiration time (expiresAt)'],
+    [
+      'a NaN expiresAt',
+      { expiresAt: Number.NaN },
+      'Token has no valid expiration time (expiresAt: NaN)',
+    ],
+    ['an empty clientId', { clientId: '' }, 'Token has no client ID (clientId)'],
+    ['no clientId', { clientId: undefined }, 'Token has no client ID (clientId)'],
+  ])(
+    'answers a result with %s with the invalid_token challenge',
+    async (_case, fields, message) => {
+      const res = await verifiedWith(name, { ...issued, ...fields } as AuthInfo);
+
+      expect(res.status).toBe(401);
+      expect(res.challenge).toBe(
+        `Bearer resource_metadata="${res.origin}${WELL_KNOWN}/mcp", error="invalid_token"`,
+      );
+      expect(res.failure).toMatchObject({
+        reason: 'invalid_token',
+        cause: { code: 'token-claims-missing', message },
+      });
+    },
+  );
+
+  // Clerk enforces `exp` itself, so auth info from `toClerkAuthInfo` in a custom verifier needs no `expiresAt`
+  test('passes auth info a custom verifier built with toClerkAuthInfo, without an expiresAt', async () => {
+    const authInfo = toClerkAuthInfo(clerkAuthenticated().toAuth(), 't');
+
+    const res = await verifiedWith(name, authInfo!);
+
+    expect(authInfo?.expiresAt).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(res.failure).toBeUndefined();
   });
 });
 

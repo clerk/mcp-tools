@@ -139,7 +139,12 @@ describe('a requireAdditionalScopes tool behind mcpAuth that lists its scopes in
   function verifyScoped(token: string): AuthInfo | undefined {
     const scopes = /^scoped:(.*)$/.exec(token)?.[1];
     if (scopes === undefined) return undefined;
-    return { token, clientId: 'client_1', scopes: scopes.split(',').filter(Boolean) };
+    return {
+      token,
+      clientId: 'client_1',
+      scopes: scopes.split(',').filter(Boolean),
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    };
   }
 
   function startMiddlewareServer() {

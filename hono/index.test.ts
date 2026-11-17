@@ -38,6 +38,9 @@ import {
 } from './index';
 import { clerkAuthenticated, FAKE_PK } from '../test/mcp-harness';
 
+// An expiry an hour away, which a custom verifier's result must have
+const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+
 const mcpHeaders = {
   'Content-Type': 'application/json',
   Accept: 'application/json, text/event-stream',
@@ -244,6 +247,7 @@ describe('mcpAuth', () => {
         token,
         scopes: [],
         clientId: c.req.path,
+        expiresAt,
       }));
       const app = new Hono();
       app.post('/mcp', mcpAuth({ verifyToken, resourceUrl }), (c) => c.json(c.get('mcpAuth')));
@@ -261,6 +265,7 @@ describe('mcpAuth', () => {
         token: 'my-token',
         scopes: [],
         clientId: '/mcp',
+        expiresAt,
         resourceMetadataUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp',
       });
     },
@@ -271,7 +276,7 @@ describe('mcpAuth', () => {
     ['malformed_token', 'Basic t', undefined],
     ['malformed_token', 'Bearer', undefined],
     ['invalid_token', 'Bearer t', undefined],
-    ['insufficient_scope', 'Bearer t', { token: 't', scopes: [], clientId: 'c' }],
+    ['insufficient_scope', 'Bearer t', { token: 't', scopes: [], clientId: 'c', expiresAt }],
   ])(
     'records %s in the mcpAuthFailure context variable',
     async (reason, authorization, authInfo) => {
@@ -299,7 +304,7 @@ describe('mcpAuth', () => {
     const app = new Hono();
     app.get(
       '/mcp',
-      mcpAuth({ verifyToken: async () => ({ token: 't', scopes: [], clientId: 'c' }) }),
+      mcpAuth({ verifyToken: async () => ({ token: 't', scopes: [], clientId: 'c', expiresAt }) }),
       (c) => c.json({ failure: c.get('mcpAuthFailure') ?? null }),
     );
 

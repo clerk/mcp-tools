@@ -14,6 +14,7 @@ import {
   McpTokenVerificationError,
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
+  isClerkAuthInfo,
   matchResourceUrl,
   metadataCorsHeaders,
   toClerkAuthInfo,
@@ -949,10 +950,11 @@ export function bearerAuthenticator({
     }
 
     // An expired token gets `invalid_token` (RFC 6750 section 3.1): a `verifyToken` can return the auth info of a
-    // token it decoded or cached. An `expiresAt` that is not a finite number, such as `NaN`, is rejected too.
+    // token it decoded or cached.
     if (
       authInfo?.expiresAt !== undefined &&
-      !(Number.isFinite(authInfo.expiresAt) && authInfo.expiresAt > Date.now() / 1000)
+      Number.isFinite(authInfo.expiresAt) &&
+      authInfo.expiresAt <= Date.now() / 1000
     ) {
       const expiry = new Date(authInfo.expiresAt * 1000);
       rejection = new McpTokenVerificationError(
@@ -961,6 +963,15 @@ export function bearerAuthenticator({
           ? `The token expired at ${expiry.toISOString()}`
           : `The token has no valid expiry time (${authInfo.expiresAt})`,
       );
+      authInfo = undefined;
+    }
+
+    // OAuth 2.1 section 5.2, which MCP authorization 2025-06-18 and later points to: the resource server MUST check
+    // that the token is not expired, which a result without an expiry, or with one that is not a finite number such as
+    // `NaN`, can't show. Clerk enforces `exp` itself, so its auth info may leave `expiresAt` out.
+    const missingClaim = authInfo && missingClaimMessage(authInfo);
+    if (missingClaim) {
+      rejection = new McpTokenVerificationError('token-claims-missing', missingClaim);
       authInfo = undefined;
     }
 
@@ -1008,6 +1019,22 @@ export function bearerAuthenticator({
     // MCP SDK 2 reads `resourceMetadataUrl` from the auth info for the challenges its `scopeChallenge` tools send
     return { ok: true, authInfo: { ...authInfo, resourceMetadataUrl } };
   };
+}
+
+// Why a verifier's result lacks a claim the token must have, or `undefined` when it has them all. The wording follows
+// MCP SDK's `requireBearerAuth` ("Token has no expiration time"), naming the field.
+function missingClaimMessage(authInfo: AuthInfo): string | undefined {
+  const { expiresAt } = authInfo;
+  if (expiresAt !== undefined && !Number.isFinite(expiresAt)) {
+    return `Token has no valid expiration time (expiresAt: ${expiresAt})`;
+  }
+  if (isClerkAuthInfo(authInfo)) return undefined;
+  if (expiresAt === undefined) return 'Token has no expiration time (expiresAt)';
+  // RFC 9068 section 2.2 makes `client_id` REQUIRED in a JWT access token, and Clerk rejects a token without one
+  if (typeof authInfo.clientId !== 'string' || authInfo.clientId === '') {
+    return 'Token has no client ID (clientId)';
+  }
+  return undefined;
 }
 
 function fail(

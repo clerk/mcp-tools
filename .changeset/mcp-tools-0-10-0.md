@@ -34,4 +34,5 @@ Other breaking changes:
 
 - Clerk-verified tokens must have `resourceUrl` as their audience (`aud`), or they get a `401`. Peer minimums are now `@clerk/express` 2.1.70, `@clerk/nextjs` 7.9.5, and `@clerk/backend` 3.19.0.
 - In Next.js, the protected resource metadata's `resource` is `<origin>/mcp` (from the route path) instead of the origin, so tokens issued for the origin are re-challenged.
+- A custom `verifyToken` must return a finite `expiresAt` and a non-empty `clientId`, or the token gets a `401` `invalid_token` challenge (cause code `token-claims-missing`). MCP authorization 2025-06-18 and later has servers validate tokens per OAuth 2.1 section 5.2, which includes checking expiry, and RFC 9068 section 2.2 makes `exp` and `client_id` REQUIRED in a JWT access token. Auth info from `toClerkAuthInfo` needs no `expiresAt`.
 - `@modelcontextprotocol/sdk` and `zod` are now optional peers; list them in your own dependencies if you import the SDK or use `./tools`.
