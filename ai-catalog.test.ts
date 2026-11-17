@@ -97,6 +97,15 @@ describe('generateAICatalog contract', () => {
     expect(linkedCardCatalogErrors(catalog)).toEqual([]);
   });
 
+  // The pinned specification: "This array MAY be empty."
+  test('generates an empty catalog the pinned contract accepts', () => {
+    const catalog = generateAICatalog({ entries: [] });
+
+    expect(catalog).toEqual({ specVersion: '1.0', entries: [] });
+    expect(aiCatalogErrors(catalog)).toEqual([]);
+    expect(linkedCardCatalogErrors(catalog)).toEqual([]);
+  });
+
   test('the contract check accepts the pinned specification example', () => {
     expect(aiCatalogErrors(upstreamExample)).toEqual([]);
     // It is a catalog, but of other artifacts, with members outside the linked-card subset
@@ -171,13 +180,8 @@ describe('generateAICatalog options', () => {
   test.each([
     ['no options', undefined, 'takes an options object with entries'],
     ['a list for options', [weather], 'takes an options object with entries'],
-    ['no entries', {}, 'entries must be a non-empty list of { identifier, url }'],
-    ['an empty list', { entries: [] }, 'entries must be a non-empty list of { identifier, url }'],
-    [
-      'an entry that is not an object',
-      { entries: ['urn:air:x'] },
-      'entries must be a non-empty list',
-    ],
+    ['no entries', {}, 'entries must be a list of { identifier, url }'],
+    ['an entry that is not an object', { entries: ['urn:air:x'] }, 'entries must be a list of'],
     ['a specVersion of its own', { entries, specVersion: '1.0' }, 'cannot set specVersion'],
     ['a host', { entries, host: { displayName: 'Example' } }, 'does not take host'],
     ['extensions', { entries, extensions: {} }, 'does not take extensions'],

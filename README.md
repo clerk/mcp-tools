@@ -142,7 +142,7 @@ An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON docum
 
 `generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
-- **Required:** `entries`, a non-empty list of `{ identifier, url }`, one for each Server Card.
+- **Required:** `entries`, a list of `{ identifier, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
 - **Generated:** `specVersion: "1.0"`, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, trust manifests, signatures, and extensions are not supported.
 
 An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:mcp:weather`; the specification asks open systems to use this `urn:air:{publisher}:{namespace}:{name}` form. It is not a URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.

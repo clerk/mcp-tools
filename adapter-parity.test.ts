@@ -1912,7 +1912,7 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
 
   test.each([
     ['no options', undefined, 'aiCatalogHandler takes an options object with entries'],
-    ['no entries', {}, 'aiCatalogHandler entries must be a non-empty list'],
+    ['no entries', {}, 'aiCatalogHandler entries must be a list of { identifier, url }'],
     [
       'a specVersion',
       { ...options, specVersion: '1.0' },

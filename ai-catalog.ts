@@ -116,9 +116,10 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       `does not take ${key}. An AI Catalog here supports only entries, each linking one Server Card by identifier and url`,
   });
   const { entries } = options;
-  if (!Array.isArray(entries) || entries.length === 0 || !entries.every(isPlainObject)) {
+  // The pinned specification: "This array MAY be empty."
+  if (!Array.isArray(entries) || !entries.every(isPlainObject)) {
     return fail(
-      "entries must be a non-empty list of { identifier, url }, such as [{ identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' }]",
+      "entries must be a list of { identifier, url }, such as [{ identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' }]",
     );
   }
 
