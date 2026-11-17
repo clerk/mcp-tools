@@ -1010,27 +1010,49 @@ describe.each([
     expect(await notModified.text()).toBe('');
   });
 
+  // The document is the same for every request, so the request's URL is never needed
   test.each([
     [
       'a Host header that does not parse',
       `GET ${path} HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n`,
     ],
     ['an HTTP/1.0 request without a Host header', `GET ${path} HTTP/1.0\r\n\r\n`],
-  ])(
-    'answers %s with an uncached JSON 400, as protectedResourceMetadataHandler does',
-    async (_case, raw) => {
-      const app = express();
-      app.all(path, handler());
+  ])('serves the document to %s', async (_case, raw) => {
+    const app = express();
+    app.all(path, handler());
 
-      const response = await withListening(app, (baseUrl) => sendRaw(baseUrl, raw));
-      const [head, body] = response.split('\r\n\r\n');
+    const response = await withListening(app, (baseUrl) => sendRaw(baseUrl, raw));
+    const [head] = response.split('\r\n\r\n');
 
-      expect(head).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
-      expect(head).toMatch(/^access-control-allow-origin: \*$/im);
-      expect(head).not.toMatch(/^(cache-control|etag):/im);
-      expect(body).toBe('{"error":"invalid_request"}');
-    },
-  );
+    expect(head).toMatch(/^HTTP\/1\.[01] 200 OK/);
+    expect(head).toMatch(new RegExp(`^content-type: ${mediaType.replace('+', '\\+')}$`, 'im'));
+    expect(head).toMatch(/^etag: W\//im);
+  });
+});
+
+// A list of resourceUrls selects the card by the request's origin, which a request without a Host that parses lacks
+describe('serverCardHandler with a list of resourceUrls', () => {
+  test.each([
+    [
+      'a Host header that does not parse',
+      'GET /mcp/server-card HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n',
+    ],
+    ['an HTTP/1.0 request without a Host header', 'GET /mcp/server-card HTTP/1.0\r\n\r\n'],
+  ])('answers %s with a JSON 400', async (_case, raw) => {
+    const app = express();
+    app.all(
+      '/mcp/server-card',
+      serverCardHandler({ ...card, resourceUrl: ['https://mcp.example.com/mcp'] }),
+    );
+
+    const response = await withListening(app, (baseUrl) => sendRaw(baseUrl, raw));
+    const [head, body] = response.split('\r\n\r\n');
+
+    expect(head).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
+    expect(head).toMatch(/^access-control-allow-origin: \*$/im);
+    expect(head).not.toMatch(/^etag:/im);
+    expect(body).toBe('{"error":"invalid_request"}');
+  });
 });
 
 // The origin a listed resourceUrl is selected by is Express's: `X-Forwarded-*` headers count only under `trust proxy`

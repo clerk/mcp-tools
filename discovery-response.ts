@@ -44,7 +44,7 @@ export type DiscoveryRequest = {
   method: string;
   /**
    * The URL the request was made to, which picks a listed `resourceUrl`, `undefined` when the adapter found none, as
-   * for an Express request without a `Host` header that parses
+   * for an Express request without a `Host` header that parses. A document served to every request never reads it.
    */
   url: string | undefined;
   /**
@@ -104,17 +104,20 @@ export function serverCardResponder(caller: string, options: unknown) {
   return discoveryResponder(caller, {
     maxAge,
     mediaType: 'application/mcp-server-card+json',
-    documents: () => {
+    build: () => {
+      // One URL is advertised whatever the request's origin, so the request's URL is never needed
+      if (typeof configured === 'string') {
+        return { document: buildServerCard(caller, { ...card, resourceUrl: configured }) };
+      }
       // A copy, so a list changed after setup can't select a URL without a built document
-      const resourceUrl: McpResourceUrl =
-        typeof configured === 'string' ? configured : [...configured];
+      const listed = [...configured];
       return {
-        documents: new Map(
-          [resourceUrl]
-            .flat()
-            .map((url) => [url, buildServerCard(caller, { ...card, resourceUrl: url })] as const),
+        byUrl: new Map(
+          listed.map(
+            (url) => [url, buildServerCard(caller, { ...card, resourceUrl: url })] as const,
+          ),
         ),
-        select: (url) => matchResourceUrl(resourceUrl, url),
+        select: (url) => matchResourceUrl(listed, url),
       };
     },
   });
@@ -135,29 +138,19 @@ export function aiCatalogResponder(caller: string, options: unknown) {
     maxAge,
     mediaType: 'application/ai-catalog+json',
     // One catalog, whatever the request's URL
-    documents: () => ({
-      documents: new Map([['', buildAICatalog(caller, isObject ? catalog : options)]]),
-      select: () => '',
-    }),
+    build: () => ({ document: buildAICatalog(caller, isObject ? catalog : options) }),
   });
 }
 
 /**
  * The answers of a discovery handler, from the document a request's URL selects.
  * @param caller - The entry point named in error messages
- * @param config - The cache lifetime, the documents' media type, and a function, called once after `maxAge` is
- * checked, that builds the documents by key and returns how a request URL selects one, `undefined` for none
+ * @param config - The cache lifetime, the documents' media type, and `build`, called once after `maxAge` is checked,
+ * which builds the document or documents to serve
  */
 function discoveryResponder(
   caller: string,
-  config: {
-    maxAge: unknown;
-    mediaType: string;
-    documents: () => {
-      documents: ReadonlyMap<string, unknown>;
-      select: (url: string) => string | undefined;
-    };
-  },
+  config: { maxAge: unknown; mediaType: string; build: () => DiscoveryDocuments },
 ) {
   const maxAge = config.maxAge ?? DEFAULT_MAX_AGE;
   if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
@@ -170,13 +163,7 @@ function discoveryResponder(
   // (section 5.2.2.4), which the ETag makes cheap.
   const cacheControl = maxAge === 0 ? 'public, no-cache' : `public, max-age=${maxAge}`;
 
-  const { documents, select } = config.documents();
-  const representations = new Map(
-    [...documents].map(([key, document]) => {
-      const body = JSON.stringify(document);
-      return [key, { body, etag: weakEtag(body) }] as const;
-    }),
-  );
+  const pick = representationPicker(config.build());
 
   const answer = ({ method, url, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
     if (method === 'OPTIONS') {
@@ -185,13 +172,9 @@ function discoveryResponder(
     if (method !== 'GET' && method !== 'HEAD') {
       return errorAnswer(405, 'method_not_allowed', { Allow: ALLOW });
     }
-    // Without a URL there is no origin to select by, so this is answered as protected resource metadata is
-    if (url === undefined) return errorAnswer(400, 'invalid_request');
-    const key = select(url);
-    const representation = key === undefined ? undefined : representations.get(key);
-    // RFC 9110 section 15.5.20. No representation is selected, so If-None-Match is not evaluated.
-    if (representation === undefined) return errorAnswer(421, 'misdirected_request');
-    const { body, etag } = representation;
+    const picked = pick(url);
+    if ('status' in picked) return picked;
+    const { body, etag } = picked;
 
     const validators = { ...discoveryCorsHeaders, ETag: etag, 'Cache-Control': cacheControl };
     // RFC 9110 section 15.4.5: a 304 has the ETag and Cache-Control a 200 would have, but no content or Content-Type
@@ -205,6 +188,49 @@ function discoveryResponder(
   return (request: DiscoveryRequest): DiscoveryAnswer => {
     const response = answer(request);
     return request.method === 'HEAD' ? { ...response, body: null } : response;
+  };
+}
+
+/**
+ * What a discovery handler serves: one `document` for every request, or documents `byUrl`, with `select` returning
+ * the key of the one a request's URL is for, `undefined` for none.
+ */
+type DiscoveryDocuments =
+  | { document: unknown }
+  | {
+      byUrl: ReadonlyMap<string, unknown>;
+      select: (url: string) => string | undefined;
+    };
+
+/**
+ * A serialized document and its validator.
+ */
+type Representation = { body: string; etag: string };
+
+/**
+ * Serializes the documents once and returns how a request's URL picks one, or the error answer when it can't.
+ */
+function representationPicker(
+  documents: DiscoveryDocuments,
+): (url: string | undefined) => Representation | DiscoveryAnswer {
+  const represent = (document: unknown): Representation => {
+    const body = JSON.stringify(document);
+    return { body, etag: weakEtag(body) };
+  };
+  if ('document' in documents) {
+    const fixed = represent(documents.document);
+    return () => fixed;
+  }
+  const byUrl = new Map(
+    [...documents.byUrl].map(([key, document]) => [key, represent(document)] as const),
+  );
+  return (url) => {
+    // Without a URL there is no origin to select by, so this is answered as protected resource metadata is
+    if (url === undefined) return errorAnswer(400, 'invalid_request');
+    const key = documents.select(url);
+    const representation = key === undefined ? undefined : byUrl.get(key);
+    // RFC 9110 section 15.5.20. No representation is selected, so If-None-Match is not evaluated.
+    return representation ?? errorAnswer(421, 'misdirected_request');
   };
 }
 
