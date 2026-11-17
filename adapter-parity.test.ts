@@ -684,7 +684,14 @@ const unverifiable: [string, string, number][] = [
   ['secret-key-invalid', 'Invalid secret key (code=secret-key-invalid, status=401)', 500],
 ];
 
-describe.each(authApps)('%s auth entry point with Clerk', (_name, mount) => {
+// The client each adapter uses without a `clerkClient` option, as its setup error names it
+const defaultClientName: Record<Adapter, string> = {
+  express: "clerkClient from '@clerk/express'",
+  hono: 'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY',
+  next: "clerkClient from '@clerk/nextjs/server'",
+};
+
+describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
   const send = (clerkClient: unknown, init: Init = { authorization: 'Bearer t' }) =>
     post(mount, { resourceUrl: `${origin}/mcp`, clerkClient }, init);
 
@@ -730,6 +737,23 @@ describe.each(authApps)('%s auth entry point with Clerk', (_name, mount) => {
     expect(defaultClient.authenticateRequest).not.toHaveBeenCalled();
   });
 
+  test('checks the audience against the resourceUrl listed for the request origin', async () => {
+    const client = clerkClientAnswering(authenticatedState);
+    const res = await post(
+      mount,
+      (seen) => ({
+        resourceUrl: ['https://other.example.dev/mcp', `${seen}/mcp`],
+        clerkClient: client,
+      }),
+      { authorization: 'Bearer t' },
+    );
+
+    expect(res.status).toBe(200);
+    expect(client.authenticateRequest.mock.calls[0]?.[1]).toMatchObject({
+      audience: `${res.origin}/mcp`,
+    });
+  });
+
   test.each([
     ['with a token', 'Bearer t', 200],
     ['without a token', undefined, 401],
@@ -750,9 +774,11 @@ describe.each(authApps)('%s auth entry point with Clerk', (_name, mount) => {
     ['null', null],
     ['a string', 'sk_test_123'],
   ])('throws at setup for %s', async (_case, clerkClient) => {
-    await expect(send(clerkClient)).rejects.toThrow(
+    const setup = send(clerkClient);
+    await expect(setup).rejects.toThrow(
       /^Clerk error: .* takes a clerkClient with authenticateRequest, or a function that returns one\. Omit clerkClient to use /,
     );
+    await expect(setup).rejects.toThrow(`Omit clerkClient to use ${defaultClientName[name]}`);
   });
 });
 

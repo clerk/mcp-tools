@@ -417,6 +417,7 @@ describe('verifyClerkOAuthToken', () => {
     );
 
     expect(authInfo.extra.auth?.id).toBe('');
+    expect(authInfo.extra.auth).toBe(auth);
   });
 
   test('rejects a token whose auth object has no getToken, with a cause', async () => {

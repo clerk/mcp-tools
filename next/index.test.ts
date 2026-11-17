@@ -83,6 +83,15 @@ describe('protectedResourceMetadataHandler', () => {
       );
     },
   );
+
+  // RFC 9728 section 3.3: the `resource` must be the URL the client derived the metadata URL from
+  test('throws at setup when properties sets resource', () => {
+    expect(() =>
+      protectedResourceMetadataHandler({
+        properties: { resource: 'https://public.example.com/mcp' },
+      }),
+    ).toThrow('Clerk error: protectedResourceMetadataHandler properties cannot set resource');
+  });
 });
 
 // A route handler that echoes the auth info `mcp-handler` would read from `req.auth`.
@@ -119,6 +128,12 @@ describe('withMcpAuth with verifyToken', () => {
   test('throws at setup without a route handler', () => {
     expect(() => withMcpAuth(undefined as never, { verifyToken: vi.fn() })).toThrow(
       'takes the route handler first',
+    );
+  });
+
+  test('throws at setup for an invalid resourceUrl, naming withMcpAuth', () => {
+    expect(() => withMcpAuth(echoAuth, { verifyToken: vi.fn(), resourceUrl: 'not a url' })).toThrow(
+      'Clerk error: withMcpAuth resourceUrl must be an absolute http or https URL',
     );
   });
 
