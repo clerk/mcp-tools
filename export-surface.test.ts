@@ -209,20 +209,13 @@ describe('export surface', () => {
   });
 
   // TypeScript picks the first condition that matches, so `types` must come before `import` for every module
-  // resolution mode to find the declarations.
+  // resolution mode to find the declarations. `default` lets `require(esm)` and CJS-condition resolvers load the
+  // same ESM build.
   test.each(entries.map(({ subpath }) => subpath))(
-    '%s lists the types condition first',
+    '%s lists the types condition first and points default at the import build',
     (subpath) => {
-      expect(Object.keys(exportsMap[subpath] ?? {})).toEqual(['types', 'import', 'default']);
-    },
-  );
-
-  // `default` lets `require(esm)` and CJS-condition resolvers load the same ESM build.
-  test.each(entries.map(({ subpath }) => subpath))(
-    '%s points default at the import build',
-    (subpath) => {
-      const target = exportsMap[subpath];
-      if (typeof target !== 'object') throw new Error(`${subpath} has no conditions`);
+      const target = exportsMap[subpath] as Record<string, string>;
+      expect(Object.keys(target)).toEqual(['types', 'import', 'default']);
       expect(target.default).toBe(target.import);
     },
   );

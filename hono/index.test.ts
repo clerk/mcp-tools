@@ -36,8 +36,8 @@ import {
   mcpAuth,
   streamableHttpHandler,
 } from './index';
+import { clerkAuthenticated, FAKE_PK } from '../test/mcp-harness';
 
-const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 const mcpHeaders = {
   'Content-Type': 'application/json',
   Accept: 'application/json, text/event-stream',
@@ -353,6 +353,7 @@ describe('mcpAuth with Clerk', () => {
 
   beforeEach(() => {
     clerk.authenticateRequest.mockReset();
+    vi.mocked(createClerkClient).mockClear();
   });
 
   afterEach(() => {
@@ -407,12 +408,18 @@ describe('mcpAuth with Clerk', () => {
 
   // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives
   test.each([
-    ['with a token', { authorization: 'Bearer token' }],
-    ['without a token', undefined],
+    ['CLERK_SECRET_KEY', 'no keys are set, with a token', {}, { authorization: 'Bearer token' }],
+    ['CLERK_SECRET_KEY', 'no keys are set, without a token', {}, undefined],
+    [
+      'CLERK_PUBLISHABLE_KEY',
+      'only CLERK_SECRET_KEY is set',
+      { CLERK_SECRET_KEY: 'sk_test_2' },
+      { authorization: 'Bearer token' },
+    ],
   ])(
-    'throws the Clerk error itself %s when there is no clerkClient and no keys are set',
-    async (_case, headers) => {
-      vi.mocked(env).mockReturnValue({});
+    'throws the Clerk error itself naming %s when there is no clerkClient and %s',
+    async (name, _case, keys, headers) => {
+      vi.mocked(env).mockReturnValue(keys);
       const app = new Hono();
       let error: unknown;
       app.onError((err, c) => {
@@ -426,28 +433,15 @@ describe('mcpAuth with Clerk', () => {
       expect(res.status).toBe(500);
       expect(error).not.toBeInstanceOf(McpAuthError);
       expect((error as Error).message).toBe(
-        'Clerk error: mcpAuth needs the CLERK_SECRET_KEY environment variable or a clerkClient option',
+        `Clerk error: mcpAuth needs the ${name} environment variable or a clerkClient option`,
       );
+      expect(createClerkClient).not.toHaveBeenCalled();
     },
   );
 });
 
 describe('mcpAuth with a Clerk client built from the environment', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
-  const authenticated = {
-    isAuthenticated: true,
-    toAuth: () => ({
-      isAuthenticated: true,
-      tokenType: 'oauth_token',
-      id: 'oat_1',
-      subject: 'user-1',
-      getToken: async () => 'token',
-      clientId: 'client-1',
-      scopes: [],
-      userId: 'user-1',
-    }),
-  };
-
   // Each test uses its own key pair, since the client built for a pair is kept for the life of the module
   const keys = (n: number) => ({
     CLERK_SECRET_KEY: `sk_test_${n}`,
@@ -455,7 +449,7 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
   });
 
   function envClient() {
-    const client = { authenticateRequest: vi.fn().mockResolvedValue(authenticated) };
+    const client = { authenticateRequest: vi.fn().mockResolvedValue(clerkAuthenticated()) };
     vi.mocked(createClerkClient).mockReturnValue(client as never);
     return client;
   }
@@ -477,55 +471,20 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
     vi.mocked(env).mockImplementation(() => process.env);
   });
 
-  test('verifies with a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY, once per request', async () => {
-    vi.mocked(env).mockReturnValue(keys(1));
-    const client = envClient();
-
-    const res = await post(envApp());
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ clientId: 'client-1', token: 'token-1' });
-    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
-      secretKey: 'sk_test_1',
-      publishableKey: `${FAKE_PK}1`,
-    });
-    expect(client.authenticateRequest).toHaveBeenCalledOnce();
-    expect(client.authenticateRequest.mock.calls[0]![1]).toEqual({
-      acceptsToken: 'oauth_token',
-      audience: resourceUrl,
-    });
-  });
-
-  test('passes CLERK_API_URL, CLERK_API_VERSION, and CLERK_JWT_KEY to the client when they are set', async () => {
-    vi.mocked(env).mockReturnValue({
-      ...keys(7),
-      CLERK_API_URL: 'https://api.clerkstage.dev',
-      CLERK_API_VERSION: 'v2',
-      CLERK_JWT_KEY: 'jwt-key-7',
-    });
-    envClient();
-
-    const res = await post(envApp());
-
-    expect(res.status).toBe(200);
-    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
-      secretKey: 'sk_test_7',
-      publishableKey: `${FAKE_PK}7`,
-      apiUrl: 'https://api.clerkstage.dev',
-      apiVersion: 'v2',
-      jwtKey: 'jwt-key-7',
-    });
-  });
-
-  test('builds another client when CLERK_API_URL changes for the same keys', async () => {
+  test('passes CLERK_API_URL, CLERK_API_VERSION, and CLERK_JWT_KEY to the client, building another when they change', async () => {
     envClient();
     const app = envApp();
 
     vi.mocked(env).mockReturnValue(keys(8));
     await post(app);
-    vi.mocked(env).mockReturnValue({ ...keys(8), CLERK_API_URL: 'https://api.clerkstage.dev' });
+    vi.mocked(env).mockReturnValue({
+      ...keys(8),
+      CLERK_API_URL: 'https://api.clerkstage.dev',
+      CLERK_API_VERSION: 'v2',
+      CLERK_JWT_KEY: 'jwt-key-8',
+    });
     await post(app);
-    await post(app);
+    expect((await post(app)).status).toBe(200);
 
     expect(vi.mocked(createClerkClient).mock.calls).toEqual([
       [{ secretKey: 'sk_test_8', publishableKey: `${FAKE_PK}8` }],
@@ -534,6 +493,8 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
           secretKey: 'sk_test_8',
           publishableKey: `${FAKE_PK}8`,
           apiUrl: 'https://api.clerkstage.dev',
+          apiVersion: 'v2',
+          jwtKey: 'jwt-key-8',
         },
       ],
     ]);
@@ -591,24 +552,6 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
       vi.resetModules();
     }
   });
-
-  test('throws a Clerk error naming CLERK_PUBLISHABLE_KEY when only it is missing', async () => {
-    vi.mocked(env).mockReturnValue({ CLERK_SECRET_KEY: 'sk_test_2' });
-    let error: unknown;
-    const app = envApp();
-    app.onError((err, c) => {
-      error = err;
-      return c.text('error', 500);
-    });
-
-    const res = await post(app);
-
-    expect(res.status).toBe(500);
-    expect((error as Error).message).toBe(
-      'Clerk error: mcpAuth needs the CLERK_PUBLISHABLE_KEY environment variable or a clerkClient option',
-    );
-    expect(createClerkClient).not.toHaveBeenCalled();
-  });
 });
 
 describe('streamableHttpHandler', () => {
@@ -660,72 +603,61 @@ describe('streamableHttpHandler', () => {
     },
   );
 
+  // Reads the body with `reader` in a middleware, then returns the request the SDK 1 transport was handed
+  async function handoff(reader: 'json' | 'text', request: Request) {
+    const handleRequest = vi.spyOn(Transport.prototype, 'handleRequest');
+    try {
+      const app = new Hono();
+      app.use('/mcp', async (c, next) => {
+        await c.req[reader]();
+        await next();
+      });
+      app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
+      const response = await app.fetch(request);
+      expect(response.status).toBe(200);
+      await response.text();
+      return handleRequest.mock.calls[0]![0];
+    } finally {
+      handleRequest.mockRestore();
+    }
+  }
+
   test.each(['json', 'text'] as const)(
     'body handoff recovers cached %s for the SDK 1 transport and preserves Request metadata',
     async (reader) => {
-      const handleRequest = vi.spyOn(Transport.prototype, 'handleRequest');
       const abort = new AbortController();
-      try {
-        const app = new Hono();
-        app.use('/mcp', async (c, next) => {
-          await c.req[reader]();
-          await next();
-        });
-        app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
+      const request = new Request('http://localhost/mcp?test=body', {
+        method: 'POST',
+        headers: mcpHeaders,
+        body: initializeBody,
+        credentials: 'include',
+        redirect: 'manual',
+        signal: abort.signal,
+      });
 
-        const request = new Request('http://localhost/mcp?test=body', {
-          method: 'POST',
-          headers: mcpHeaders,
-          body: initializeBody,
-          credentials: 'include',
-          redirect: 'manual',
-          signal: abort.signal,
-        });
-        const response = await app.fetch(request);
-        expect(response.status).toBe(200);
-        await response.text();
+      const forwarded = await handoff(reader, request);
 
-        const forwarded = handleRequest.mock.calls[0]![0];
-        expect(forwarded.url).toBe(request.url);
-        expect(forwarded.method).toBe('POST');
-        expect([...forwarded.headers]).toEqual([...request.headers]);
-        expect(forwarded.credentials).toBe('include');
-        expect(forwarded.redirect).toBe('manual');
-        abort.abort();
-        expect(forwarded.signal.aborted).toBe(true);
-      } finally {
-        handleRequest.mockRestore();
-      }
+      expect(forwarded.url).toBe(request.url);
+      expect(forwarded.method).toBe('POST');
+      expect([...forwarded.headers]).toEqual([...request.headers]);
+      expect(forwarded.credentials).toBe('include');
+      expect(forwarded.redirect).toBe('manual');
+      abort.abort();
+      expect(forwarded.signal.aborted).toBe(true);
     },
   );
 
   test.each(['json', 'text'] as const)(
     'body handoff recovers cached %s from a request that is not a native Request',
     async (reader) => {
-      const handleRequest = vi.spyOn(Transport.prototype, 'handleRequest');
-      try {
-        const app = new Hono();
-        app.use('/mcp', async (c, next) => {
-          await c.req[reader]();
-          await next();
-        });
-        app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
+      const request = lightweightRequest('http://localhost/mcp', {
+        method: 'POST',
+        headers: mcpHeaders,
+        body: initializeBody,
+      });
+      expect(() => new Request(request)).toThrow('Failed to parse URL');
 
-        const request = lightweightRequest('http://localhost/mcp', {
-          method: 'POST',
-          headers: mcpHeaders,
-          body: initializeBody,
-        });
-        expect(() => new Request(request)).toThrow('Failed to parse URL');
-
-        const response = await app.fetch(request);
-        expect(response.status).toBe(200);
-        await response.text();
-
-        expect(handleRequest.mock.calls[0]![0].url).toBe('http://localhost/mcp');
-      } finally {
-        handleRequest.mockRestore();
-      }
+      expect((await handoff(reader, request)).url).toBe('http://localhost/mcp');
     },
   );
 

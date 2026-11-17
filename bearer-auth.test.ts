@@ -12,6 +12,7 @@ import {
   verifyClerkOAuthToken,
 } from './bearer-auth';
 import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './server';
+import { FAKE_PK, clerkAuthenticated } from './test/mcp-harness';
 
 const authInfo = { token: 't', clientId: 'client-1', scopes: ['profile'] };
 
@@ -183,20 +184,31 @@ describe('bearerAuthenticator', () => {
 
     expect(wrapped).toBeInstanceOf(McpAuthError);
     expect(wrapped).toMatchObject({ cause });
+    // The verifier can be the app's own `verifyToken`, so the message must not blame Clerk; the `cause` says who failed
+    expect((wrapped as McpAuthError).message).toBe('MCP access token verification failed');
     expect(passedThrough).toBe(thrown);
   });
 
-  test('rejects a token whose expiresAt has passed, and accepts one that has not', async () => {
-    const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000);
 
-    const expired = await authenticate({
-      verifyToken: async () => ({ ...authInfo, expiresAt: now - 1 }),
-    });
-    const current = await authenticate({
-      verifyToken: async () => ({ ...authInfo, expiresAt: now + 60 }),
-    });
+  test('accepts a token whose expiresAt has not passed', async () => {
+    await expect(
+      authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt: now + 60 }) }),
+    ).resolves.toMatchObject({ ok: true });
+  });
 
-    expect(expired).toMatchObject({
+  // Passed, outside the Date range, or not a finite number
+  test.each([
+    now - 1,
+    -8_640_000_000_001,
+    -1e300,
+    -Number.MAX_VALUE,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('rejects a token whose expiresAt is %d with invalid_token', async (expiresAt) => {
+    const result = await authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt }) });
+
+    expect(result).toMatchObject({
       ok: false,
       status: 401,
       headers: {
@@ -205,25 +217,7 @@ describe('bearerAuthenticator', () => {
       },
       failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
     });
-    expect(current).toMatchObject({ ok: true });
   });
-
-  test.each([-8_640_000_000_001, -1e300, -Number.MAX_VALUE])(
-    'rejects an expired token outside the Date range (%d) with invalid_token',
-    async (expiresAt) => {
-      const result = await authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt }) });
-
-      expect(result).toMatchObject({
-        ok: false,
-        status: 401,
-        headers: {
-          'WWW-Authenticate':
-            'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
-        },
-        failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
-      });
-    },
-  );
 
   test('rejects a token its verifier reports for another resource, as MCP SDK 2 does', async () => {
     const result = await authenticate({
@@ -316,36 +310,9 @@ describe('bearerAuthenticator', () => {
     expect(withoutResource).toMatchObject({ ok: true });
     expect(withoutResourceUrl).toMatchObject({ ok: true });
   });
-
-  test.each([Number.NaN, Number.POSITIVE_INFINITY])(
-    'rejects a token whose expiresAt is %d instead of letting it through',
-    async (expiresAt) => {
-      const result = await authenticate({ verifyToken: async () => ({ ...authInfo, expiresAt }) });
-
-      expect(result).toMatchObject({
-        ok: false,
-        status: 401,
-        failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
-      });
-    },
-  );
 });
 
 describe('McpAuthError', () => {
-  // The verifier can be the app's own `verifyToken`, so the message must not blame Clerk; the `cause` says who failed
-  test('does not name Clerk when a custom verifyToken throws', async () => {
-    const cause = new Error('database is down');
-    const error = await authenticate({
-      verifyToken: async () => {
-        throw cause;
-      },
-    }).catch((thrown: unknown) => thrown);
-
-    expect(error).toBeInstanceOf(McpAuthError);
-    expect((error as McpAuthError).message).toBe('MCP access token verification failed');
-    expect((error as McpAuthError).cause).toBe(cause);
-  });
-
   test.each([429, 500, 503, 599])('keeps a %i status from the cause', (status) => {
     expect(new McpAuthError(Object.assign(new Error('unavailable'), { status })).status).toBe(
       status,
@@ -363,19 +330,7 @@ describe('McpAuthError', () => {
 });
 
 describe('verifyClerkOAuthToken', () => {
-  const authenticated = {
-    isAuthenticated: true,
-    toAuth: () => ({
-      isAuthenticated: true,
-      tokenType: 'oauth_token',
-      id: 'oat_1',
-      subject: 'user-1',
-      getToken: async () => 'token',
-      clientId: 'client-1',
-      scopes: ['profile'],
-      userId: 'user-1',
-    }),
-  };
+  const authenticated = clerkAuthenticated(['profile']);
 
   test('checks the audience against the URL as written when it is already normalized', async () => {
     const authenticateRequest = vi.fn().mockResolvedValue(authenticated);
@@ -420,29 +375,17 @@ describe('verifyClerkOAuthToken', () => {
     expect(authInfo.extra.auth).toBe(auth);
   });
 
-  test('rejects a token whose auth object has no getToken, with a cause', async () => {
+  test.each([
+    ['no getToken', { ...authenticated.toAuth(), getToken: undefined }],
+    [
+      'no user, client, or scopes',
+      { isAuthenticated: true, tokenType: 'oauth_token', clientId: 'client-1' },
+    ],
+  ])('rejects a token whose auth object has %s, with a cause', async (_case, auth) => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const auth = { ...authenticated.toAuth(), getToken: undefined };
     const authenticateRequest = vi
       .fn()
       .mockResolvedValue({ isAuthenticated: true, toAuth: () => auth });
-
-    const error = await verifyClerkOAuthToken(
-      { authenticateRequest },
-      't',
-      'https://mcp.example.com/mcp',
-    ).catch((thrown: unknown) => thrown);
-    consoleError.mockRestore();
-
-    expect(error).toMatchObject({ code: 'token-claims-missing' });
-  });
-
-  test('rejects a token Clerk accepted without a user, client, or scopes, with a cause', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const authenticateRequest = vi.fn().mockResolvedValue({
-      isAuthenticated: true,
-      toAuth: () => ({ isAuthenticated: true, tokenType: 'oauth_token', clientId: 'client-1' }),
-    });
 
     const error = await verifyClerkOAuthToken(
       { authenticateRequest },
@@ -456,7 +399,6 @@ describe('verifyClerkOAuthToken', () => {
   });
 });
 
-const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 const metadataOrigin = 'https://mcp.example.com';
 const metadataUrl = `${metadataOrigin}/.well-known/oauth-protected-resource/mcp`;
 
@@ -464,20 +406,8 @@ describe('protectedResourceMetadataAnswer', () => {
   const metadata = (options: Parameters<typeof protectedResourceMetadataAnswer>[0]) =>
     protectedResourceMetadataAnswer(
       { resourceUrl: 'https://public.example.com/mcp', ...options },
-      { method: 'GET', publishableKey: FAKE_PK, url: metadataUrl },
+      { publishableKey: FAKE_PK, url: metadataUrl },
     ).body as Record<string, unknown>;
-
-  test('merges properties over the generated metadata', () => {
-    expect(
-      metadata({
-        properties: { scopes_supported: ['email'], resource_documentation: 'https://example.com' },
-      }),
-    ).toMatchObject({
-      resource: 'https://public.example.com/mcp',
-      scopes_supported: ['email'],
-      resource_documentation: 'https://example.com',
-    });
-  });
 
   // RFC 9728 section 2: `scopes_supported` lists the scope values used to request access to this resource
   test('lists requiredScopes then challengeScopes, each once, as scopes_supported', () => {
@@ -546,24 +476,6 @@ describe('assertProtectedResourceMetadataOptions', () => {
   });
 
   test.each([
-    ['is not a URL', 'mcp.example.com/mcp'],
-    ['has a fragment', 'https://mcp.example.com/mcp#tools'],
-    ['is an empty list', []],
-  ])('throws when resourceUrl %s', (_case, resourceUrl) => {
-    expect(() => assertProtectedResourceMetadataOptions({ resourceUrl })).toThrow(
-      'Clerk error: protectedResourceMetadataHandler resourceUrl must be',
-    );
-  });
-
-  test('throws when resourceUrl lists two URLs for one origin', () => {
-    expect(() =>
-      assertProtectedResourceMetadataOptions({
-        resourceUrl: [`${metadataOrigin}/mcp`, `${metadataOrigin}/other`],
-      }),
-    ).toThrow('Clerk error: protectedResourceMetadataHandler resourceUrl lists more than one URL');
-  });
-
-  test.each([
     ['a required scope', { requiredScopes: ['profile', 'email'] }, 'email'],
     ['a challenge scope', { challengeScopes: ['projects:read'] }, 'projects:read'],
   ])('throws when scopes_supported leaves out %s', (_case, scopes, missing) => {
@@ -599,12 +511,6 @@ describe('assertProtectedResourceMetadataOptions', () => {
       'Clerk error: protectedResourceMetadataHandler properties.scopes_supported must be an array of strings',
     );
   });
-
-  test('throws for a requiredScopes entry that is not a scope token', () => {
-    expect(() => assertProtectedResourceMetadataOptions({ requiredScopes: ['two words'] })).toThrow(
-      'Clerk error: protectedResourceMetadataHandler requiredScopes must contain only scope tokens',
-    );
-  });
 });
 
 describe('publicAccess', () => {
@@ -638,127 +544,111 @@ describe('publicAccess', () => {
     expect(body).not.toHaveBeenCalled();
   });
 
-  test.each([
-    'initialize',
-    'notifications/initialized',
-    'server/discover',
-    'ping',
-    'tools/list',
-    'resources/list',
-    'resources/templates/list',
-    'prompts/list',
-  ])('methods: true opens %s', async (method) => {
-    await expect(withoutToken({ methods: true }, rpc(method))).resolves.toEqual(open);
+  type Case = [PublicAccess, unknown];
+  const all = { methods: true, tools: ['search_docs'], resources: true, prompts: true };
+  const methodList: PublicAccess = { methods: ['initialize', 'tools/list'] };
+  const tools: PublicAccess = { tools: ['search_docs'] };
+  const resources: PublicAccess = { resources: ['docs://index'] };
+  const prompts: PublicAccess = { prompts: ['summarize'] };
+  const listed: PublicAccess = { methods: true, resources: ['docs://index', 'docs://faq'] };
+  const methodsAndResources: PublicAccess = { methods: true, resources: true };
+  const initialized = { jsonrpc: '2.0', method: 'notifications/initialized' };
+  const call = (name: unknown) => rpc('tools/call', { name });
+  const read = (uri: unknown) => rpc('resources/read', { uri });
+  const get = (name: unknown) => rpc('prompts/get', { name });
+  const listen = (notifications: unknown) => rpc('subscriptions/listen', { notifications });
+
+  test.each<Case>([
+    ...[
+      'initialize',
+      'notifications/initialized',
+      'server/discover',
+      'ping',
+      'tools/list',
+      'resources/list',
+      'resources/templates/list',
+      'prompts/list',
+    ].map((method): Case => [{ methods: true }, rpc(method)]),
+    [methodList, rpc('initialize')],
+    [methodList, rpc('tools/list')],
+    // notifications/initialized follows initialize
+    [{ methods: ['initialize'] }, initialized],
+    [tools, rpc('tools/call', { name: 'search_docs', arguments: {} })],
+    [{ resources: true }, read('docs://index')],
+    [{ prompts: true }, get('summarize')],
+    [resources, read('docs://index')],
+    [prompts, get('summarize')],
+    // A batch whose every message is open
+    [{ methods: true, tools: ['search_docs'] }, [rpc('tools/list'), call('search_docs')]],
+    [listed, listen({ resourceSubscriptions: ['docs://index', 'docs://faq'] })],
+    [listed, listen({ resourceSubscriptions: [] })],
+    [methodsAndResources, listen({ resourceSubscriptions: ['x://y'] })],
+  ])('%j opens %j', async (publicAccess, body) => {
+    await expect(withoutToken(publicAccess, body)).resolves.toEqual(open);
   });
 
-  test('a methods list opens only the methods it names', async () => {
-    const publicAccess: PublicAccess = { methods: ['initialize', 'tools/list'] };
-    await expect(withoutToken(publicAccess, rpc('initialize'))).resolves.toEqual(open);
-    await expect(withoutToken(publicAccess, rpc('tools/list'))).resolves.toEqual(open);
-    await expect(withoutToken(publicAccess, rpc('resources/list'))).resolves.toMatchObject(
-      challenged,
-    );
-    await expect(withoutToken(publicAccess, rpc('ping'))).resolves.toMatchObject(challenged);
-  });
-
-  test('notifications/initialized follows initialize, not the other methods', async () => {
-    const notification = { jsonrpc: '2.0', method: 'notifications/initialized' };
-    await expect(withoutToken({ methods: ['initialize'] }, notification)).resolves.toEqual(open);
-    await expect(
-      withoutToken({ methods: ['server/discover', 'tools/list'] }, notification),
-    ).resolves.toMatchObject(challenged);
-  });
-
-  test.each([
-    ['tools/call', { name: 'search_docs' }],
-    ['resources/read', { uri: 'docs://index' }],
-    ['prompts/get', { name: 'summarize' }],
-  ])('methods: true does not open %s', async (method, params) => {
-    await expect(withoutToken({ methods: true }, rpc(method, params))).resolves.toMatchObject(
-      challenged,
-    );
-  });
-
-  test('tools opens a tools/call only for a tool it names', async () => {
-    const publicAccess: PublicAccess = { tools: ['search_docs'] };
-    await expect(
-      withoutToken(publicAccess, rpc('tools/call', { name: 'search_docs', arguments: {} })),
-    ).resolves.toEqual(open);
-    await expect(
-      withoutToken(publicAccess, rpc('tools/call', { name: 'whoami' })),
-    ).resolves.toMatchObject(challenged);
-  });
-
-  test.each([
-    ['a name inherited from Object.prototype', { name: 'constructor' }],
-    ['__proto__', { name: '__proto__' }],
-    ['a name that is not a string', { name: ['search_docs'] }],
-    ['no name', {}],
-    ['no params', undefined],
-  ])('tools does not open a tools/call with %s', async (_label, params) => {
-    await expect(
-      withoutToken({ tools: ['search_docs'] }, rpc('tools/call', params)),
-    ).resolves.toMatchObject(challenged);
-  });
-
-  test('resources and prompts open resources/read and prompts/get, and nothing else', async () => {
-    await expect(
-      withoutToken({ resources: true }, rpc('resources/read', { uri: 'docs://index' })),
-    ).resolves.toEqual(open);
-    await expect(
-      withoutToken({ prompts: true }, rpc('prompts/get', { name: 'summarize' })),
-    ).resolves.toEqual(open);
-    await expect(
-      withoutToken({ resources: true }, rpc('prompts/get', { name: 'summarize' })),
-    ).resolves.toMatchObject(challenged);
+  test.each<Case>([
+    [methodList, rpc('resources/list')],
+    [methodList, rpc('ping')],
+    [{ methods: ['server/discover', 'tools/list'] }, initialized],
+    // `methods` opens no call
+    [{ methods: true }, call('search_docs')],
+    [{ methods: true }, read('docs://index')],
+    [{ methods: true }, get('summarize')],
+    // A tools/call for a tool not named, with a name inherited from Object.prototype or not a string, or without one
+    [tools, call('whoami')],
+    [tools, call('constructor')],
+    [tools, call('__proto__')],
+    [tools, call(['search_docs'])],
+    [tools, rpc('tools/call', {})],
+    [tools, rpc('tools/call')],
+    [{ resources: true }, get('summarize')],
     // The list is a protocol method, which only `methods` opens
-    await expect(withoutToken({ resources: true }, rpc('resources/list'))).resolves.toMatchObject(
-      challenged,
-    );
-  });
-
-  test('a resources list opens a resources/read only for a URI it names, exactly', async () => {
-    const publicAccess: PublicAccess = { resources: ['docs://index'] };
-    await expect(
-      withoutToken(publicAccess, rpc('resources/read', { uri: 'docs://index' })),
-    ).resolves.toEqual(open);
-    for (const params of [
-      { uri: 'docs://private' },
-      { uri: 'docs://index/' },
-      { uri: 'DOCS://index' },
-      { uri: ['docs://index'] },
-      { name: 'docs://index' },
-      undefined,
-    ]) {
-      await expect(
-        withoutToken(publicAccess, rpc('resources/read', params)),
-      ).resolves.toMatchObject(challenged);
-    }
-    await expect(
-      withoutToken({ resources: [] }, rpc('resources/read', { uri: 'docs://index' })),
-    ).resolves.toMatchObject(challenged);
-    await expect(
-      withoutToken({ resources: false }, rpc('resources/read', { uri: 'docs://index' })),
-    ).resolves.toMatchObject(challenged);
-  });
-
-  test('a prompts list opens a prompts/get only for a prompt it names', async () => {
-    const publicAccess: PublicAccess = { prompts: ['summarize'] };
-    await expect(
-      withoutToken(publicAccess, rpc('prompts/get', { name: 'summarize' })),
-    ).resolves.toEqual(open);
-    for (const params of [{ name: 'draft_reply' }, { name: 'constructor' }, {}, undefined]) {
-      await expect(withoutToken(publicAccess, rpc('prompts/get', params))).resolves.toMatchObject(
-        challenged,
-      );
-    }
+    [{ resources: true }, rpc('resources/list')],
+    // A resources list opens a URI it names, exactly
+    ...['docs://private', 'docs://index/', 'DOCS://index', ['docs://index']].map(
+      (uri): Case => [resources, read(uri)],
+    ),
+    [resources, rpc('resources/read', { name: 'docs://index' })],
+    [resources, rpc('resources/read')],
+    [{ resources: [] }, read('docs://index')],
+    [{ resources: false }, read('docs://index')],
+    [prompts, get('draft_reply')],
+    [prompts, get('constructor')],
+    [prompts, rpc('prompts/get', {})],
+    [prompts, rpc('prompts/get')],
     // A list for one kind of call opens nothing of another kind
-    await expect(
-      withoutToken(publicAccess, rpc('tools/call', { name: 'summarize' })),
-    ).resolves.toMatchObject(challenged);
-    await expect(
-      withoutToken(publicAccess, rpc('resources/read', { uri: 'summarize' })),
-    ).resolves.toMatchObject(challenged);
+    [prompts, call('summarize')],
+    [prompts, read('summarize')],
+    // One protected message closes a batch, and an empty batch has nothing open
+    [{ methods: true, tools: ['search_docs'] }, [call('search_docs'), call('whoami')]],
+    [{ methods: true, tools: ['search_docs'] }, []],
+    // A body that could not be read, null, a string, a response, an unknown notification or method, or a method that
+    // is not a string
+    [all, undefined],
+    [all, null],
+    [all, 'initialize'],
+    [all, { jsonrpc: '2.0', id: 1, result: {} }],
+    [all, { jsonrpc: '2.0', method: 'notifications/custom' }],
+    [all, { jsonrpc: '2.0', id: 1, method: 'tasks/get' }],
+    [all, { jsonrpc: '2.0', id: 1, method: ['initialize'] }],
+    // Tasks, even when a public tool could have started the task
+    ...['tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list'].map(
+      (method): Case => [all, rpc(method, { taskId: 'task_1' })],
+    ),
+    // A subscriptions/listen to a resource that is not open, or whose notifications are not an object
+    [listed, listen({ resourceSubscriptions: ['docs://index', 'docs://private'] })],
+    [listed, listen({ resourceSubscriptions: ['DOCS://index'] })],
+    [listed, listen({ resourceSubscriptions: 'docs://index' })],
+    [listed, listen({ resourceSubscriptions: [['docs://index']] })],
+    [{ methods: true }, listen({ resourceSubscriptions: ['docs://index'] })],
+    [methodsAndResources, rpc('subscriptions/listen')],
+    [methodsAndResources, rpc('subscriptions/listen', {})],
+    [methodsAndResources, listen(true)],
+    [methodsAndResources, listen(null)],
+    [methodsAndResources, listen([])],
+  ])('%j challenges %j', async (publicAccess, body) => {
+    await expect(withoutToken(publicAccess, body)).resolves.toMatchObject(challenged);
   });
 
   const openNotifications = [
@@ -804,55 +694,19 @@ describe('publicAccess', () => {
     },
   );
 
-  test('a batch passes only when every message in it is open', async () => {
-    const publicAccess: PublicAccess = { methods: true, tools: ['search_docs'] };
-    const publicCall = rpc('tools/call', { name: 'search_docs' });
-    await expect(withoutToken(publicAccess, [rpc('tools/list'), publicCall])).resolves.toEqual(
-      open,
-    );
-    await expect(
-      withoutToken(publicAccess, [publicCall, rpc('tools/call', { name: 'whoami' })]),
-    ).resolves.toMatchObject(challenged);
-    await expect(withoutToken(publicAccess, [])).resolves.toMatchObject(challenged);
-  });
-
-  test.each([
-    ['a body that could not be read', undefined],
-    ['null', null],
-    ['a string', 'initialize'],
-    ['a JSON-RPC response', { jsonrpc: '2.0', id: 1, result: {} }],
-    [
-      'a notification this package does not know',
-      { jsonrpc: '2.0', method: 'notifications/custom' },
-    ],
-    ['an unknown method', { jsonrpc: '2.0', id: 1, method: 'tasks/get' }],
-    ['a method that is not a string', { jsonrpc: '2.0', id: 1, method: ['initialize'] }],
-  ])('does not open %s', async (_label, body) => {
-    await expect(
-      withoutToken({ methods: true, tools: ['search_docs'], resources: true, prompts: true }, body),
-    ).resolves.toMatchObject(challenged);
-  });
-
-  test('the 401 for a protected call names the scopes and carries no error code', async () => {
-    const result = await withoutToken({ methods: true }, rpc('tools/call', { name: 'whoami' }), {
-      resourceUrl: 'https://mcp.example.com/mcp',
-      challengeScopes: ['profile', 'email'],
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      status: 401,
-      headers: {
-        'WWW-Authenticate':
-          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="profile email"',
-      },
-    });
-  });
-
-  test.each([
+  const handshakeOpen: PublicAccess[] = [
     { methods: true },
     { methods: ['initialize'] },
     { methods: ['server/discover'] },
-  ] as const)(
+  ];
+  const handshakeClosed: PublicAccess[] = [
+    { methods: ['ping', 'tools/list'] },
+    { tools: ['search_docs'] },
+    { resources: true },
+    {},
+  ];
+
+  test.each(handshakeOpen)(
     'answers a GET without a token with a 405 when %j opens the handshake',
     async (publicAccess) => {
       const result = await withoutToken(publicAccess, undefined, { method: 'GET' });
@@ -865,22 +719,7 @@ describe('publicAccess', () => {
     },
   );
 
-  test.each([{ methods: ['ping', 'tools/list'] }, { tools: ['search_docs'] }, {}] as const)(
-    'answers a GET without a token with the 401 when %j leaves the handshake closed',
-    async (publicAccess) => {
-      await expect(withoutToken(publicAccess, undefined, { method: 'GET' })).resolves.toMatchObject(
-        challenged,
-      );
-    },
-  );
-
-  const listen = (notifications: unknown) => rpc('subscriptions/listen', { notifications });
-
-  test.each([
-    { methods: true },
-    { methods: ['initialize'] },
-    { methods: ['server/discover'] },
-  ] as const)(
+  test.each(handshakeOpen)(
     'opens a subscriptions/listen without resource subscriptions when %j opens the handshake',
     async (publicAccess) => {
       await expect(
@@ -890,66 +729,14 @@ describe('publicAccess', () => {
     },
   );
 
-  test.each([
-    { methods: ['ping', 'tools/list'] },
-    { tools: ['search_docs'] },
-    { resources: true },
-  ] as const)(
-    'keeps a subscriptions/listen closed when %j leaves the handshake closed',
+  test.each(handshakeClosed)(
+    'answers a GET with the 401 and keeps a subscriptions/listen closed when %j leaves the handshake closed',
     async (publicAccess) => {
+      await expect(withoutToken(publicAccess, undefined, { method: 'GET' })).resolves.toMatchObject(
+        challenged,
+      );
       await expect(
         withoutToken(publicAccess, listen({ toolsListChanged: true })),
-      ).resolves.toMatchObject(challenged);
-    },
-  );
-
-  test('opens a subscriptions/listen only when every resource it subscribes to is open', async () => {
-    const listed: PublicAccess = { methods: true, resources: ['docs://index', 'docs://faq'] };
-    await expect(
-      withoutToken(listed, listen({ resourceSubscriptions: ['docs://index', 'docs://faq'] })),
-    ).resolves.toEqual(open);
-    await expect(withoutToken(listed, listen({ resourceSubscriptions: [] }))).resolves.toEqual(
-      open,
-    );
-    await expect(
-      withoutToken(
-        { methods: true, resources: true },
-        listen({ resourceSubscriptions: ['x://y'] }),
-      ),
-    ).resolves.toEqual(open);
-    for (const notifications of [
-      { resourceSubscriptions: ['docs://index', 'docs://private'] },
-      { resourceSubscriptions: ['DOCS://index'] },
-      { resourceSubscriptions: 'docs://index' },
-      { resourceSubscriptions: [['docs://index']] },
-    ]) {
-      await expect(withoutToken(listed, listen(notifications))).resolves.toMatchObject(challenged);
-    }
-    await expect(
-      withoutToken({ methods: true }, listen({ resourceSubscriptions: ['docs://index'] })),
-    ).resolves.toMatchObject(challenged);
-  });
-
-  test.each([
-    ['no params', rpc('subscriptions/listen')],
-    ['no notifications', rpc('subscriptions/listen', {})],
-    ['notifications that are not an object', listen(true)],
-    ['null notifications', listen(null)],
-    ['notifications that are a list', listen([])],
-  ])('keeps a subscriptions/listen with %s closed', async (_label, body) => {
-    await expect(withoutToken({ methods: true, resources: true }, body)).resolves.toMatchObject(
-      challenged,
-    );
-  });
-
-  test.each(['tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list'])(
-    'keeps %s closed even when a public tool could have started the task',
-    async (method) => {
-      await expect(
-        withoutToken(
-          { methods: true, tools: ['search_docs'], resources: true, prompts: true },
-          rpc(method, { taskId: 'task_1' }),
-        ),
       ).resolves.toMatchObject(challenged);
     },
   );

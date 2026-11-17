@@ -1,8 +1,6 @@
 // Rules the Express, Hono, and Next.js adapters must apply the same way, run against all three.
 import express from 'express';
 import { Hono, type MiddlewareHandler } from 'hono';
-import type { AddressInfo } from 'node:net';
-import { type Server, request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // Every adapter's default Clerk client, which an entry point given its own clerkClient must not use
@@ -11,6 +9,7 @@ vi.mock('@clerk/express', () => ({ clerkClient: defaultClient }));
 vi.mock('@clerk/backend', () => ({ createClerkClient: () => defaultClient }));
 vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient }));
 
+import { FAKE_PK, clerkAuthenticated, sendRaw, withListening } from './test/mcp-harness';
 import type { AuthInfo } from './mcp-types';
 import { resourceMetadataUrlFor } from './bearer-auth';
 import * as expressAdapter from './express';
@@ -19,7 +18,6 @@ import * as nextAdapter from './next';
 
 const WELL_KNOWN = '/.well-known/oauth-protected-resource';
 const AUTH_SERVER_PATH = '/.well-known/oauth-authorization-server';
-const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 const origin = 'https://mcp.example.com';
 const unlisted = ['https://other.example.dev/mcp', 'https://another.example.dev/mcp'];
 
@@ -85,25 +83,12 @@ async function read(res: Response, seenOrigin: string): Promise<Answer> {
   };
 }
 
-/** Runs `send` against an Express app listening on a free port, given the app's origin. */
-async function listening<T>(app: express.Express, send: (local: string) => Promise<T>) {
-  const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  try {
-    return await send(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
-  } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
-}
-
 /** Sends one request to `path` on `app`. */
 async function serve(app: App, path: string, init: Init = {}): Promise<Answer> {
   if (!('listen' in app)) {
     return read(await app(new Request(`${origin}${path}`, requestInit(init))), origin);
   }
-  return listening(app, async (local) =>
+  return withListening(app, async (local) =>
     read(
       await fetch(`${local}${path}`, { ...requestInit(init), signal: AbortSignal.timeout(5000) }),
       local,
@@ -595,25 +580,15 @@ describe.each(authApps)('%s auth entry point with verifyToken', (_name, mount) =
     // in req.headers, so Express gets each value on its own line, which fetch cannot send.
     const res =
       'listen' in app
-        ? await listening(app, async (local) => {
-            const { port } = new URL(local);
-            return new Promise<{ status: number; challenge: unknown }>((resolve, reject) => {
-              const req = httpRequest(
-                { host: '127.0.0.1', port, method: 'POST', path: '/mcp' },
-                (answer) => {
-                  answer.resume();
-                  answer.on('end', () =>
-                    resolve({
-                      status: answer.statusCode ?? 0,
-                      challenge: answer.headers['www-authenticate'],
-                    }),
-                  );
-                },
-              );
-              req.setHeader('authorization', authorization);
-              req.on('error', reject);
-              req.end();
-            });
+        ? await withListening(app, async (local) => {
+            const raw = await sendRaw(
+              local,
+              `POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n${authorization.map((value) => `Authorization: ${value}\r\n`).join('')}Content-Length: 0\r\nConnection: close\r\n\r\n`,
+            );
+            return {
+              status: Number(raw.split(' ')[1]),
+              challenge: /^WWW-Authenticate: (.*)$/im.exec(raw)?.[1]?.trim(),
+            };
           })
         : await serve(app, '/mcp', { method: 'POST', authorization });
 
@@ -649,20 +624,6 @@ describe.each(authApps)('%s auth entry point with verifyToken', (_name, mount) =
 const clerkClientAnswering = (state: unknown) => ({
   authenticateRequest: vi.fn().mockResolvedValue(state),
 });
-const authenticatedState = {
-  isAuthenticated: true,
-  toAuth: () => ({
-    isAuthenticated: true,
-    tokenType: 'oauth_token',
-    id: 'oat_1',
-    subject: 'user-1',
-    getToken: async () => 't',
-    clientId: 'client-1',
-    scopes: [],
-    userId: 'user-1',
-  }),
-};
-
 // How `@clerk/backend` reports a token it could not verify at all, with the status each adapter answers. With
 // clerk/javascript#10826 it reports a JWKS that can't be loaded as `jwk-remote-failed-to-load`; 3.27.0 reports it as
 // `token-verification-failed` with an `Error loading Clerk JWKS` message.
@@ -730,15 +691,27 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
 
   // The `clerkClient` option has one shape on every adapter: a client, or a function that returns one
   test('verifies with a client object instead of the default client', async () => {
-    const client = clerkClientAnswering(authenticatedState);
+    const client = clerkClientAnswering(clerkAuthenticated());
 
-    expect((await send(client)).status).toBe(200);
+    const res = await send(client);
+
+    expect(res.status).toBe(200);
     expect(client.authenticateRequest).toHaveBeenCalledOnce();
+    expect(client.authenticateRequest.mock.calls[0]?.[0].headers.get('authorization')).toBe(
+      'Bearer t',
+    );
     expect(defaultClient.authenticateRequest).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({
+      auth: {
+        clientId: 'client-1',
+        extra: { userId: 'user-1', verifiedBy: 'clerk' },
+        resourceMetadataUrl: `${origin}${WELL_KNOWN}/mcp`,
+      },
+    });
   });
 
   test('checks the audience against the resourceUrl listed for the request origin', async () => {
-    const client = clerkClientAnswering(authenticatedState);
+    const client = clerkClientAnswering(clerkAuthenticated());
     const res = await post(
       mount,
       (seen) => ({
@@ -760,7 +733,7 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
   ])(
     'calls a function that returns the client once per request %s',
     async (_case, authorization, status) => {
-      const client = clerkClientAnswering(authenticatedState);
+      const client = clerkClientAnswering(clerkAuthenticated());
       const resolve = vi.fn(async () => client);
 
       expect((await send(resolve, { authorization })).status).toBe(status);
@@ -957,34 +930,30 @@ describe('express publicAccess behind express.json() with a limit over 1 MiB', (
     return app;
   }
 
-  test.each([
-    ['a Content-Length', false],
-    ['a chunked body', true],
-  ])(
-    'challenges an open method whose body is over 1 MiB, with %s, as the other adapters do',
-    async (_case, chunked) => {
-      const res = await serve(app(), '/mcp', {
-        body: rpc('initialize', { padding: 'x'.repeat(2 * 1024 * 1024) }),
-        chunked,
-      });
+  const padding = 'x'.repeat(2 * 1024 * 1024);
+  const challenge =
+    /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"$/;
+  const challenged = {
+    status: 401,
+    challenge: expect.stringMatching(challenge),
+    body: { error: 'Unauthorized' },
+  };
+  const reached = { status: 200, challenge: null, body: { reached: true } };
 
-      expect(res.status).toBe(401);
-      expect(res.challenge).toMatch(
-        /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"$/,
-      );
-      expect(res.body).toEqual({ error: 'Unauthorized' });
+  // Over 1 MiB the open method is challenged, as the other adapters do
+  test.each([
+    ['over 1 MiB', 'a Content-Length', { padding }, false, challenged],
+    ['over 1 MiB', 'a chunked body', { padding }, true, challenged],
+    ['small', 'a Content-Length', undefined, false, reached],
+    ['small', 'a chunked body', undefined, true, reached],
+  ])(
+    'answers an open method whose body is %s, with %s',
+    async (_size, _case, params, chunked, answer) => {
+      const res = await serve(app(), '/mcp', { body: rpc('initialize', params), chunked });
+
+      expect({ status: res.status, challenge: res.challenge, body: res.body }).toEqual(answer);
     },
   );
-
-  test.each([
-    ['a Content-Length', false],
-    ['a chunked body', true],
-  ])('lets the same open method through with a small body, with %s', async (_case, chunked) => {
-    const res = await serve(app(), '/mcp', { body: rpc('initialize'), chunked });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ reached: true });
-  });
 });
 
 test('hono publicAccess throws a setup error when a middleware before it read the raw request, which leaves nothing to check', async () => {

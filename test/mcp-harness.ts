@@ -5,6 +5,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
+import type { Express } from 'express';
+import type { Server } from 'node:http';
+import { type AddressInfo, connect } from 'node:net';
 import type { vi } from 'vitest';
 
 /**
@@ -95,4 +98,51 @@ export function connectOAuthClient(
     new StreamableHTTPClientTransport(mcpUrl, { authProvider, fetch }),
   );
   return { client, connected, redirects };
+}
+
+/** A publishable key whose Frontend API is `clerk.example.com`. */
+export const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+
+/** The request state a mocked `authenticateRequest` resolves to for a valid OAuth token with `scopes`. */
+export function clerkAuthenticated(scopes: string[] = []) {
+  return {
+    isAuthenticated: true,
+    toAuth: () => ({
+      isAuthenticated: true,
+      tokenType: 'oauth_token',
+      id: 'oat_1',
+      subject: 'user-1',
+      getToken: async () => 'token',
+      clientId: 'client-1',
+      scopes,
+      userId: 'user-1',
+    }),
+  } as const;
+}
+
+/** Runs `fn` against an Express app listening on a free port, given the app's origin. */
+export async function withListening<T>(app: Express, fn: (baseUrl: string) => Promise<T>) {
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    return await fn(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+/** Writes a raw HTTP request, for request lines and headers `fetch` can't send, and resolves the whole response. */
+export function sendRaw(baseUrl: string, text: string) {
+  const { port } = new URL(baseUrl);
+  return new Promise<string>((resolve, reject) => {
+    const socket = connect(Number(port), '127.0.0.1', () => {
+      socket.write(text);
+    });
+    let response = '';
+    socket.on('data', (chunk) => (response += chunk.toString()));
+    socket.on('end', () => resolve(response));
+    socket.on('error', reject);
+  });
 }

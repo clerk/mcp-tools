@@ -998,17 +998,21 @@ describe('createBrowserSessionTool', () => {
       );
     }
 
-    test('resolves the organization per call from the verified auth info', async () => {
-      const fetchImpl = okFetch({ session_organization_id: 'org_user_1' });
-      const resolve = vi.fn(
-        async (info: { extra: { userId: string } }) => `org_${info.extra.userId}`,
-      );
-      const client = await connectWithOrg(fetchImpl, resolve);
-      const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
-      expect(result.isError).toBeFalsy();
-      expect(resolve).toHaveBeenCalledTimes(1);
-      expect(sentBody(fetchImpl).session_organization_id).toBe('org_user_1');
-    });
+    test.each([
+      ['an async', async (info: { extra: { userId: string } }) => `org_${info.extra.userId}`],
+      ['a sync', (info: { extra: { userId: string } }) => `org_${info.extra.userId}`],
+    ])(
+      'resolves the organization per call from the verified auth info with %s function',
+      async (_kind, organizationId) => {
+        const fetchImpl = okFetch({ session_organization_id: 'org_user_1' });
+        const resolve = vi.fn(organizationId);
+        const client = await connectWithOrg(fetchImpl, resolve);
+        const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
+        expect(result.isError).toBeFalsy();
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(sentBody(fetchImpl).session_organization_id).toBe('org_user_1');
+      },
+    );
 
     test('leaves the organization to Clerk when the function returns undefined', async () => {
       const fetchImpl = okFetch();
@@ -1094,13 +1098,6 @@ describe('createBrowserSessionTool', () => {
         `Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId returned ${kind})`,
       ]);
       expect(fetchImpl).not.toHaveBeenCalled();
-    });
-
-    test('accepts a synchronous function', async () => {
-      const fetchImpl = okFetch({ session_organization_id: 'org_1' });
-      const { result } = await callWithOrg(() => 'org_1', fetchImpl);
-      expect(result.isError).toBeFalsy();
-      expect(sentBody(fetchImpl).session_organization_id).toBe('org_1');
     });
 
     test.each([

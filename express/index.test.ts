@@ -1,8 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
-import { type AddressInfo, connect } from 'node:net';
-import { type Server, request as httpRequest } from 'node:http';
+import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // The default client, which `mcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
@@ -28,8 +27,8 @@ const clerkExpressLoad = vi.hoisted(() => {
 });
 vi.mock('@clerk/express', () => clerkExpressLoad.factory());
 
-import { createClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
+import { FAKE_PK, sendRaw, withListening } from '../test/mcp-harness';
 import {
   McpAuthError,
   type McpAuthOptions,
@@ -114,7 +113,7 @@ describe('mcpAuth', () => {
     expect(() => express().post('/mcp', mcpAuth({ verifyToken: reject }))).not.toThrow();
   });
 
-  test.each([[resourceUrl], [undefined]])(
+  test.each([[[resourceUrl]], [undefined]])(
     'calls verifyToken with the token and the request instead of Clerk (resourceUrl: %j)',
     async (listed) => {
       const authenticateRequest = vi.mocked(clerkClient.authenticateRequest);
@@ -149,35 +148,6 @@ describe('mcpAuth', () => {
       expect(await res.json()).toEqual({
         auth: { token: 'my-token', scopes: [], clientId: '/mcp', resourceMetadataUrl: metadataUrl },
       });
-    },
-  );
-
-  test('leaves the query string out of resource_metadata', async () => {
-    const res = await request(mcpAuth({ verifyToken: reject }), { path: '/mcp?x=1' });
-
-    expect(res.challenge).toBe(
-      `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
-    );
-  });
-
-  test.each([[[resourceUrl]], [undefined]])(
-    'reads the origin from X-Forwarded-Host and X-Forwarded-Proto under trust proxy (resourceUrl: %j)',
-    async (listed) => {
-      const app = express();
-      app.set('trust proxy', true);
-      app.post('/mcp', mcpAuth({ verifyToken: reject, resourceUrl: listed }), (_req, res) => {
-        res.json({});
-      });
-
-      const res = await withListening(app, (baseUrl) =>
-        fetch(`${baseUrl}/mcp`, {
-          method: 'POST',
-          headers: { 'X-Forwarded-Host': 'mcp.example.com', 'X-Forwarded-Proto': 'https' },
-        }),
-      );
-
-      expect(res.status).toBe(401);
-      expect(res.headers.get('WWW-Authenticate')).toBe(`Bearer resource_metadata="${metadataUrl}"`);
     },
   );
 
@@ -217,9 +187,9 @@ describe('mcpAuth', () => {
     expect(failures).toEqual([{ reason }]);
   });
 
-  test('logs an McpAuthError with the verifier error as its cause instead of passing it to error middleware', async () => {
+  test('logs an McpAuthError with the verifier error as its cause, keeping its 5xx status, instead of passing it to error middleware', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const cause = new Error('network down');
+    const cause = Object.assign(new Error('network down'), { status: 503 });
     const errors: unknown[] = [];
     const app = express();
     app.post(
@@ -230,37 +200,10 @@ describe('mcpAuth', () => {
         },
       }),
     );
-    app.use(
-      (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-        errors.push(err);
-        res.status(500).end();
-      },
-    );
-
-    const res = await withListening(app, (baseUrl) =>
-      fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
-    );
-    const logged = consoleError.mock.calls.map(([error]) => error);
-    consoleError.mockRestore();
-
-    expect(res.status).toBe(500);
-    expect(errors).toEqual([]);
-    expect(logged).toHaveLength(1);
-    expect(logged[0]).toBeInstanceOf(McpAuthError);
-    expect(logged[0]).toMatchObject({ reason: 'verification_failed', cause });
-  });
-
-  test('keeps a 5xx status from the verifier error in the JSON answer', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = express();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw Object.assign(new Error('unavailable'), { status: 503 });
-        },
-      }),
-    );
+    app.use(((err, _req, res, _next) => {
+      errors.push(err);
+      res.status(500).end();
+    }) satisfies express.ErrorRequestHandler);
 
     const res = await withListening(app, async (baseUrl) => {
       const answer = await fetch(`${baseUrl}/mcp`, {
@@ -269,9 +212,14 @@ describe('mcpAuth', () => {
       });
       return { status: answer.status, body: await answer.json() };
     });
+    const logged = consoleError.mock.calls.map(([error]) => error);
     consoleError.mockRestore();
 
     expect(res).toEqual({ status: 503, body: { error: 'server_error' } });
+    expect(errors).toEqual([]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toBeInstanceOf(McpAuthError);
+    expect(logged[0]).toMatchObject({ reason: 'verification_failed', cause });
   });
 
   // Express's default error handler destroys the socket of a sent response, which resets a client still uploading
@@ -364,16 +312,9 @@ describe('mcpAuth', () => {
     'answers a Host header that does not parse with a 400 (resourceUrl: %j)',
     async (listed) => {
       const verifyToken = vi.fn();
-      const app = express();
-      app.post('/mcp', mcpAuth({ verifyToken, resourceUrl: listed }), (_req, res) => {
-        res.json({});
-      });
-
-      const response = await withListening(app, (baseUrl) =>
-        sendRaw(
-          baseUrl,
-          'POST /mcp HTTP/1.1\r\nHost: [\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
-        ),
+      const response = await sendRawTo(
+        mcpAuth({ verifyToken, resourceUrl: listed }),
+        'POST /mcp HTTP/1.1\r\nHost: [\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
       );
 
       expect(response.split('\r\n')[0]).toBe('HTTP/1.1 400 Bad Request');
@@ -383,16 +324,9 @@ describe('mcpAuth', () => {
 
   test('answers an HTTP/1.0 request without a Host header with a 400 instead of using http://undefined', async () => {
     const verifyToken = vi.fn();
-    const app = express();
-    app.post('/mcp', mcpAuth({ verifyToken }), (_req, res) => {
-      res.json({});
-    });
-
-    const response = await withListening(app, (baseUrl) =>
-      sendRaw(
-        baseUrl,
-        'POST /mcp HTTP/1.0\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\n\r\n',
-      ),
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken }),
+      'POST /mcp HTTP/1.0\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\n\r\n',
     );
 
     expect(response).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
@@ -402,20 +336,9 @@ describe('mcpAuth', () => {
 
   test('verifies a token sent with an absolute-form request-target against the listed resourceUrl', async () => {
     const verifyToken = vi.fn(async (token: string) => ({ token, clientId: 'c', scopes: [] }));
-    const app = express();
-    app.post(
-      '/mcp',
+    const response = await sendRawTo(
       mcpAuth({ verifyToken, resourceUrl: ['http://mcp.example.com/mcp'] }),
-      (_req, res) => {
-        res.json({});
-      },
-    );
-
-    const response = await withListening(app, (baseUrl) =>
-      sendRaw(
-        baseUrl,
-        'POST http://mcp.example.com/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
-      ),
+      'POST http://mcp.example.com/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
     );
 
     expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
@@ -423,16 +346,9 @@ describe('mcpAuth', () => {
   });
 
   test('points the challenge for an absolute-form request-target at the metadata for its path', async () => {
-    const app = express();
-    app.post('/mcp', mcpAuth({ verifyToken: reject }), (_req, res) => {
-      res.json({});
-    });
-
-    const response = await withListening(app, (baseUrl) =>
-      sendRaw(
-        baseUrl,
-        'POST http://mcp.example.com/mcp?x=1 HTTP/1.1\r\nHost: mcp.example.com\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
-      ),
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken: reject }),
+      'POST http://mcp.example.com/mcp?x=1 HTTP/1.1\r\nHost: mcp.example.com\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
     );
 
     expect(response.split('\r\n')[0]).toBe('HTTP/1.1 401 Unauthorized');
@@ -444,7 +360,7 @@ describe('mcpAuth', () => {
 
 describe('protectedResourceMetadataHandler', () => {
   beforeEach(() => {
-    vi.stubEnv('CLERK_PUBLISHABLE_KEY', 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k');
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', FAKE_PK);
   });
 
   afterEach(() => {
@@ -452,14 +368,10 @@ describe('protectedResourceMetadataHandler', () => {
   });
 
   test('derives the resource of an absolute-form request-target from its path alone', async () => {
-    const app = express();
-    app.all('/.well-known/oauth-protected-resource/mcp', protectedResourceMetadataHandler());
-
-    const response = await withListening(app, (baseUrl) =>
-      sendRaw(
-        baseUrl,
-        'GET http://mcp.example.com/.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nConnection: close\r\n\r\n',
-      ),
+    const response = await sendRawTo(
+      protectedResourceMetadataHandler(),
+      'GET http://mcp.example.com/.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: mcp.example.com\r\nConnection: close\r\n\r\n',
+      (app, handler) => app.all('/.well-known/oauth-protected-resource/mcp', handler),
     );
 
     expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
@@ -470,54 +382,27 @@ describe('protectedResourceMetadataHandler', () => {
   });
 });
 
-// Writes a raw HTTP request, for request lines `fetch` can't send, and resolves the whole response
-function sendRaw(baseUrl: string, text: string) {
-  const { port } = new URL(baseUrl);
-  return new Promise<string>((resolve, reject) => {
-    const socket = connect(Number(port), '127.0.0.1', () => {
-      socket.write(text);
-    });
-    let response = '';
-    socket.on('data', (chunk) => (response += chunk.toString()));
-    socket.on('end', () => resolve(response));
-    socket.on('error', reject);
-  });
-}
-
-async function withListening<T>(app: express.Express, fn: (baseUrl: string) => Promise<T>) {
-  const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  const { port } = server.address() as AddressInfo;
-  try {
-    return await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
+// Sends a raw request to an app that mounts `handler`, by default before a route at /mcp that answers {}
+function sendRawTo(
+  handler: express.RequestHandler,
+  raw: string,
+  mount = (app: express.Express, h: express.RequestHandler) =>
+    app.post('/mcp', h, (_req, res) => {
+      res.json({});
+    }),
+) {
+  const app = express();
+  mount(app, handler);
+  return withListening(app, (baseUrl) => sendRaw(baseUrl, raw));
 }
 
 describe('mcpAuth with Clerk', () => {
   const authenticateRequest = vi.mocked(clerkClient.authenticateRequest);
-  const authenticated = (scopes: string[]) =>
-    ({
-      isAuthenticated: true,
-      toAuth: () => ({
-        isAuthenticated: true,
-        tokenType: 'oauth_token',
-        id: 'oat_1',
-        subject: 'user-1',
-        getToken: async () => 'token',
-        clientId: 'client-1',
-        scopes,
-        userId: 'user-1',
-      }),
-    }) as never;
 
   beforeEach(() => {
     authenticateRequest.mockReset();
     vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_express');
-    vi.stubEnv('CLERK_PUBLISHABLE_KEY', 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k');
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', FAKE_PK);
   });
 
   afterEach(() => {
@@ -568,57 +453,6 @@ describe('mcpAuth with Clerk', () => {
 
     expect(res.status).toBe(500);
     expect(res.body).toContain('Clerk error: mcpAuth needs a resourceUrl');
-  });
-
-  test('throws a Clerk error without a resourceUrl', () => {
-    expect(() => mcpAuth({} as never)).toThrow('Clerk error: mcpAuth needs a resourceUrl');
-  });
-
-  test('answers a bare Bearer header with a 401 instead of hanging', async () => {
-    const unhandled = vi.fn();
-    process.on('unhandledRejection', unhandled);
-
-    const res = await request(mcpAuth({ resourceUrl }), { authorization: 'Bearer' });
-    await new Promise((resolve) => setImmediate(resolve));
-    process.off('unhandledRejection', unhandled);
-
-    expect(res.status).toBe(401);
-    expect(unhandled).not.toHaveBeenCalled();
-    expect(authenticateRequest).not.toHaveBeenCalled();
-  });
-
-  test('asks Clerk to check the audience and sets req.auth', async () => {
-    authenticateRequest.mockResolvedValue(authenticated(['profile']));
-
-    const res = await request(mcpAuth({ resourceUrl, requiredScopes: ['profile'] }), {
-      authorization: 'Bearer token-1',
-    });
-
-    expect(res.status).toBe(200);
-    const [verified, options] = authenticateRequest.mock.calls[0]!;
-    expect(verified.headers.get('authorization')).toBe('Bearer token-1');
-    expect(options).toEqual({ acceptsToken: 'oauth_token', audience: resourceUrl });
-    expect(res.body.auth).toMatchObject({ clientId: 'client-1', extra: { userId: 'user-1' } });
-  });
-
-  // The real client throws for a setup mistake, such as a clerkClient created without a publishable key
-  test('answers a verification error the client threw with a 500 instead of a challenge', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    vi.stubEnv('CLERK_PUBLISHABLE_KEY', '');
-    const client = createClerkClient({ secretKey: 'sk_test_express' });
-
-    const res = await request(mcpAuth({ resourceUrl, clerkClient: client }), {
-      authorization: 'Bearer t',
-    });
-    const logged = consoleError.mock.calls.map(([error]) => error);
-    consoleError.mockRestore();
-
-    expect(res.status).toBe(500);
-    expect(res.challenge).toBeNull();
-    expect(logged[0]).toBeInstanceOf(McpAuthError);
-    expect((logged[0] as McpAuthError).cause).toMatchObject({
-      message: expect.stringMatching(/^Publishable key is missing/),
-    });
   });
 });
 

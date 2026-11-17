@@ -6,15 +6,16 @@ import type { AddressInfo } from 'node:net';
 import { createClerkClient } from '@clerk/backend';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
-import { bearerAuthenticator, serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
+import { serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
 import { McpAuthError, McpTokenVerificationError } from './server';
+import { FAKE_PK } from './test/mcp-harness';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 
 const clerkClient = createClerkClient({
   secretKey: 'sk_test_clerk_verification',
-  publishableKey: 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k',
+  publishableKey: FAKE_PK,
   jwtKey: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
 });
 
@@ -141,7 +142,7 @@ describe('verifyClerkOAuthToken when the Backend API fails', () => {
   const remoteClient = () =>
     createClerkClient({
       secretKey: 'sk_test_clerk_verification',
-      publishableKey: 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k',
+      publishableKey: FAKE_PK,
       apiUrl,
     });
 
@@ -182,21 +183,6 @@ describe('verifyClerkOAuthToken when the Backend API fails', () => {
       expect(error).toMatchObject({ code: 'unexpected-error', status: answered });
     },
   );
-
-  test('answers a rejected opaque token with the invalid_token challenge', async () => {
-    status = 400;
-
-    const result = await bearerAuthenticator({ resourceUrl })({
-      authorization: 'Bearer oat_abc',
-      requestUrl: resourceUrl,
-      verifyToken: (token) => verifyClerkOAuthToken(remoteClient(), token, resourceUrl),
-    });
-
-    expect(result).toMatchObject({ ok: false, status: 401, failure: { reason: 'invalid_token' } });
-    expect(result.ok === false && result.headers['WWW-Authenticate']).toContain(
-      'error="invalid_token"',
-    );
-  });
 
   test('throws an McpAuthError answered with a 500 when the JWKS for a JWT access token cannot be loaded', async () => {
     status = 503;

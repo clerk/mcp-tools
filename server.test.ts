@@ -5,19 +5,24 @@ import {
   matchResourceUrl,
   toClerkAuthInfo,
 } from './server';
+import { FAKE_PK } from './test/mcp-harness';
 
 // RFC 9728 section 2 parameters only: `jwks_uri` would name the protected resource's own keys, not the
 // authorization server's, and `resource_documentation` must describe the app's own server, which only it can name.
 describe('generateProtectedResourceMetadata', () => {
-  test('holds only the RFC 9728 parameters it can state', () => {
+  // A publishable key names its Frontend API as the authorization server
+  test.each([
+    [{ authServerUrl: 'https://auth.example.com' }, 'https://auth.example.com'],
+    [{ publishableKey: FAKE_PK }, 'https://clerk.example.com'],
+  ])('holds only the RFC 9728 parameters it can state, given %j', (keyOptions, authServer) => {
     expect(
       generateProtectedResourceMetadata({
-        authServerUrl: 'https://auth.example.com',
+        ...keyOptions,
         resourceUrl: 'https://mcp.example.com/mcp',
       }),
     ).toStrictEqual({
       resource: 'https://mcp.example.com/mcp',
-      authorization_servers: ['https://auth.example.com'],
+      authorization_servers: [authServer],
       bearer_methods_supported: ['header'],
     });
   });
@@ -46,7 +51,7 @@ describe('generateProtectedResourceMetadata', () => {
   ])('throws a Clerk error when properties sets resource to %s', (_name, properties) => {
     for (const keyOptions of [
       { authServerUrl: 'https://auth.example.com' },
-      { publishableKey: `pk_test_${btoa('clerk.example.com$')}` },
+      { publishableKey: FAKE_PK },
     ]) {
       expect(() =>
         generateProtectedResourceMetadata({
@@ -62,21 +67,6 @@ describe('generateProtectedResourceMetadata', () => {
 });
 
 describe('generateProtectedResourceMetadata with a publishable key', () => {
-  const publishableKey = `pk_test_${btoa('clerk.example.com$')}`;
-
-  test('names the Frontend API as the authorization server', () => {
-    expect(
-      generateProtectedResourceMetadata({
-        publishableKey,
-        resourceUrl: 'https://mcp.example.com/mcp',
-      }),
-    ).toStrictEqual({
-      resource: 'https://mcp.example.com/mcp',
-      authorization_servers: ['https://clerk.example.com'],
-      bearer_methods_supported: ['header'],
-    });
-  });
-
   test.each(['pk_test_abc', `pk_test_${btoa('$')}`, `sk_test_${btoa('clerk.example.com$')}`, ''])(
     'throws a Clerk error for the publishable key %j',
     (key) => {
@@ -117,7 +107,7 @@ describe('matchResourceUrl', () => {
 });
 
 describe('fetchAuthorizationServerMetadata', () => {
-  const publishableKey = `pk_test_${btoa('clerk.example.com$')}`;
+  const publishableKey = FAKE_PK;
 
   afterEach(() => {
     vi.restoreAllMocks();

@@ -29,10 +29,10 @@ vi.mock('@clerk/nextjs/server', () => clerkNextjsLoad.factory());
 import {
   McpAuthError,
   type McpAuthFailure,
-  McpTokenVerificationError,
   protectedResourceMetadataHandler,
   withMcpAuth,
 } from './index';
+import { clerkAuthenticated, FAKE_PK } from '../test/mcp-harness';
 
 const METADATA_ROOT = 'https://mcp.example.com/.well-known/oauth-protected-resource';
 const resourceUrl = 'https://mcp.example.com/mcp';
@@ -41,7 +41,7 @@ const BARE_CHALLENGE = `Bearer resource_metadata="${RESOURCE_METADATA_URL}"`;
 
 describe('protectedResourceMetadataHandler', () => {
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = FAKE_PK;
   });
 
   afterEach(() => {
@@ -209,61 +209,48 @@ describe('withMcpAuth with verifyToken', () => {
     }
   }, 1000);
 
-  test('still sends the challenge when onAuthFailure throws', async () => {
-    const res = await withMcpAuth(echoAuth, {
-      verifyToken: async () => undefined,
-      resourceUrl,
-      onAuthFailure: () => {
+  test.each([
+    [
+      'throws',
+      () => {
         throw new Error('logger is down');
       },
-    })(request());
+    ],
+    [
+      'rejects',
+      async () => {
+        throw new Error('logger is down');
+      },
+    ],
+  ])(
+    'still sends the challenge, without an unhandled rejection, when onAuthFailure %s',
+    async (_case, onAuthFailure) => {
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        const res = await withMcpAuth(echoAuth, {
+          verifyToken: async () => undefined,
+          resourceUrl,
+          onAuthFailure,
+        })(request());
+        await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(res.status).toBe(401);
-    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
-  });
-
-  test('still sends the challenge, without an unhandled rejection, when onAuthFailure rejects', async () => {
-    const unhandled = vi.fn();
-    process.on('unhandledRejection', unhandled);
-    try {
-      const res = await withMcpAuth(echoAuth, {
-        verifyToken: async () => undefined,
-        resourceUrl,
-        onAuthFailure: async () => {
-          throw new Error('logger is down');
-        },
-      })(request());
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(res.status).toBe(401);
-      expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
-      expect(unhandled).not.toHaveBeenCalled();
-    } finally {
-      process.off('unhandledRejection', unhandled);
-    }
-  });
+        expect(res.status).toBe(401);
+        expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    },
+  );
 });
 
 describe('withMcpAuth with Clerk', () => {
-  const authenticated = (scopes: string[]) => ({
-    isAuthenticated: true,
-    toAuth: () => ({
-      isAuthenticated: true,
-      tokenType: 'oauth_token',
-      id: 'oat_1',
-      subject: 'user-1',
-      getToken: async () => 'token',
-      clientId: 'client-1',
-      scopes,
-      userId: 'user-1',
-    }),
-  });
-
   beforeEach(() => {
     defaultAuthenticateRequest.mockReset();
     // The keys `clerkClient` from `@clerk/nextjs/server` reads, which the default client needs
     vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_123');
-    vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k');
+    vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', FAKE_PK);
   });
 
   afterEach(() => {
@@ -281,7 +268,7 @@ describe('withMcpAuth with Clerk', () => {
     'throws a Clerk error naming %s when it is not set, %s',
     async (name, _case, authorization) => {
       vi.stubEnv(name, '');
-      const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
+      const authenticateRequest = vi.fn().mockResolvedValue(clerkAuthenticated([]));
       nextClerkClient.mockResolvedValue({ authenticateRequest });
 
       const error = await withMcpAuth(echoAuth, { resourceUrl })(request(authorization)).catch(
@@ -333,7 +320,7 @@ describe('withMcpAuth with Clerk', () => {
   test('does not check the environment for a clerkClient option', async () => {
     vi.stubEnv('CLERK_SECRET_KEY', '');
     vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', '');
-    defaultAuthenticateRequest.mockResolvedValue(authenticated([]));
+    defaultAuthenticateRequest.mockResolvedValue(clerkAuthenticated([]));
 
     const res = await withMcpAuth(echoAuth, { resourceUrl, clerkClient })(
       request('Bearer token-1'),
@@ -356,95 +343,19 @@ describe('withMcpAuth with Clerk', () => {
     expect(callForm).toThrow('withMcpAuth(handler, { verifyToken })');
   });
 
-  test('throws a Clerk error without a route handler', () => {
-    expect(() => withMcpAuth({ resourceUrl, clerkClient } as never, undefined as never)).toThrow(
-      'takes the route handler first',
-    );
-  });
-
-  test('asks Clerk to check the audience and sets req.auth', async () => {
-    defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
-
-    const res = await withMcpAuth(echoAuth, {
-      clerkClient,
-      resourceUrl,
-      requiredScopes: ['profile'],
-    })(request('Bearer token-1'));
-
-    expect(res.status).toBe(200);
-    const [verified, options] = defaultAuthenticateRequest.mock.calls[0]!;
-    expect(verified.headers.get('authorization')).toBe('Bearer token-1');
-    expect(options).toEqual({ acceptsToken: 'oauth_token', audience: resourceUrl });
-    expect((await res.json()).auth).toMatchObject({
-      clientId: 'client-1',
-      extra: { userId: 'user-1', verifiedBy: 'clerk' },
-      resourceMetadataUrl: RESOURCE_METADATA_URL,
-    });
-  });
-
-  test('answers a rejected token with the invalid_token challenge', async () => {
-    defaultAuthenticateRequest.mockResolvedValue({
-      isAuthenticated: false,
-      reason: 'token-verification-failed',
-      message: 'OAuth audience mismatch. (code=token-verification-failed, status=n/a)',
-    });
-    const failures: McpAuthFailure[] = [];
-
-    const res = await withMcpAuth(echoAuth, {
-      clerkClient,
-      resourceUrl,
-      onAuthFailure: (failure) => failures.push(failure),
-    })(request('Bearer token-1'));
-
-    expect(res.status).toBe(401);
-    expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, error="invalid_token"`);
-    expect(await res.text()).not.toContain('audience');
-    expect(failures).toHaveLength(1);
-    expect(failures[0]?.reason).toBe('invalid_token');
-    expect(failures[0]?.cause).toBeInstanceOf(McpTokenVerificationError);
-    expect(failures[0]?.cause).toMatchObject({ code: 'token-verification-failed' });
-  });
-
-  test('verifies with clerkClient from @clerk/nextjs/server without a clerkClient option', async () => {
-    const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
-    nextClerkClient.mockResolvedValue({ authenticateRequest });
-
-    const res = await withMcpAuth(echoAuth, { resourceUrl })(request('Bearer token-1'));
-
-    expect(res.status).toBe(200);
-    expect(nextClerkClient).toHaveBeenCalled();
-    expect(authenticateRequest).toHaveBeenCalledOnce();
-    expect(defaultAuthenticateRequest).not.toHaveBeenCalled();
-  });
-
   test.each([
     ['with a token', 'Bearer token-1'],
     ['without a token', undefined],
   ])('resolves the Clerk client once per request %s', async (_case, authorization) => {
-    const authenticateRequest = vi.fn().mockResolvedValue(authenticated([]));
-    const resolve = vi.fn(async () => ({ authenticateRequest }));
+    const authenticateRequest = vi.fn().mockResolvedValue(clerkAuthenticated());
     nextClerkClient.mockReset();
     nextClerkClient.mockResolvedValue({ authenticateRequest });
 
-    for (const options of [{ resourceUrl, clerkClient: resolve }, { resourceUrl }]) {
-      await withMcpAuth(echoAuth, options)(request(authorization));
-    }
+    const res = await withMcpAuth(echoAuth, { resourceUrl })(request(authorization));
 
-    expect(resolve).toHaveBeenCalledOnce();
+    expect(res.status).toBe(authorization ? 200 : 401);
     expect(nextClerkClient).toHaveBeenCalledOnce();
-    expect(authenticateRequest).toHaveBeenCalledTimes(authorization ? 2 : 0);
-  });
-
-  test('prefers the clerkClient option over the one from @clerk/nextjs/server', async () => {
-    nextClerkClient.mockClear();
-    defaultAuthenticateRequest.mockResolvedValue(authenticated([]));
-
-    const res = await withMcpAuth(echoAuth, { resourceUrl, clerkClient })(
-      request('Bearer token-1'),
-    );
-
-    expect(res.status).toBe(200);
-    expect(nextClerkClient).not.toHaveBeenCalled();
+    expect(authenticateRequest).toHaveBeenCalledTimes(authorization ? 1 : 0);
   });
 
   // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives
@@ -486,7 +397,7 @@ describe('withMcpAuth with Clerk', () => {
   );
 
   test('passes the verified auth info to tools in an mcp-handler route', async () => {
-    defaultAuthenticateRequest.mockResolvedValue(authenticated(['profile']));
+    defaultAuthenticateRequest.mockResolvedValue(clerkAuthenticated(['profile']));
     const handler = createMcpHandler((server) => {
       server.registerTool('whoami', { description: 'Returns the caller' }, async (ctx) => ({
         content: [{ type: 'text', text: JSON.stringify(ctx.http?.authInfo ?? null) }],

@@ -29,10 +29,9 @@ function verify(req: Request): AuthInfo | undefined {
   return { token, clientId: 'client_1', scopes, extra: { userId: 'user_1', verifiedBy: 'clerk' } };
 }
 
-function startServer() {
-  const toolCalls = vi.fn();
-  const tokenRequests: URLSearchParams[] = [];
-  const mcpHandler = createMcpHandler(() => {
+// The customer's server: one `list_projects` tool that asks for `TOOL_SCOPES`
+function listProjectsHandler(toolCalls: () => void) {
+  return createMcpHandler(() => {
     const server = new McpServer({ name: 'customer', version: '0.0.0' });
     server.registerTool(
       'list_projects',
@@ -44,6 +43,12 @@ function startServer() {
     );
     return server;
   });
+}
+
+function startServer() {
+  const toolCalls = vi.fn();
+  const tokenRequests: URLSearchParams[] = [];
+  const mcpHandler = listProjectsHandler(toolCalls);
 
   const fetchImpl = async (input: string | URL, init?: RequestInit) => {
     const req = new Request(input, init);
@@ -139,18 +144,7 @@ describe('a requireAdditionalScopes tool behind mcpAuth that lists its scopes in
 
   function startMiddlewareServer() {
     const toolCalls = vi.fn();
-    const mcpHandler = createMcpHandler(() => {
-      const server = new McpServer({ name: 'customer', version: '0.0.0' });
-      server.registerTool(
-        'list_projects',
-        { description: 'Lists projects', scopeChallenge: requireAdditionalScopes(...TOOL_SCOPES) },
-        async () => {
-          toolCalls();
-          return { content: [{ type: 'text' as const, text: 'projects' }] };
-        },
-      );
-      return server;
-    });
+    const mcpHandler = listProjectsHandler(toolCalls);
     const app = new Hono();
     app.all(
       '/mcp',

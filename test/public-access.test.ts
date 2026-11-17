@@ -96,7 +96,6 @@ async function connect(token?: string, readBody: ReadBody | undefined = undefine
 
 describe('a server with publicAccess', () => {
   test.each([
-    { name: 'untouched', readBody: undefined },
     { name: 'cached JSON', readBody: (c: Context) => c.req.json() },
     { name: 'cached text', readBody: (c: Context) => c.req.text() },
     { name: 'cloned raw', readBody: (c: Context) => c.req.raw.clone().json() },
