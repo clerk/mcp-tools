@@ -11,7 +11,7 @@ vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient 
 
 import { FAKE_PK, clerkAuthenticated, sendRaw, withListening } from './test/mcp-harness';
 import type { AuthInfo } from './mcp-types';
-import { type McpAuthFailure, toClerkAuthInfo } from './server';
+import { type McpAuthFailure, McpTokenVerificationError, toClerkAuthInfo } from './server';
 import { resourceMetadataUrlFor } from './bearer-auth';
 import * as expressAdapter from './express';
 import * as honoAdapter from './hono';
@@ -713,6 +713,71 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
     expect(authInfo?.expiresAt).toBeUndefined();
     expect(res.status).toBe(200);
     expect(res.failure).toBeUndefined();
+  });
+
+  /** POSTs a token to the adapter's auth entry point with a `verifyToken` that throws `error`. */
+  async function thrownBy(error: Error) {
+    let failure: McpAuthFailure | undefined;
+    const app = failureApps[name](
+      {
+        verifyToken: () => {
+          throw error;
+        },
+      },
+      (reported) => {
+        failure = reported as McpAuthFailure | undefined;
+      },
+    );
+    const res = await serve(app, '/mcp', { method: 'POST', authorization: 'Bearer t' });
+    return { ...res, failure };
+  }
+
+  // What the READMEs tell verifier authors: a library error the verifier lets escape, such as jose's `JWTExpired`,
+  // means the token could not be verified at all, so it gets the server error, which keeps the client's token
+  test.each([
+    [
+      "jose's JWTExpired",
+      Object.assign(new Error('"exp" claim timestamp check failed'), {
+        name: 'JWTExpired',
+        code: 'ERR_JWT_EXPIRED',
+      }),
+      500,
+    ],
+    [
+      'an error with a 503 status',
+      Object.assign(new Error('JWKS unavailable'), { status: 503 }),
+      503,
+    ],
+  ])(
+    'answers a verifier that throws %s with a JSON %i and logs the McpAuthError',
+    async (_case, expired, status) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const res = await thrownBy(expired);
+
+      expect(res.status).toBe(status);
+      expect(res.body).toEqual({ error: 'server_error' });
+      expect(res.challenge).toBeNull();
+      expect(log).toHaveBeenCalledOnce();
+      expect(log.mock.calls[0]?.[0]).toMatchObject({
+        name: 'McpAuthError',
+        reason: 'verification_failed',
+        cause: expired,
+      });
+    },
+  );
+
+  // RFC 6750 section 3.1: an expired token is `invalid_token`, which the resource SHOULD answer with a 401
+  test('answers a verifier that throws an McpTokenVerificationError with the invalid_token challenge', async () => {
+    const rejection = new McpTokenVerificationError('token-expired', 'The token expired');
+
+    const res = await thrownBy(rejection);
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toBe(
+      `Bearer resource_metadata="${res.origin}${WELL_KNOWN}/mcp", error="invalid_token"`,
+    );
+    expect(res.failure).toMatchObject({ reason: 'invalid_token', cause: rejection });
   });
 });
 
