@@ -246,7 +246,9 @@ const authorizationServerApps: [Adapter, () => App][] = [
   ],
 ];
 
-/** Serves a request with `handler` as the route, and returns the error the app reported. */
+/**
+ * Serves a request with `handler` as the route, and returns the error the app reported.
+ */
 async function reportedError(
   adapter: Adapter,
   handler: unknown,
