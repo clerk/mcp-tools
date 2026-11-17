@@ -127,7 +127,7 @@ The extension recommends serving the card at your MCP endpoint's URL followed by
 
 - `GET` and `HEAD` get the card as `application/mcp-server-card+json` (`HEAD` without a body), a weak `ETag`, and `Cache-Control: public, max-age=3600`. Set `maxAge` to another whole number of seconds; `0` sends `public, no-cache`, which lets caches store the card but has them revalidate it before each use.
 - A `GET` or `HEAD` whose `If-None-Match` lists the card's tag, or is `*`, gets a `304` without a body.
-- Any origin can read the card and revalidate it: `Access-Control-Allow-Origin: *`, with `If-None-Match` allowed and `ETag` exposed. `OPTIONS` gets the CORS preflight, and other methods a JSON `405` with `Allow: GET, HEAD, OPTIONS`.
+- Any origin can read the card and revalidate it: `Access-Control-Allow-Origin: *`, with `If-None-Match` allowed and `ETag` exposed. `OPTIONS` gets the CORS preflight, and other methods a JSON `405` with `Allow: GET, HEAD, OPTIONS`. Every error, such as that `405` or a `421`, is sent with `Cache-Control: no-store`, so no cache keeps it.
 - With a list of `resourceUrl`s, one for each origin, a request gets the card for the URL with its own origin, scheme and port included; the browser's `Origin` header plays no part. A request to any other origin gets a JSON `421`, never another origin's card. Errors are not cached.
 
 For framework-specific implementations, see:
@@ -164,7 +164,7 @@ const catalog = generateAICatalog({
 });
 ```
 
-The handlers answer as the Server Card handlers do, with the catalog's media type, `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and uncached errors. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
+The handlers answer as the Server Card handlers do, with the catalog's media type, `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
 
 For framework-specific implementations, see:
 

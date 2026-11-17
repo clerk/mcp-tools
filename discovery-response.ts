@@ -75,14 +75,21 @@ const discoveryCorsHeaders = {
   'Access-Control-Max-Age': '86400',
 };
 
-// The JSON error a request gets, with its body even for HEAD: the responder drops a HEAD answer's body in one place
+// The JSON error a request gets, with its body even for HEAD: the responder drops a HEAD answer's body in one place.
+// `no-store` keeps every error out of caches (RFC 9111 section 5.2.2.5): without it, a 405 is heuristically cacheable
+// (RFC 9110 section 15.1), and a cache may reuse it with heuristic freshness (RFC 9111 section 4.2.2).
 const errorAnswer = (
   status: 400 | 405 | 421,
   error: string,
   headers: Record<string, string> = {},
 ): DiscoveryAnswer => ({
   status,
-  headers: { ...discoveryCorsHeaders, 'Content-Type': 'application/json', ...headers },
+  headers: {
+    ...discoveryCorsHeaders,
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    ...headers,
+  },
   body: JSON.stringify({ error }),
 });
 

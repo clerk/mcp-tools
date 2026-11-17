@@ -329,7 +329,7 @@ app.all(
 );
 ```
 
-`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has an uncached `421`. The handler answers conditional requests itself, whatever the app's `etag` setting.
+`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. The handler answers conditional requests itself, whatever the app's `etag` setting.
 
 With a list of `resourceUrl`s, the request's origin is the one Express gives the rest of the app, `req.protocol` and `req.host`, as for `mcpAuth`: behind a proxy, set `trust proxy` so they come from `X-Forwarded-Proto` and `X-Forwarded-Host`, which are ignored otherwise. The browser's `Origin` header plays no part. With a list, a request without a `Host` header that parses gets a `400`, since there is no origin to select by. A single `resourceUrl` never reads the request's URL, so that request still gets the card, as it does from `aiCatalogHandler`.
 

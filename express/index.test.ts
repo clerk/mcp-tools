@@ -1038,7 +1038,7 @@ describe('serverCardHandler with a list of resourceUrls', () => {
       'GET /mcp/server-card HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n',
     ],
     ['an HTTP/1.0 request without a Host header', 'GET /mcp/server-card HTTP/1.0\r\n\r\n'],
-  ])('answers %s with a JSON 400', async (_case, raw) => {
+  ])('answers %s with a JSON 400 that is never stored', async (_case, raw) => {
     const app = express();
     app.all(
       '/mcp/server-card',
@@ -1050,6 +1050,7 @@ describe('serverCardHandler with a list of resourceUrls', () => {
 
     expect(head).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
     expect(head).toMatch(/^access-control-allow-origin: \*$/im);
+    expect(head).toMatch(/^cache-control: no-store$/im);
     expect(head).not.toMatch(/^etag:/im);
     expect(body).toBe('{"error":"invalid_request"}');
   });

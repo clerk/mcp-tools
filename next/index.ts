@@ -108,8 +108,8 @@ export function metadataCorsHandler(): () => Response {
  *
  * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
  * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body.
- * OPTIONS gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has an
- * uncached 421. Next.js only calls the handler for the methods the route exports, so export it for each of them:
+ * OPTIONS gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has a
+ * 421, each error with `Cache-Control: no-store`. Next.js only calls the handler for the methods the route exports, so export it for each of them:
  * without an `OPTIONS` export, Next.js answers the preflight itself, without the CORS headers.
  * @see https://github.com/modelcontextprotocol/ext-server-card
  * @param options - See `ServerCardHandlerOptions`
@@ -150,7 +150,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  *
  * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
  * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405. Export it for
+ * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with `Cache-Control: no-store`. Export it for
  * each method, as for `serverCardHandler`.
  * @see https://github.com/Agent-Card/ai-catalog
  * @param options - See `AICatalogHandlerOptions`

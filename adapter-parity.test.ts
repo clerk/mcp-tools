@@ -1535,7 +1535,7 @@ describe.each(discoveryApps)('%s', (_name, mount, doc) => {
   });
 
   test.each(['POST', 'PUT', 'DELETE', 'PATCH'])(
-    'answers %s with a JSON 405 and Allow, uncached',
+    'answers %s with a JSON 405 and Allow, never stored',
     async (method) => {
       const res = await serve(mount(doc.options), doc.path, { method });
 
@@ -1545,7 +1545,7 @@ describe.each(discoveryApps)('%s', (_name, mount, doc) => {
       expectHeaders(res.headers, {
         'content-type': 'application/json',
         'access-control-allow-origin': '*',
-        'cache-control': null,
+        'cache-control': 'no-store',
         etag: null,
       });
     },
@@ -1707,7 +1707,7 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
     ['an unlisted host', unlisted],
     ['another scheme', ['http://mcp.example.com/mcp']],
     ['another port', ['https://mcp.example.com:8443/mcp']],
-  ])('answers a request to %s with an uncached JSON 421', async (_case, resourceUrl) => {
+  ])('answers a request to %s with a JSON 421 that is never stored', async (_case, resourceUrl) => {
     const res = await serveWith(mount({ ...card, resourceUrl }), CARD_PATH, 'GET', {
       origin: 'https://other.example.dev',
       'if-none-match': '*',
@@ -1718,7 +1718,7 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
     expectHeaders(res.headers, {
       'content-type': 'application/json',
       'access-control-allow-origin': '*',
-      'cache-control': null,
+      'cache-control': 'no-store',
       etag: null,
     });
   });
@@ -1730,6 +1730,7 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
 
     expect(res.status).toBe(421);
     expect(res.body).toBeNull();
+    expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
   async function tagOf(app: App) {
