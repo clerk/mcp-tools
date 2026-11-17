@@ -5,12 +5,9 @@ import {
   assertMcpAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertPublicAccess,
-  authenticateBearer,
-  clerkProtectedResourceMetadata,
-  failureAnswer,
-  isPublicRequest,
+  bearerAuthenticator,
+  protectedResourceMetadataAnswer,
   readJsonBody,
-  resourceFromMetadataUrl,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from './bearer-auth';
@@ -18,15 +15,14 @@ import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './se
 
 const authInfo = { token: 't', clientId: 'client-1', scopes: ['profile'] };
 
-type AuthenticateInput = Parameters<typeof authenticateBearer>[0];
+type Authenticate = ReturnType<typeof bearerAuthenticator>;
 
-// The request fields of `authenticateBearer` and the options it reads, side by side
+// The options `bearerAuthenticator` reads and the request fields, side by side
 function authenticate(
-  overrides: Partial<Omit<AuthenticateInput, 'options'> & AuthenticateInput['options']> = {},
-): ReturnType<typeof authenticateBearer> {
+  overrides: Partial<Parameters<typeof bearerAuthenticator>[0] & Parameters<Authenticate>[0]> = {},
+): ReturnType<Authenticate> {
   const { resourceUrl, requiredScopes, challengeScopes, publicAccess, ...request } = overrides;
-  return authenticateBearer({
-    options: { resourceUrl, requiredScopes, challengeScopes, publicAccess },
+  return bearerAuthenticator({ resourceUrl, requiredScopes, challengeScopes, publicAccess })({
     authorization: 'Bearer t',
     requestUrl: 'https://mcp.example.com/mcp',
     verifyToken: async () => authInfo,
@@ -43,6 +39,30 @@ describe('resourceUrl validation', () => {
       );
     },
   );
+
+  test.each(['/mcp', 'mailto:foo@example.com', 'https://user:pass@mcp.example.com/mcp'])(
+    'rejects %s, alone or in a list',
+    (url) => {
+      const message =
+        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials';
+      expect(() => assertMcpAuthOptions('mcpAuth', { resourceUrl: url })).toThrow(message);
+      expect(() =>
+        assertMcpAuthOptions('mcpAuth', { resourceUrl: ['https://mcp.example.com/mcp', url] }),
+      ).toThrow(message);
+    },
+  );
+
+  test.each([
+    [{ resourceUrl: [] }, 'mcpAuth resourceUrl must be a URL or a non-empty list of URLs'],
+    [
+      { resourceUrl: ['https://mcp.example.com/a', 'https://mcp.example.com/b'] },
+      'mcpAuth resourceUrl lists more than one URL for https://mcp.example.com',
+    ],
+    [{ requiredScopes: ['a b'] }, 'mcpAuth requiredScopes must contain only scope tokens'],
+    [{ challengeScopes: [''] }, 'mcpAuth challengeScopes must contain only scope tokens'],
+  ])('rejects %j', (options, message) => {
+    expect(() => assertMcpAuthOptions('mcpAuth', options)).toThrow(`Clerk error: ${message}`);
+  });
 
   test.each([
     'https://mcp.example.com',
@@ -70,18 +90,7 @@ describe('resourceMetadataUrlFor', () => {
   });
 });
 
-describe('resourceFromMetadataUrl', () => {
-  test.each([
-    'https://mcp.example.com/mcp',
-    'https://mcp.example.com/mcp/',
-    'https://mcp.example.com',
-    'https://mcp.example.com/mcp?tenant=a',
-  ])('inverts resourceMetadataUrlFor for %s', (resource) => {
-    expect(resourceFromMetadataUrl(resourceMetadataUrlFor(resource))).toBe(resource);
-  });
-});
-
-describe('authenticateBearer', () => {
+describe('bearerAuthenticator', () => {
   test('derives the metadata URL from the request path, without its query or a trailing slash at the root', async () => {
     const withQuery = await authenticate({
       authorization: undefined,
@@ -93,12 +102,32 @@ describe('authenticateBearer', () => {
     });
 
     expect(withQuery).toMatchObject({
-      challenge:
-        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
+      headers: {
+        'WWW-Authenticate':
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
+      },
     });
     expect(root).toMatchObject({
-      challenge:
-        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"',
+      headers: {
+        'WWW-Authenticate':
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"',
+      },
+    });
+  });
+
+  test('lists requiredScopes then challengeScopes in the 401 challenge, each once', async () => {
+    const result = await authenticate({
+      authorization: undefined,
+      requiredScopes: ['profile', 'email'],
+      challengeScopes: ['email', 'projects:read'],
+    });
+
+    expect(result).toMatchObject({
+      status: 401,
+      headers: {
+        'WWW-Authenticate':
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="profile email projects:read"',
+      },
     });
   });
 
@@ -115,8 +144,8 @@ describe('authenticateBearer', () => {
       ok: false,
       failure: { reason: 'misdirected_request' },
       status: 421,
-      challenge: undefined,
-      error: 'misdirected_request',
+      headers: {},
+      body: { error: 'misdirected_request' },
     });
     expect(verifyToken).not.toHaveBeenCalled();
   });
@@ -170,8 +199,10 @@ describe('authenticateBearer', () => {
     expect(expired).toMatchObject({
       ok: false,
       status: 401,
-      challenge:
-        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+      headers: {
+        'WWW-Authenticate':
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+      },
       failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
     });
     expect(current).toMatchObject({ ok: true });
@@ -185,8 +216,10 @@ describe('authenticateBearer', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 401,
-        challenge:
-          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+        headers: {
+          'WWW-Authenticate':
+            'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+        },
         failure: { reason: 'invalid_token', cause: { code: 'token-expired' } },
       });
     },
@@ -204,8 +237,10 @@ describe('authenticateBearer', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 401,
-      challenge:
-        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+      headers: {
+        'WWW-Authenticate':
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+      },
       failure: {
         reason: 'invalid_token',
         cause: {
@@ -369,31 +404,6 @@ describe('verifyClerkOAuthToken', () => {
     });
   });
 
-  test("keeps Clerk's own auth object on extra.auth", async () => {
-    const auth = {
-      isAuthenticated: true,
-      tokenType: 'oauth_token',
-      id: 'oat_1',
-      subject: 'user-1',
-      clientId: 'client-1',
-      scopes: ['profile'],
-      userId: 'user-1',
-      getToken: async () => 't',
-    };
-    const authenticateRequest = vi
-      .fn()
-      .mockResolvedValue({ isAuthenticated: true, toAuth: () => auth });
-
-    const authInfo = await verifyClerkOAuthToken(
-      { authenticateRequest },
-      't',
-      'https://mcp.example.com/mcp',
-    );
-
-    expect(authInfo.extra.auth).toBe(auth);
-    expect(authInfo.extra).toMatchObject({ userId: 'user-1', verifiedBy: 'clerk' });
-  });
-
   test('accepts the empty id Clerk gives a JWT access token without a jti', async () => {
     const auth = { ...authenticated.toAuth(), id: '' };
     const authenticateRequest = vi
@@ -449,13 +459,12 @@ const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 const metadataOrigin = 'https://mcp.example.com';
 const metadataUrl = `${metadataOrigin}/.well-known/oauth-protected-resource/mcp`;
 
-describe('clerkProtectedResourceMetadata', () => {
-  const metadata = (options: Parameters<typeof clerkProtectedResourceMetadata>[0]) =>
-    clerkProtectedResourceMetadata(
+describe('protectedResourceMetadataAnswer', () => {
+  const metadata = (options: Parameters<typeof protectedResourceMetadataAnswer>[0]) =>
+    protectedResourceMetadataAnswer(
       { resourceUrl: 'https://public.example.com/mcp', ...options },
-      metadataUrl,
-      FAKE_PK,
-    );
+      { method: 'GET', publishableKey: FAKE_PK, url: metadataUrl },
+    ).body as Record<string, unknown>;
 
   test('merges properties over the generated metadata', () => {
     expect(
@@ -831,8 +840,10 @@ describe('publicAccess', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 401,
-      challenge:
-        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="profile email"',
+      headers: {
+        'WWW-Authenticate':
+          'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="profile email"',
+      },
     });
   });
 
@@ -844,14 +855,11 @@ describe('publicAccess', () => {
     'answers a GET without a token with a 405 when %j opens the handshake',
     async (publicAccess) => {
       const result = await withoutToken(publicAccess, undefined, { method: 'GET' });
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         ok: false,
         failure: undefined,
         status: 405,
-        challenge: undefined,
-      });
-      expect(failureAnswer(result as Extract<typeof result, { ok: false }>).headers).toEqual({
-        Allow: 'POST',
+        headers: { Allow: 'POST' },
       });
     },
   );
@@ -983,11 +991,6 @@ describe('publicAccess', () => {
         requestUrl: 'https://other.example.com/mcp',
       }),
     ).resolves.toMatchObject({ ok: false, status: 421 });
-  });
-
-  test('isPublicRequest applies the same rule to a parsed body', () => {
-    expect(isPublicRequest({ methods: true }, rpc('tools/list'))).toBe(true);
-    expect(isPublicRequest({ methods: true }, rpc('tools/call', { name: 'whoami' }))).toBe(false);
   });
 });
 

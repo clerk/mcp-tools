@@ -10,17 +10,8 @@
  * may carry.
  */
 export interface AuthInfo {
-  /**
-   * The access token.
-   */
   token: string;
-  /**
-   * The client ID associated with this token.
-   */
   clientId: string;
-  /**
-   * Scopes associated with this token.
-   */
   scopes: string[];
   /**
    * When the token expires, in seconds since the epoch.
@@ -30,9 +21,6 @@ export interface AuthInfo {
    * The RFC 8707 resource server identifier the token is valid for.
    */
   resource?: URL;
-  /**
-   * Additional data attached to the token.
-   */
   extra?: Record<string, unknown>;
 }
 
@@ -43,8 +31,6 @@ export interface AuthInfo {
 export interface McpServerLike<Transport> {
   /**
    * Connects the server to a transport and starts listening for messages on it.
-   * @param transport - The transport to connect to
-   * @returns A promise that resolves once the server is connected
    */
   connect(transport: Transport): Promise<void>;
 }

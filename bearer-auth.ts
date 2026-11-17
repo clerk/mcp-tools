@@ -66,24 +66,10 @@ export type BaseAuthOptions = {
 };
 
 /**
- * The options for verifying tokens with Clerk, which needs `resourceUrl` as the audience.
- */
-export type ClerkAuthOptions = BaseAuthOptions & {
-  /**
-   * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
-   * for each origin the server answers on. Clerk rejects a token whose `aud` claim does not include the URL for the
-   * request's origin, so a token issued for one listed URL does not pass on another, and a request to any other origin
-   * gets a 421. The challenge's `resource_metadata` is derived from it. Pass the same value to
-   * `protectedResourceMetadataHandler`, so its `resource` is the URL checked here.
-   */
-  resourceUrl: McpResourceUrl;
-};
-
-/**
  * The branch of every adapter's options union that verifies tokens with the caller's function, for the framework's
  * request type `Req`. `resourceUrl` is optional, and `clerkClient` is not allowed.
  */
-export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
+type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
   /**
    * Verifies a token in place of Clerk and returns its auth info, or `undefined` to reject it. Throw an
    * `McpTokenVerificationError` to reject it with a reason. When the auth info has a `resource` and `resourceUrl` is
@@ -102,28 +88,27 @@ export type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
 };
 
 /**
- * The `clerkClient` option of every adapter: the Clerk client that verifies tokens, or a function that returns one,
- * which is called once for each request that is checked, such as to read the keys when a request arrives. Create the
- * client with both `secretKey` and `publishableKey`: without a publishable key, every request fails. A client from
- * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
- */
-export type ClerkClientOption =
-  | ClerkOAuthClient
-  | (() => ClerkOAuthClient | Promise<ClerkOAuthClient>);
-
-/**
- * The options of the Express and Hono `mcpAuth` middleware, for the framework's request type `Req`. Without
- * `verifyToken`, Clerk verifies each token, and `resourceUrl` is required as its audience. With `verifyToken`, that
- * function verifies each token instead, `resourceUrl` is optional, and `clerkClient` is not allowed.
+ * The options of every adapter's auth entry point, for the framework's request type `Req`. Without `verifyToken`,
+ * Clerk verifies each token, and `resourceUrl` is required as its audience. With `verifyToken`, that function
+ * verifies each token instead, `resourceUrl` is optional, and `clerkClient` is not allowed.
  */
 export type MiddlewareAuthOptions<Req> =
-  | (ClerkAuthOptions & {
+  | (BaseAuthOptions & {
       /**
-       * The Clerk client that verifies tokens, or a function that returns one, called once for each request. Create
-       * the client with both `secretKey` and `publishableKey`: without a publishable key, every request fails. A
-       * client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check.
+       * Required with Clerk, which rejects a token whose `aud` claim does not include the URL for the request's
+       * origin. Otherwise as described on `BaseAuthOptions`.
        */
-      clerkClient?: ClerkClientOption | undefined;
+      resourceUrl: McpResourceUrl;
+      /**
+       * The Clerk client that verifies tokens, or a function that returns one, called once for each request, such as
+       * to read the keys when a request arrives. Create the client with both `secretKey` and `publishableKey`:
+       * without a publishable key, every request fails. A client from `@clerk/backend` must be version 3.19.0 or
+       * later, the first with a reliable audience check.
+       */
+      clerkClient?:
+        | ClerkOAuthClient
+        | (() => ClerkOAuthClient | Promise<ClerkOAuthClient>)
+        | undefined;
       verifyToken?: never;
     })
   | CustomVerifierAuthOptions<Req>;
@@ -137,14 +122,6 @@ export type MiddlewareAuthOptions<Req> =
 export type ProtectedResourceMetadataOptions<
   AuthOptions extends BaseAuthOptions = BaseAuthOptions,
 > = Partial<AuthOptions> & {
-  /**
-   * The `resourceUrl` given to `mcpAuth` or `withMcpAuth` for the endpoint this metadata describes: one URL, or a
-   * list with one for each origin. The metadata's `resource` is then the URL they check for the same request,
-   * whatever origin the app sees behind a proxy for a single URL, and with a list a request to an origin none of
-   * them has gets a 421. Without it, `resource` is derived from the URL the metadata route was requested at, which
-   * can differ from the public URL behind a proxy.
-   */
-  resourceUrl?: McpResourceUrl | undefined;
   /**
    * Additional metadata, such as `resource_name`. It overrides the generated metadata, except `resource`, which it
    * cannot set: that is `resourceUrl`, the URL `mcpAuth` checks (RFC 9728 section 3.3). Without `scopes_supported`,
@@ -168,22 +145,17 @@ const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set<
   'verifyToken',
 ]);
 
-export type BearerResult =
-  // `authInfo` is `undefined` for a request without a token that `publicAccess` lets through
+// What `bearerAuthenticator` decides for a request: let it through, with `authInfo` `undefined` for a request without
+// a token that `publicAccess` let through, or answer it. `failure` is `undefined` only for the 405 to a GET on a
+// server whose handshake is public, which is not an auth failure.
+type BearerResult =
   | { ok: true; authInfo: (AuthInfo & { resourceMetadataUrl: string }) | undefined }
   | {
       ok: false;
-      failure: McpAuthFailure;
-      status: 401 | 403 | 421;
-      challenge: string | undefined;
-      error: string;
-    }
-  // A GET without a token on a server whose handshake is public. It is not an auth failure, so it has none.
-  | {
-      ok: false;
-      failure: undefined;
-      status: 405;
-      challenge: undefined;
+      failure: McpAuthFailure | undefined;
+      status: 401 | 403 | 405 | 421;
+      headers: Record<string, string>;
+      body: typeof methodNotAllowed.body | { error: string };
     };
 
 // Every `McpPublicMethod`, for checking a `publicAccess.methods` list and for `methods: true`
@@ -367,15 +339,10 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
   }
 }
 
-/**
- * Whether `publicAccess` opens a request body without a token: one JSON-RPC message, or a batch with at least one,
- * where every message is open. One protected message closes the whole batch, since the response to a batch cannot be
- * a challenge for part of it.
- * @param publicAccess - The `publicAccess` option, already checked
- * @param body - The request's parsed JSON body, or `undefined` when it could not be read
- * @returns Whether the request may pass without auth info
- */
-export function isPublicRequest(publicAccess: PublicAccess, body: unknown): boolean {
+// Whether `publicAccess` opens a parsed request body without a token: one JSON-RPC message, or a batch with at least
+// one, where every message is open. One protected message closes the whole batch, since the response to a batch cannot
+// be a challenge for part of it.
+function isPublicRequest(publicAccess: PublicAccess, body: unknown): boolean {
   const messages = Array.isArray(body) ? body : [body];
   return messages.length > 0 && messages.every((message) => isPublicMessage(publicAccess, message));
 }
@@ -418,14 +385,8 @@ export async function readJsonBody(request: Request): Promise<unknown> {
     chunks.push(value);
   }
 
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
   try {
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return JSON.parse(await new Blob(chunks).text());
   } catch {
     return undefined;
   }
@@ -522,38 +483,6 @@ function requestedScopes({ requiredScopes = [], challengeScopes = [] }: BaseAuth
   return [...new Set([...requiredScopes, ...challengeScopes])];
 }
 
-/**
- * The protected resource metadata a Clerk instance's `protectedResourceMetadataHandler` serves for a request, or
- * `undefined` when a list of `resourceUrl`s has none with the request's origin, which the adapters answer with a 421,
- * as `mcpAuth` does (RFC 9110 section 15.5.20). The `resource` is the `resourceUrl` for the request, the URL `mcpAuth`
- * checks, or without `resourceUrl` the resource the requested metadata URL describes, so it is identical to the URL
- * the client derived the metadata URL from (RFC 9728 section 3.3). `scopes_supported` (RFC 9728 section 2) lists
- * `requiredScopes` then `challengeScopes`, each once, unless `properties` sets it, and is left out without scopes.
- * @param options - The handler's options, already checked
- * @param metadataUrl - The URL the metadata route was requested at
- * @param publishableKey - The Clerk publishable key
- * @returns The metadata, or `undefined` for a request to an origin no `resourceUrl` lists
- */
-export function clerkProtectedResourceMetadata(
-  { resourceUrl, requiredScopes, challengeScopes, properties }: ProtectedResourceMetadataOptions,
-  metadataUrl: string,
-  publishableKey: string,
-) {
-  const resource =
-    resourceUrl === undefined
-      ? resourceFromMetadataUrl(metadataUrl)
-      : matchResourceUrl(resourceUrl, metadataUrl);
-  if (resource === undefined) return undefined;
-  // A `scopes_supported` key set to `undefined` is treated as left out, so it does not erase the derived list
-  const derived = requestedScopes({ requiredScopes, challengeScopes });
-  const scopes = properties?.scopes_supported ?? (derived.length > 0 ? derived : undefined);
-  return generateProtectedResourceMetadata({
-    publishableKey,
-    resourceUrl: resource,
-    properties: scopes === undefined ? properties : { ...properties, scopes_supported: scopes },
-  });
-}
-
 // A URL with another scheme, such as `mailto:`, has no origin for the challenge, `new Request` throws on a URL with
 // credentials, and a resource identifier must not have a fragment (RFC 8707 section 2).
 function isResourceUrl(value: string): boolean {
@@ -599,64 +528,63 @@ export function assertVerifierOrResourceUrl(options: unknown, message: string) {
 }
 
 /**
- * Returns the Clerk client for a request in the Clerk branch of an entry point's options: the `clerkClient` option,
- * checked here, at startup, or the adapter's default without it. A function option is called on each call.
+ * The auth check of an adapter's entry point, made at startup: `clerkClient` is checked here, and the work that depends
+ * only on the options is done once. For each request it resolves the token verifier first: with `verifyToken`, that
+ * function with the request; otherwise the Clerk client, before any token is read, so a missing client is thrown as it
+ * is, on a request with or without a token, instead of as the `cause` of an `McpAuthError` once a token arrives.
  * @param caller - The entry point named in the message, such as `mcpAuth`
- * @param clerkClient - The `clerkClient` option, unchecked
- * @param defaultClient - Returns the adapter's default client for a request
+ * @param options - The entry point's options, already checked
+ * @param defaultClient - Returns the adapter's default client for a request, used without `clerkClient`
  * @param defaultName - The default client, as the message names it, such as `clerkClient from '@clerk/express'`
- * @returns A function that resolves the client for a request
+ * @returns A function that takes the framework's request and returns its check, which resolves to the
+ * `bearerAuthenticator` result, or to `serverError` when the token could not be verified at all
  */
-export function clerkClientResolver<Req>(
+export function createBearerAuth<Req>(
   caller: string,
-  clerkClient: unknown,
+  options: MiddlewareAuthOptions<Req>,
   defaultClient: (request: Req) => Promise<ClerkOAuthClient>,
   defaultName: string,
-): (request: Req) => Promise<ClerkOAuthClient> {
-  if (clerkClient === undefined) return defaultClient;
+) {
+  const { clerkClient } = options as { clerkClient?: unknown };
+  let clientFor = defaultClient;
   if (typeof clerkClient === 'function') {
-    const resolve = clerkClient as () => ClerkOAuthClient | Promise<ClerkOAuthClient>;
-    return async () => resolve();
+    clientFor = async () => (clerkClient as () => ClerkOAuthClient | Promise<ClerkOAuthClient>)();
+  } else if (clerkClient !== undefined) {
+    if (
+      typeof (clerkClient as Partial<ClerkOAuthClient> | null)?.authenticateRequest !== 'function'
+    ) {
+      throw new Error(
+        `Clerk error: ${caller} takes a clerkClient with authenticateRequest, or a function that returns one. Omit clerkClient to use ${defaultName}`,
+      );
+    }
+    clientFor = async () => clerkClient as ClerkOAuthClient;
   }
-  if (
-    typeof (clerkClient as Partial<ClerkOAuthClient> | null)?.authenticateRequest !== 'function'
-  ) {
-    throw new Error(
-      `Clerk error: ${caller} takes a clerkClient with authenticateRequest, or a function that returns one. Omit clerkClient to use ${defaultName}`,
-    );
-  }
-  const client = clerkClient as ClerkOAuthClient;
-  return async () => client;
-}
+  const authenticate = bearerAuthenticator(options);
 
-/**
- * The token verifier for one request, made once the request arrives. With `verifyToken`, it calls that with the token
- * and the request. Otherwise the Clerk client is resolved here, once for the request and before any token is read,
- * so a missing client is thrown as it is, on a request with or without a token; thrown by the verifier, it would be
- * the `cause` of an `McpAuthError`, and only once a token arrived. Each token is then verified with that client, with
- * the resource `authenticateBearer` matched to the request as the audience.
- * @param options - The entry point's options
- * @param clientFor - Returns the Clerk client for a request, from `clerkClientResolver`
- * @param request - The framework's request or context
- * @returns A verifier that takes the token and the resource it must be for
- */
-export async function requestTokenVerifier<Req>(
-  options: MiddlewareAuthOptions<Req>,
-  clientFor: (request: Req) => Promise<ClerkOAuthClient>,
-  request: Req,
-): Promise<TokenVerifier> {
-  if (options.verifyToken) {
+  return async (request: Req) => {
     const custom = options.verifyToken;
-    return (token) => custom(token, request);
-  }
-  const client = await clientFor(request);
-  // The Clerk branch always has a `resourceUrl`, so `authenticateBearer` matched one, or answered with a 421, before
-  // it verifies a token
-  return (token, resource) => verifyClerkOAuthToken(client, token, resource!);
+    // The Clerk branch always has a `resourceUrl`, so a resource was matched, or the request answered with a 421,
+    // before a token is verified
+    const client = custom ? undefined : await clientFor(request);
+    const verifyToken: TokenVerifier = custom
+      ? (token) => custom(token, request)
+      : (token, resource) => verifyClerkOAuthToken(client!, token, resource!);
+
+    return async (
+      input: Omit<BearerRequest, 'verifyToken'>,
+    ): Promise<BearerResult | { ok: false; serverError: McpAuthError }> => {
+      try {
+        return await authenticate({ ...input, verifyToken });
+      } catch (error) {
+        if (!(error instanceof McpAuthError)) throw error;
+        return { ok: false, serverError: error };
+      }
+    };
+  };
 }
 
 /**
- * The verifier `authenticateBearer` calls with a request's token, and the listed `resourceUrl` the request matched,
+ * The verifier `bearerAuthenticator` calls with a request's token, and the listed `resourceUrl` the request matched,
  * or `undefined` without one.
  */
 type TokenVerifier = (
@@ -685,38 +613,29 @@ export function requireClerkEnvKeys<K extends string>(
   return keys as Record<K, string>;
 }
 
-/**
- * The publishable key the metadata handlers read from the app's environment, or an error when it is not set or is
- * not a Clerk publishable key. The adapters read the variable themselves: Next.js only inlines
- * `process.env.NEXT_PUBLIC_*` where it is written out. The key is checked here, before any request to Clerk, so a
- * mistyped key throws to the framework as a missing one does, instead of being answered as Clerk's failure.
- * @param publishableKey - The value of the variable in the app's environment
- * @param name - The variable's name, for the error: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` in Next.js
- * @returns The publishable key
- */
-export function requirePublishableKey(
-  publishableKey: string | undefined,
-  name = 'CLERK_PUBLISHABLE_KEY',
-): string {
+// The Frontend API URL of the publishable key a metadata handler read from the app's environment, or an error when it
+// is not set or is not a Clerk publishable key. It is checked before any request to Clerk, so a mistyped key throws to
+// the framework as a missing one does, instead of being answered as Clerk's failure.
+function requirePublishableKey(publishableKey: string | undefined, name: string): string {
   if (!publishableKey) {
     throw new Error(`${name} environment variable is required`);
   }
   try {
-    deriveFapiUrl(publishableKey);
+    return deriveFapiUrl(publishableKey);
   } catch (error) {
     throw new Error(
       `Clerk error: ${name} is not a Clerk publishable key. Copy it from the API keys page of the Clerk Dashboard`,
       { cause: error },
     );
   }
-  return publishableKey;
 }
 
 /**
  * Throws a `Clerk error:` message when `authorizationServerMetadataHandler` received arguments. It takes none, so any
  * means it was passed to a route without being called, as 0.9.0's `authServerMetadataHandlerClerk` was, and the
  * framework called it with the request: that would otherwise hang the request in Express and Hono, and get a generic
- * error in Next.js.
+ * error in Next.js. The factories pass `arguments.length`, not a rest parameter, so their declared signature still
+ * takes no arguments.
  * @param argumentCount - The number of arguments the handler factory received
  */
 export function assertAuthorizationServerMetadataHandlerCalled(argumentCount: number) {
@@ -728,27 +647,25 @@ export function assertAuthorizationServerMetadataHandlerCalled(argumentCount: nu
 }
 
 /**
- * Throws a `Clerk error:` message unless `Transport` is a class. Code written before `streamableHttpHandler` took the
- * SDK transport as an argument calls it with the server factory alone, which would otherwise fail on every request
- * instead of at startup.
+ * Throws a `Clerk error:` message unless `createServer` is a function and `Transport` a class. Code written when the
+ * Express adapter also accepted a shared server object passes that object, and a shared server handles only one
+ * request at a time; code written before `streamableHttpHandler` took the SDK transport calls it with the server
+ * factory alone. Both would otherwise fail on requests instead of at startup.
  */
-export function assertTransportClass(Transport: unknown, className: string, sdkModule: string) {
+export function assertStreamableHttpArgs(
+  createServer: unknown,
+  Transport: unknown,
+  className: string,
+  sdkModule: string,
+) {
+  if (typeof createServer !== 'function') {
+    throw new Error(
+      `Clerk error: streamableHttpHandler needs a function that returns a new MCP server as its first argument, so each request gets its own server. Call streamableHttpHandler(() => new McpServer(...), ${className}) instead of passing a server object`,
+    );
+  }
   if (typeof Transport !== 'function') {
     throw new Error(
       `Clerk error: streamableHttpHandler needs the MCP SDK transport class as its second argument. Import ${className} from '@modelcontextprotocol/sdk/server/${sdkModule}' and call streamableHttpHandler(createServer, ${className})`,
-    );
-  }
-}
-
-/**
- * Throws a `Clerk error:` message unless `createServer` is a function. Code written when the Express adapter also
- * accepted a shared server object passes that object here; a shared server handles only one request at a time, so this
- * fails at startup instead of on concurrent requests.
- */
-export function assertServerFactory(createServer: unknown, transportClassName: string) {
-  if (typeof createServer !== 'function') {
-    throw new Error(
-      `Clerk error: streamableHttpHandler needs a function that returns a new MCP server as its first argument, so each request gets its own server. Call streamableHttpHandler(() => new McpServer(...), ${transportClassName}) instead of passing a server object`,
     );
   }
 }
@@ -764,27 +681,14 @@ export function serverErrorAnswer(error: McpAuthError) {
   return { status: error.status ?? 500, body: { error: 'server_error' } } as const;
 }
 
-/**
- * The headers of a metadata handler's successful response in every adapter: an hour of caching, and the CORS headers
- * that let a browser-based MCP client read the metadata from any origin. An error answer gets `metadataCorsHeaders`
- * alone, so it is readable but not cached.
- */
-export const metadataResponseHeaders = {
+// The headers of a metadata handler's successful response in every adapter: an hour of caching, and the CORS headers
+// that let a browser-based MCP client read the metadata from any origin. An error answer gets `metadataCorsHeaders`
+// alone, so it is readable but not cached.
+const metadataResponseHeaders = {
   'Cache-Control': 'max-age=3600',
   'Content-Type': 'application/json',
   ...metadataCorsHeaders,
 };
-
-/**
- * The answer `authorizationServerMetadataHandler` gives when Clerk's authorization server metadata can't be fetched.
- * It is a 502 (RFC 9110 section 15.6.3): the handler relays the metadata of an upstream server, Clerk's Frontend API,
- * which failed. The error is logged with `console.error`, since the framework's error handler never sees it.
- * @param error - What `fetchAuthorizationServerMetadata` threw
- */
-export function metadataUnavailableAnswer(error: unknown) {
-  console.error(error);
-  return { status: 502, body: { error: 'server_error' } } as const;
-}
 
 /**
  * The answer `streamableHttpHandler` gives a request that isn't a POST. It serves each POST on a new stateless
@@ -807,78 +711,103 @@ export function resourceMetadataUrlFor(resourceUrl: string): string {
   return `${origin}/.well-known/oauth-protected-resource${pathname === '/' ? '' : pathname}${search}`;
 }
 
-/**
- * The resource a protected resource metadata URL describes, the inverse of `resourceMetadataUrlFor`: the well-known
- * path is removed and the rest of the path and the query are kept as they are, so
- * `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/` and the root describes the bare origin. RFC
- * 9728 section 3.3 has clients discard metadata whose `resource` is not identical to the URL they derived it from.
- */
-export function resourceFromMetadataUrl(metadataUrl: string): string {
+// The resource a protected resource metadata URL describes, the inverse of `resourceMetadataUrlFor`: the well-known
+// path is removed and the rest of the path and the query are kept as they are, so
+// `/.well-known/oauth-protected-resource/mcp/` describes `<origin>/mcp/` and the root describes the bare origin. RFC
+// 9728 section 3.3 has clients discard metadata whose `resource` is not identical to the URL they derived it from.
+function resourceFromMetadataUrl(metadataUrl: string): string {
   const { origin, pathname, search } = new URL(metadataUrl);
   return `${origin}${pathname.replace('/.well-known/oauth-protected-resource', '')}${search}`;
 }
 
 /**
- * The answer to a request `authenticateBearer` did not let through: the challenge with `{ error }`, or for the 405
- * the answer `streamableHttpHandler` sends, so a GET gets one answer whether or not it carried a token. Its `Allow`
- * header, which RFC 9110 section 15.5.6 requires, lists only `POST` (RFC 9110 section 10.2.1): a stateless MCP server
- * has no sessions to stream on with GET or to end with DELETE, and MCP SDK 2's stateless serving answers both with the
- * same 405 and `Allow: POST`.
- * @param result - A result with `ok` false
- * @returns The status, headers, and JSON body to send
+ * The status, headers, and JSON body a metadata handler sends. A `body` of `null` is the CORS preflight answer,
+ * sent without a body.
  */
-export function failureAnswer(result: Extract<BearerResult, { ok: false }>): {
-  status: 401 | 403 | 405 | 421;
+export type MetadataAnswer = {
+  status: 200 | 400 | 421 | 502;
   headers: Record<string, string>;
-  body: typeof methodNotAllowed.body | { error: string };
-} {
-  if (result.status === 405) return methodNotAllowed;
-  return {
-    status: result.status,
-    headers: result.challenge ? { 'WWW-Authenticate': result.challenge } : {},
-    body: { error: result.error },
-  };
-}
+  body: unknown;
+};
+
+/**
+ * A metadata request, as the adapter reads it: its method, which only an adapter that answers the CORS preflight
+ * itself passes, and the publishable key from the app's environment, with the variable's name for the error when it
+ * is missing or invalid, which is thrown to the framework.
+ */
+type MetadataRequest = {
+  method: string | undefined;
+  publishableKey: string | undefined;
+  keyName?: string | undefined;
+};
+
+const preflightAnswer: MetadataAnswer = { status: 200, headers: metadataCorsHeaders, body: null };
 
 /**
  * The answer every `protectedResourceMetadataHandler` gives a request: the metadata with `metadataResponseHeaders`,
- * or a 421 with `metadataCorsHeaders` alone for an origin no listed `resourceUrl` has.
- * @param options - The handler's options
- * @param metadataUrl - The URL the metadata was requested at
- * @param publishableKey - The publishable key `requirePublishableKey` returned
+ * or with `metadataCorsHeaders` alone a 400 for a request without a URL, or a 421 for an origin no listed
+ * `resourceUrl` has (RFC 9110 section 15.5.20), as `mcpAuth` answers it. The `resource` is the `resourceUrl` for the
+ * request, the URL `mcpAuth` checks, or without `resourceUrl` the resource the requested metadata URL describes, so it
+ * is identical to the URL the client derived the metadata URL from (RFC 9728 section 3.3). `scopes_supported` (RFC
+ * 9728 section 2) lists `requiredScopes` then `challengeScopes`, each once, unless `properties` sets it, and is left
+ * out without scopes.
+ * @param options - The handler's options, already checked
+ * @param request - The request, with `url`, the URL the metadata was requested at, `undefined` when it has none
  */
 export function protectedResourceMetadataAnswer(
-  options: ProtectedResourceMetadataOptions,
-  metadataUrl: string,
-  publishableKey: string,
-): {
-  status: 200 | 421;
-  headers: Record<string, string>;
-  body: Record<string, unknown>;
-} {
-  const metadata = clerkProtectedResourceMetadata(options, metadataUrl, publishableKey);
-  if (!metadata) {
+  { resourceUrl, requiredScopes, challengeScopes, properties }: ProtectedResourceMetadataOptions,
+  {
+    method,
+    publishableKey,
+    keyName = 'CLERK_PUBLISHABLE_KEY',
+    url,
+  }: MetadataRequest & {
+    url: string | undefined;
+  },
+): MetadataAnswer {
+  if (method === 'OPTIONS') return preflightAnswer;
+  const authServerUrl = requirePublishableKey(publishableKey, keyName);
+  if (url === undefined) {
+    return { status: 400, headers: metadataCorsHeaders, body: { error: 'invalid_request' } };
+  }
+  const resource =
+    resourceUrl === undefined ? resourceFromMetadataUrl(url) : matchResourceUrl(resourceUrl, url);
+  if (resource === undefined) {
     return { status: 421, headers: metadataCorsHeaders, body: { error: 'misdirected_request' } };
   }
+  // A `scopes_supported` key set to `undefined` is treated as left out, so it does not erase the derived list
+  const derived = requestedScopes({ requiredScopes, challengeScopes });
+  const scopes = properties?.scopes_supported ?? (derived.length > 0 ? derived : undefined);
+  const metadata = generateProtectedResourceMetadata({
+    authServerUrl,
+    resourceUrl: resource,
+    properties: scopes === undefined ? properties : { ...properties, scopes_supported: scopes },
+  });
   return { status: 200, headers: metadataResponseHeaders, body: metadata };
 }
 
 /**
  * The answer every `authorizationServerMetadataHandler` gives a request: Clerk's metadata with
- * `metadataResponseHeaders`, or `metadataUnavailableAnswer` with the CORS headers, so a browser client can read the
- * error, but not the caching ones metadata gets.
- * @param publishableKey - The publishable key `requirePublishableKey` returned
+ * `metadataResponseHeaders`, or a 502 with `metadataCorsHeaders` alone when it can't be fetched (RFC 9110 section
+ * 15.6.3): the handler relays the metadata of an upstream server, Clerk's Frontend API, which failed. That error is
+ * logged with `console.error`, since the framework's error handler never sees it.
+ * @param request - The request
  */
-export async function authorizationServerMetadataAnswer(publishableKey: string): Promise<{
-  status: 200 | 502;
-  headers: Record<string, string>;
-  body: unknown;
-}> {
+export async function authorizationServerMetadataAnswer({
+  method,
+  publishableKey,
+  keyName = 'CLERK_PUBLISHABLE_KEY',
+}: MetadataRequest): Promise<MetadataAnswer> {
+  if (method === 'OPTIONS') return preflightAnswer;
+  requirePublishableKey(publishableKey, keyName);
   try {
-    const metadata = await fetchAuthorizationServerMetadata({ publishableKey });
+    const metadata = await fetchAuthorizationServerMetadata({
+      publishableKey: publishableKey as string,
+    });
     return { status: 200, headers: metadataResponseHeaders, body: metadata };
   } catch (error) {
-    return { ...metadataUnavailableAnswer(error), headers: metadataCorsHeaders };
+    console.error(error);
+    return { status: 502, headers: metadataCorsHeaders, body: { error: 'server_error' } };
   }
 }
 
@@ -927,50 +856,9 @@ function requestResourceMetadataUrl(requestUrl: string): string {
 }
 
 /**
- * Applies the response rule the adapters share. With a list of `resourceUrl`s, a request to an origin none of them has
- * gets a 421 without a challenge, before the token is read: no metadata URL there describes this server, and RFC 8707
- * section 3 audience-restricts a token so it cannot be presented to another resource. Otherwise the request uses the
- * listed URL with its origin, and a verified token whose auth info reports a `resource` other than that URL gets
- * `invalid_token`, as in MCP SDK 2's `verifyBearerToken`. A missing or malformed header gets a challenge without an
- * error code, a rejected token adds `error="invalid_token"` (RFC 6750 section 3), and both 401 challenges list
- * `requiredScopes` then `challengeScopes` in `scope` (RFC 6750 section 3). A token without `requiredScopes` gets a 403
- * with `error="insufficient_scope"` (RFC 6750 section 3.1). When a token lacks a `requiredScopes` entry, the 403 lists the
- * granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry, each once, as in
- * `requireAdditionalScopes`, so the new grant keeps the old access and covers the tools that step up to
- * `challengeScopes` too. A token that lacks only `challengeScopes` entries is let through. A verified token's auth info gets `resourceMetadataUrl`, which MCP SDK 2 puts in the
- * `resource_metadata` of its own scope challenges. A verifier that
- * throws an `McpTokenVerificationError` rejects the token, with that error as the failure's `cause`. Any other error
- * it throws gets wrapped in an `McpAuthError`.
- *
- * With `publicAccess`, a request without an `Authorization` header is not always challenged. A POST whose body
- * `isPublicRequest` accepts passes with `authInfo` `undefined`. A GET gets a 405 when the handshake is public: an MCP
- * client opens a GET stream once it has connected and starts authorization on a 401 there, which would make it sign in
- * before it reached anything protected, and the transport specification lets a server answer that GET with a 405 for
- * "no stream". From protocol revision 2026-07-28 the client opens a `subscriptions/listen` POST instead, which the
- * same handshake condition opens when every resource it subscribes to is open. Every other request without a token,
- * and every request with a header, is handled as above.
+ * One request to `bearerAuthenticator`'s check.
  */
-export async function authenticateBearer({
-  options: {
-    resourceUrl,
-    requiredScopes = [],
-    challengeScopes: extraChallengeScopes = [],
-    publicAccess,
-  },
-  authorization,
-  requestUrl,
-  method,
-  body,
-  verifyToken,
-}: {
-  /**
-   * The entry point's options. Each adapter passes its whole options object, so an option every adapter shares
-   * reaches this rule without each one forwarding it.
-   */
-  options: Pick<
-    BaseAuthOptions,
-    'resourceUrl' | 'requiredScopes' | 'challengeScopes' | 'publicAccess'
-  >;
+type BearerRequest = {
   authorization: string | undefined;
   /**
    * The URL the request was made to, used to pick a listed `resourceUrl`, or to derive one when it is not set.
@@ -986,133 +874,172 @@ export async function authenticateBearer({
    */
   body?: (() => unknown) | undefined;
   verifyToken: TokenVerifier;
-}): Promise<BearerResult> {
-  let resourceMetadataUrl: string;
-  // The resource a token must be for, when `resourceUrl` names it. A URL derived from the request is not checked: it
-  // can be an internal URL that no token names.
-  let expectedResource: string | undefined;
-  if (resourceUrl === undefined) {
-    resourceMetadataUrl = requestResourceMetadataUrl(requestUrl);
-  } else {
-    const matched = matchResourceUrl(resourceUrl, requestUrl);
-    if (!matched) {
-      return {
-        ok: false,
-        failure: { reason: 'misdirected_request' },
-        status: 421,
-        challenge: undefined,
-        error: 'misdirected_request',
-      };
-    }
-    resourceMetadataUrl = resourceMetadataUrlFor(matched);
-    expectedResource = matched;
-  }
+};
 
+/**
+ * The response rule the adapters share, for one set of options:
+ *
+ * 1. With a list of `resourceUrl`s, a request to an origin none of them has gets a 421 without a challenge, before the
+ *    token is read (RFC 8707 section 3 audience-restricts a token). Otherwise it uses the listed URL with its origin.
+ * 2. With `publicAccess`, a request without an `Authorization` header can pass with `authInfo` `undefined`: a POST
+ *    whose every JSON-RPC message is open. A GET gets a 405 when the handshake is public, the transport
+ *    specification's answer for "no stream", since a 401 there would make the client sign in before it reached
+ *    anything protected.
+ * 3. A missing or malformed header gets a 401 challenge without an error code, and a rejected token adds
+ *    `error="invalid_token"` (RFC 6750 section 3). Both list `requiredScopes` then `challengeScopes` in `scope`. A
+ *    verifier that throws an `McpTokenVerificationError` rejects the token, with it as the failure's `cause`; any
+ *    other error it throws is wrapped in an `McpAuthError`. As in MCP SDK 2's `verifyBearerToken`, a token whose
+ *    auth info reports another `resource` than the listed URL is rejected.
+ * 4. A token without `requiredScopes` gets a 403 `insufficient_scope` (RFC 6750 section 3.1) that lists the granted
+ *    scopes then every missing `requiredScopes` and `challengeScopes` entry, as `requireAdditionalScopes` does. A
+ *    token that lacks only `challengeScopes` entries passes, and its auth info gets `resourceMetadataUrl`, which MCP
+ *    SDK 2 puts in its own scope challenges.
+ * @param options - The entry point's options, already checked
+ * @returns The check for one request
+ */
+export function bearerAuthenticator({
+  resourceUrl,
+  requiredScopes = [],
+  challengeScopes: extraChallengeScopes = [],
+  publicAccess,
+}: Pick<BaseAuthOptions, 'resourceUrl' | 'requiredScopes' | 'challengeScopes' | 'publicAccess'>) {
   const unauthorizedScopes = requestedScopes({
     requiredScopes,
     challengeScopes: extraChallengeScopes,
   });
+  // The listed URL for each origin, parsed once here rather than on each request
+  const listed =
+    typeof resourceUrl === 'object'
+      ? new Map(resourceUrl.map((url) => [new URL(url).origin, url]))
+      : undefined;
 
-  const parsed = parseAuthorization(authorization);
-  // Only a request without an `Authorization` header, or with an empty one, can be public. A malformed header is a
-  // failed attempt to authenticate.
-  if ('reason' in parsed && parsed.reason === 'missing_token' && publicAccess) {
-    const httpMethod = method?.toUpperCase();
-    if (httpMethod === 'POST' && isPublicRequest(publicAccess, await body?.())) {
-      return { ok: true, authInfo: undefined };
+  return async ({
+    authorization,
+    requestUrl,
+    method,
+    body,
+    verifyToken,
+  }: BearerRequest): Promise<BearerResult> => {
+    let resourceMetadataUrl: string;
+    // The resource a token must be for, when `resourceUrl` names it. A URL derived from the request is not checked:
+    // it can be an internal URL that no token names.
+    let expectedResource: string | undefined;
+    if (resourceUrl === undefined) {
+      resourceMetadataUrl = requestResourceMetadataUrl(requestUrl);
+    } else {
+      const matched = listed ? listed.get(new URL(requestUrl).origin) : (resourceUrl as string);
+      if (!matched) return fail({ reason: 'misdirected_request' }, 421, 'misdirected_request');
+      resourceMetadataUrl = resourceMetadataUrlFor(matched);
+      expectedResource = matched;
     }
-    if (httpMethod === 'GET' && opensHandshake(publicAccess)) {
-      return {
-        ok: false,
-        failure: undefined,
-        status: 405,
-        challenge: undefined,
-      };
+
+    const parsed = parseAuthorization(authorization);
+    // Only a request without an `Authorization` header, or with an empty one, can be public. A malformed header is a
+    // failed attempt to authenticate.
+    if ('reason' in parsed && parsed.reason === 'missing_token' && publicAccess) {
+      const httpMethod = method?.toUpperCase();
+      if (httpMethod === 'POST' && isPublicRequest(publicAccess, await body?.())) {
+        return { ok: true, authInfo: undefined };
+      }
+      if (httpMethod === 'GET' && opensHandshake(publicAccess)) {
+        return { ok: false, failure: undefined, ...methodNotAllowed };
+      }
     }
-  }
-  if ('reason' in parsed) {
-    return {
-      ok: false,
-      failure: { reason: parsed.reason },
-      status: 401,
-      challenge: bearerChallenge({ resourceMetadataUrl, scopes: unauthorizedScopes }),
-      error: 'Unauthorized',
-    };
-  }
-
-  let authInfo: AuthInfo | undefined;
-  let rejection: McpTokenVerificationError | undefined;
-  try {
-    authInfo = await verifyToken(parsed.token, expectedResource);
-  } catch (error) {
-    if (!(error instanceof McpTokenVerificationError)) {
-      throw error instanceof McpAuthError ? error : new McpAuthError(error);
+    if ('reason' in parsed) {
+      return fail(
+        { reason: parsed.reason },
+        401,
+        'Unauthorized',
+        bearerChallenge({ resourceMetadataUrl, scopes: unauthorizedScopes }),
+      );
     }
-    rejection = error;
-  }
 
-  // An expired token gets `invalid_token` (RFC 6750 section 3.1). Clerk rejects an expired token itself, but a
-  // `verifyToken` passed to `mcpAuth` can return the auth info of a token it decoded or cached. An `expiresAt` that is
-  // not a finite number, such as `NaN`, is not a time the token is valid until, so it is rejected too.
-  if (
-    authInfo?.expiresAt !== undefined &&
-    !(Number.isFinite(authInfo.expiresAt) && authInfo.expiresAt > Date.now() / 1000)
-  ) {
-    const expiry = new Date(authInfo.expiresAt * 1000);
-    rejection = new McpTokenVerificationError(
-      'token-expired',
-      Number.isFinite(expiry.getTime())
-        ? `The token expired at ${expiry.toISOString()}`
-        : `The token has no valid expiry time (${authInfo.expiresAt})`,
-    );
-    authInfo = undefined;
-  }
+    let authInfo: AuthInfo | undefined;
+    let rejection: McpTokenVerificationError | undefined;
+    try {
+      authInfo = await verifyToken(parsed.token, expectedResource);
+    } catch (error) {
+      if (!(error instanceof McpTokenVerificationError)) {
+        throw error instanceof McpAuthError ? error : new McpAuthError(error);
+      }
+      rejection = error;
+    }
 
-  // RFC 8707 section 3: "An audience-restricted access token that is legitimately presented to a resource cannot then
-  // be taken by that resource and presented elsewhere". A verifier that reports the token's resource has done the
-  // audience lookup, so a token it reports for another resource is `invalid_token` (RFC 6750 section 3.1, "invalid
-  // for other reasons"). Clerk verification checks `aud` itself and leaves `resource` unset.
-  if (
-    authInfo?.resource !== undefined &&
-    expectedResource !== undefined &&
-    !isSameResource(authInfo.resource, expectedResource)
-  ) {
-    rejection = new McpTokenVerificationError(
-      'resource-mismatch',
-      `The token was issued for ${String(authInfo.resource)}, not ${expectedResource}`,
-    );
-    authInfo = undefined;
-  }
+    // An expired token gets `invalid_token` (RFC 6750 section 3.1): a `verifyToken` can return the auth info of a
+    // token it decoded or cached. An `expiresAt` that is not a finite number, such as `NaN`, is rejected too.
+    if (
+      authInfo?.expiresAt !== undefined &&
+      !(Number.isFinite(authInfo.expiresAt) && authInfo.expiresAt > Date.now() / 1000)
+    ) {
+      const expiry = new Date(authInfo.expiresAt * 1000);
+      rejection = new McpTokenVerificationError(
+        'token-expired',
+        Number.isFinite(expiry.getTime())
+          ? `The token expired at ${expiry.toISOString()}`
+          : `The token has no valid expiry time (${authInfo.expiresAt})`,
+      );
+      authInfo = undefined;
+    }
 
-  if (!authInfo) {
-    return {
-      ok: false,
-      failure: { reason: 'invalid_token', ...(rejection && { cause: rejection }) },
-      status: 401,
-      challenge: bearerChallenge({
-        resourceMetadataUrl,
-        error: 'invalid_token',
-        scopes: unauthorizedScopes,
-      }),
-      error: 'Unauthorized',
-    };
-  }
+    // RFC 8707 section 3: "An audience-restricted access token that is legitimately presented to a resource cannot
+    // then be taken by that resource and presented elsewhere". A verifier that reports the token's resource has done
+    // the audience lookup, so a token it reports for another resource is `invalid_token` (RFC 6750 section 3.1).
+    // Clerk verification checks `aud` itself and leaves `resource` unset.
+    if (
+      authInfo?.resource !== undefined &&
+      expectedResource !== undefined &&
+      !isSameResource(authInfo.resource, expectedResource)
+    ) {
+      rejection = new McpTokenVerificationError(
+        'resource-mismatch',
+        `The token was issued for ${String(authInfo.resource)}, not ${expectedResource}`,
+      );
+      authInfo = undefined;
+    }
 
-  // Only a missing `requiredScopes` entry gets the 403, and it also asks for the missing `challengeScopes`, so a
-  // client that reauthorizes with its `scope` gets every tool's scopes at once
-  const scopes = challengeScopes(requiredScopes, authInfo, unauthorizedScopes);
-  if (scopes) {
-    return {
-      ok: false,
-      failure: { reason: 'insufficient_scope' },
-      status: 403,
-      challenge: bearerChallenge({ resourceMetadataUrl, error: 'insufficient_scope', scopes }),
-      error: 'insufficient_scope',
-    };
-  }
+    if (!authInfo) {
+      return fail(
+        { reason: 'invalid_token', ...(rejection && { cause: rejection }) },
+        401,
+        'Unauthorized',
+        bearerChallenge({
+          resourceMetadataUrl,
+          error: 'invalid_token',
+          scopes: unauthorizedScopes,
+        }),
+      );
+    }
 
-  // MCP SDK 2 reads `resourceMetadataUrl` from the auth info for the challenges its `scopeChallenge` tools send
-  return { ok: true, authInfo: { ...authInfo, resourceMetadataUrl } };
+    // Only a missing `requiredScopes` entry gets the 403, and it also asks for the missing `challengeScopes`, so a
+    // client that reauthorizes with its `scope` gets every tool's scopes at once
+    const scopes = challengeScopes(requiredScopes, authInfo, unauthorizedScopes);
+    if (scopes) {
+      return fail(
+        { reason: 'insufficient_scope' },
+        403,
+        'insufficient_scope',
+        bearerChallenge({ resourceMetadataUrl, error: 'insufficient_scope', scopes }),
+      );
+    }
+
+    // MCP SDK 2 reads `resourceMetadataUrl` from the auth info for the challenges its `scopeChallenge` tools send
+    return { ok: true, authInfo: { ...authInfo, resourceMetadataUrl } };
+  };
+}
+
+function fail(
+  failure: McpAuthFailure,
+  status: 401 | 403 | 421,
+  error: string,
+  challenge?: string,
+): BearerResult {
+  return {
+    ok: false,
+    failure,
+    status,
+    headers: challenge ? { 'WWW-Authenticate': challenge } : {},
+    body: { error },
+  };
 }
 
 // Whether a verifier's reported `resource` is the expected resource URL. It mirrors `sameResource` in MCP SDK 2's
@@ -1136,24 +1063,18 @@ const verificationUnavailable: ReadonlySet<string> = new Set<
   MachineTokenVerificationErrorCode | 'jwk-remote-failed-to-load'
 >(['unexpected-error', 'secret-key-invalid', 'jwk-remote-failed-to-load']);
 
-// Clerk keeps the Backend API's status only in the message, as `Unexpected error (code=unexpected-error, status=503)`.
-// The pattern mirrors `MachineTokenVerificationError.getFullMessage()` in `@clerk/backend` 3.27.0,
-// `dist/chunk-U3UVQERL.mjs:73`: `${this.message} (code=${this.code}, status=${this.status || "n/a"})`, which
-// `handleMachineError` (`dist/chunk-CSXNUYCW.mjs:7801`) makes the request state's `message`.
+// Clerk keeps the Backend API's status only in the message, as `Unexpected error (code=unexpected-error, status=503)`,
+// the form of `MachineTokenVerificationError.getFullMessage()` in `@clerk/backend`.
 function clerkStatus(message: string | undefined): number | undefined {
   const status = /\(code=[^,()]*, status=(\d{3})\)$/.exec(message ?? '')?.[1];
   return status === undefined ? undefined : Number(status);
 }
 
-// Whether Clerk could not verify the token at all, so the client must keep it. A Backend API 4xx other than 401
-// (an invalid secret key) and 429 (rate limiting) is Clerk refusing the token. With clerk/javascript#10826,
-// `@clerk/backend` reports a JWKS that can't be loaded as `jwk-remote-failed-to-load`, which carries no Backend API
-// status and is always unavailable. Until then, as in 3.27.0, a JWT access token whose JWKS can't be fetched gets the
-// reason an invalid signature gets, so only the message tells the two apart. The prefix mirrors `fetchJWKSFromBAPI` in
-// `@clerk/backend` 3.27.0, `dist/chunk-CSXNUYCW.mjs:1979`: `Error loading Clerk JWKS from ${url.href} with
-// code=${response.status}`, whose `jwk-remote-failed-to-load` reason `resolveKeyAndVerifyJwt` (`:2111-2117`) replaces
-// with `token-verification-failed`, keeping the message. Drop the prefix rule once the supported backend floor reports
-// the reason.
+// Whether Clerk could not verify the token at all, so the client must keep it. A Backend API 4xx other than 401 (an
+// invalid secret key) and 429 (rate limiting) is Clerk refusing the token. Until clerk/javascript#10826 reports a JWKS
+// that can't be loaded as `jwk-remote-failed-to-load`, `@clerk/backend` gives it the reason an invalid signature
+// gets, keeping the message `fetchJWKSFromBAPI` throws, so only that message's prefix tells the two apart. Drop the
+// prefix rule once the supported backend floor reports the reason.
 function isVerificationUnavailable(reason: string, message: string, status: number | undefined) {
   if (reason === 'token-verification-failed') return message.startsWith('Error loading Clerk JWKS');
   if (!verificationUnavailable.has(reason)) return false;
@@ -1161,19 +1082,12 @@ function isVerificationUnavailable(reason: string, message: string, status: numb
 }
 
 /**
- * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. For a token Clerk rejects, this
- * throws an `McpTokenVerificationError` with the reason and message Clerk gave, so that the token reaches the client
- * as an `invalid_token` challenge. When Clerk could not verify the token at all, this throws an `McpAuthError` around
- * that error instead and the framework answers with a server error: an `invalid_token` challenge would make the
- * client discard a valid token and restart authorization. For an opaque token that covers a Backend API check that
- * failed with a 429, a 5xx, or no response, which the answer keeps as its status (500 without one), and an invalid
- * secret key. A Backend API 4xx other than 401 and 429 is a rejection. For a JWT access token it covers a JWKS that
- * can't be loaded. Once `@clerk/backend` reports it as `jwk-remote-failed-to-load` (clerk/javascript#10826), that is
- * every such failure: an error status, a fetch that throws, an error body that is not JSON, a missing secret key, or a
- * JWKS without keys; an invalid secret key is `secret-key-invalid`, also covered. Until then, as in 3.27.0, it covers
- * only a JWKS request that Clerk answered with an error status and a JSON body, other than an invalid secret key: that
- * release reports every other failure to load the JWKS with the reason an invalid signature gets, so those still reach
- * the client as an `invalid_token` challenge.
+ * Verifies an OAuth access token with Clerk, requiring `audience` in its `aud` claim. A token Clerk rejects throws an
+ * `McpTokenVerificationError` with Clerk's reason and message, which reaches the client as an `invalid_token`
+ * challenge. When Clerk could not verify the token at all, it throws an `McpAuthError` around that error instead, and
+ * the framework answers with a server error, since a challenge would make the client discard a valid token. That covers
+ * a Backend API check that failed with a 429, a 5xx, or no response, which the answer keeps as its status (500
+ * without one), an invalid secret key, and a JWKS that can't be loaded (see `isVerificationUnavailable`).
  */
 export async function verifyClerkOAuthToken(
   client: ClerkOAuthClient,

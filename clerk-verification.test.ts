@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { createClerkClient } from '@clerk/backend';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
-import { authenticateBearer, serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
+import { bearerAuthenticator, serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
 import { McpAuthError, McpTokenVerificationError } from './server';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
@@ -186,15 +186,16 @@ describe('verifyClerkOAuthToken when the Backend API fails', () => {
   test('answers a rejected opaque token with the invalid_token challenge', async () => {
     status = 400;
 
-    const result = await authenticateBearer({
+    const result = await bearerAuthenticator({ resourceUrl })({
       authorization: 'Bearer oat_abc',
       requestUrl: resourceUrl,
-      options: { resourceUrl },
       verifyToken: (token) => verifyClerkOAuthToken(remoteClient(), token, resourceUrl),
     });
 
     expect(result).toMatchObject({ ok: false, status: 401, failure: { reason: 'invalid_token' } });
-    expect(result.ok === false && result.challenge).toContain('error="invalid_token"');
+    expect(result.ok === false && result.headers['WWW-Authenticate']).toContain(
+      'error="invalid_token"',
+    );
   });
 
   test('throws an McpAuthError answered with a 500 when the JWKS for a JWT access token cannot be loaded', async () => {

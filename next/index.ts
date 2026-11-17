@@ -1,31 +1,19 @@
 import type { AuthInfo } from '../mcp-types';
 import {
-  type ClerkAuthOptions,
-  type ClerkClientOption,
-  type CustomVerifierAuthOptions,
+  type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertAuthorizationServerMetadataHandlerCalled,
   assertMcpAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertVerifierOrResourceUrl,
-  authenticateBearer,
-  clerkClientResolver,
   authorizationServerMetadataAnswer,
-  failureAnswer,
+  createBearerAuth,
   protectedResourceMetadataAnswer,
   readJsonBody,
-  requestTokenVerifier,
   requireClerkEnvKeys,
-  requirePublishableKey,
   serverErrorAnswer,
-  type BearerResult,
 } from '../bearer-auth';
-import {
-  type ClerkOAuthClient,
-  type McpAuthFailure,
-  McpAuthError,
-  metadataCorsHeaders,
-} from '../server';
+import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withMcpAuth`, all optional, plus
@@ -35,11 +23,6 @@ import {
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
-
-// The keys of `withMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
-const withMcpAuthOnlyOptionKeys: ReadonlySet<string> = new Set<keyof McpAuthFailureOption>([
-  'onAuthFailure',
-]);
 
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
@@ -72,15 +55,17 @@ export function protectedResourceMetadataHandler(
       'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route, instead of passing protectedResourceMetadataHandler itself',
     );
   }
-  assertProtectedResourceMetadataOptions(options, withMcpAuthOnlyOptionKeys);
+  // `onAuthFailure` is the one key of `withMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
+  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure']));
 
   return (req: Request): Response => {
-    const publishableKey = requirePublishableKey(
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-      'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
-    );
-
-    const answer = protectedResourceMetadataAnswer(options, req.url, publishableKey);
+    const answer = protectedResourceMetadataAnswer(options, {
+      // `metadataCorsHandler` answers the preflight
+      method: undefined,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+      keyName: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+      url: req.url,
+    });
     return Response.json(answer.body, answer);
   };
 }
@@ -92,14 +77,13 @@ export function protectedResourceMetadataHandler(
  * throws a `Clerk error:` on the first request.
  */
 export function authorizationServerMetadataHandler(): () => Promise<Response> {
-  // `arguments`, not a rest parameter, so the declared signature still takes no arguments
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (): Promise<Response> => {
-    const publishableKey = requirePublishableKey(
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-      'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
-    );
-    const answer = await authorizationServerMetadataAnswer(publishableKey);
+    const answer = await authorizationServerMetadataAnswer({
+      method: undefined,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+      keyName: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+    });
     return Response.json(answer.body, answer);
   };
 }
@@ -134,27 +118,14 @@ type McpAuthFailureOption = {
 
 /**
  * Options for `withMcpAuth`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as its
- * audience, and `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`. With `verifyToken`, that function
- * verifies each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure`
- * is available either way.
+ * audience, and `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first request,
+ * which needs `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` set. An app that passes its keys to
+ * `clerkMiddleware()` instead, or runs in keyless mode, passes `clerkClient: () => clerkClient()` from
+ * `@clerk/nextjs/server`, with the MCP route in the middleware's matcher. With `verifyToken`, that function verifies
+ * each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure` is
+ * available either way.
  */
-export type McpAuthOptions = McpAuthFailureOption &
-  (
-    | (ClerkAuthOptions & {
-        /**
-         * The client that verifies tokens, or a function that returns one, called once for each request. Defaults to
-         * `clerkClient` from `@clerk/nextjs/server`, loaded on the first request, which needs `CLERK_SECRET_KEY` and
-         * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` set. An app that passes its keys to `clerkMiddleware()` instead, or runs
-         * in keyless mode, passes `() => clerkClient()` from `@clerk/nextjs/server`, with the MCP route in the
-         * middleware's matcher. Pass a client created with both `secretKey` and `publishableKey`, from
-         * `@clerk/backend` 3.19.0 or later, the first with a reliable audience check, to verify with another Clerk
-         * instance.
-         */
-        clerkClient?: ClerkClientOption | undefined;
-        verifyToken?: never;
-      })
-    | CustomVerifierAuthOptions<Request>
-  );
+export type McpAuthOptions = McpAuthFailureOption & MiddlewareAuthOptions<Request>;
 
 const withMcpAuthCallForm =
   'withMcpAuth(handler, { resourceUrl }), or as withMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
@@ -164,23 +135,15 @@ const withMcpAuthCallForm =
  * OAuth access token, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own
  * function. Use it in place of `withMcpAuth` from `mcp-handler`.
  * @param handler - The route handler, such as the one `createMcpHandler` from `mcp-handler` returns
- * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 challenge also asks for, either the `clerkClient` that verifies tokens or a
- * `verifyToken` function, and `onAuthFailure`, a synchronous notification with the reason for each request answered
- * with a challenge or a 421. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
- * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
- * through. `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first
- * request. `verifyToken` is called with the token and the request, and `resourceUrl` is optional with it.
+ * @param options - See `McpAuthOptions`
  * @returns The wrapped route handler. A missing or rejected token gets a 401 challenge, and a token without
- * `requiredScopes` gets a 403 challenge. Otherwise the auth data is set on `req.auth`, where `mcp-handler` reads it,
- * with `resourceMetadataUrl` added for the SDK's scope challenges. Tools read it as `ctx.http?.authInfo`, narrowed with
- * `isClerkAuthInfo` before they read Clerk fields such as `extra.userId`. A token that could not be verified at all,
- * such as during a Clerk outage, gets a JSON server error, `{ "error": "server_error" }`, with Clerk's 429 or 5xx status
- * or a 500, instead of a challenge that would make the client discard a valid token, and the `McpAuthError` is logged
- * with `console.error`. Without a `clerkClient` option, every request throws a `Clerk error:` naming `CLERK_SECRET_KEY` or
- * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` when it is not set, or asking to install `@clerk/nextjs` when it can't be loaded.
- * An app that passes its keys to `clerkMiddleware()`, or runs in keyless mode, passes
- * `clerkClient: () => clerkClient()`.
+ * `requiredScopes` gets a 403 challenge, and `onAuthFailure` is told why. Otherwise the auth data is set on
+ * `req.auth`, where `mcp-handler` reads it, with `resourceMetadataUrl` added for the SDK's scope challenges. Tools
+ * read it as `ctx.http?.authInfo`, narrowed with `isClerkAuthInfo` before they read Clerk fields such as
+ * `extra.userId`. A token that could not be verified at all, such as during a Clerk outage, gets a JSON server error,
+ * `{ "error": "server_error" }`, with Clerk's 429 or 5xx status or a 500, and the `McpAuthError` is logged with
+ * `console.error`. Without a `clerkClient` option, every request throws a `Clerk error:` naming a missing key, or
+ * asking to install `@clerk/nextjs` when it can't be loaded.
  * @example
  * ```ts
  * import { withMcpAuth } from "@clerk/mcp-tools/next";
@@ -217,46 +180,37 @@ export function withMcpAuth(
   );
   assertMcpAuthOptions('withMcpAuth', options);
 
-  const clerkClientFor = clerkClientResolver(
+  const authFor = createBearerAuth(
     'withMcpAuth from @clerk/mcp-tools/next',
-    options.clerkClient,
+    options,
     nextClerkClient,
     "clerkClient from '@clerk/nextjs/server'",
   );
 
   return async (req) => {
-    const verifyToken = await requestTokenVerifier(options, clerkClientFor, req);
-
-    let result: BearerResult;
-    try {
-      result = await authenticateBearer({
-        options,
-        authorization: req.headers.get('authorization') ?? undefined,
-        requestUrl: req.url,
-        method: req.method,
-        // A clone, so the route handler can still read the request
-        body: () => readJsonBody(req),
-        verifyToken,
-      });
-    } catch (error) {
-      if (!(error instanceof McpAuthError)) throw error;
+    const authenticate = await authFor(req);
+    const result = await authenticate({
+      authorization: req.headers.get('authorization') ?? undefined,
+      requestUrl: req.url,
+      method: req.method,
+      // A clone, so the route handler can still read the request
+      body: () => readJsonBody(req),
+    });
+    if ('serverError' in result) {
       // Answered here with the status and body the Express and Hono adapters send. Next.js's `onRequestError` no
       // longer sees it, so `serverErrorAnswer` logs it with `console.error`, as it does for those adapters.
-      const answer = serverErrorAnswer(error);
+      const answer = serverErrorAnswer(result.serverError);
       return Response.json(answer.body, { status: answer.status });
     }
-
     if (!result.ok) {
-      const { failure } = result;
       // The notification must not delay the challenge or turn it into a server error
-      if (failure) {
+      if (result.failure) {
         try {
           // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
-          void Promise.resolve(options.onAuthFailure?.(failure, req)).catch(() => {});
+          void Promise.resolve(options.onAuthFailure?.(result.failure, req)).catch(() => {});
         } catch {}
       }
-      const answer = failureAnswer(result);
-      return Response.json(answer.body, answer);
+      return Response.json(result.body, result);
     }
 
     // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does. It is `undefined` for a

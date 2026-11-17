@@ -2,32 +2,22 @@ import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../m
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
+  type MetadataAnswer,
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertAuthorizationServerMetadataHandlerCalled,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
-  assertServerFactory,
-  assertTransportClass,
-  authenticateBearer,
-  clerkClientResolver,
+  assertStreamableHttpArgs,
   authorizationServerMetadataAnswer,
-  failureAnswer,
+  createBearerAuth,
   methodNotAllowed,
   protectedResourceMetadataAnswer,
   readJsonBody,
-  requestTokenVerifier,
   requireClerkEnvKeys,
-  requirePublishableKey,
   serverErrorAnswer,
-  type BearerResult,
 } from '../bearer-auth';
-import {
-  type ClerkOAuthClient,
-  type McpAuthFailure,
-  McpAuthError,
-  metadataCorsHeaders,
-} from '../server';
+import type { ClerkOAuthClient, McpAuthError, McpAuthFailure } from '../server';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -89,11 +79,8 @@ type ClerkEnv = {
   CLERK_JWT_KEY?: string;
 };
 
-// The clients `mcpAuth` built from the environment, by settings. On Cloudflare Workers the settings are only known
-// per request, on `c.env`, so the client can't be built at setup. The cache key is every setting the client is built
-// from, so the secret is part of it; the map lives in memory only and is never logged or persisted. Two concurrent
-// first requests for one set of settings can each build a client, and the later one replaces the earlier in the map;
-// both work, so the duplicate is harmless.
+// The clients `mcpAuth` built from the environment, keyed by every setting, the secret included (in memory only). On
+// Cloudflare Workers the settings are only known per request, on `c.env`, so the client can't be built at setup.
 const envClerkClients = new Map<string, ClerkOAuthClient>();
 
 /**
@@ -108,19 +95,18 @@ function requireClerkKeys(c: Context) {
   const {
     CLERK_SECRET_KEY,
     CLERK_PUBLISHABLE_KEY,
-    CLERK_API_URL: apiUrl,
-    CLERK_API_VERSION: apiVersion,
-    CLERK_JWT_KEY: jwtKey,
+    CLERK_API_URL,
+    CLERK_API_VERSION,
+    CLERK_JWT_KEY,
   } = env<ClerkEnv>(c);
-  const { CLERK_SECRET_KEY: secretKey, CLERK_PUBLISHABLE_KEY: publishableKey } =
-    requireClerkEnvKeys('mcpAuth', { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
+  const keys = requireClerkEnvKeys('mcpAuth', { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
   // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
   return {
-    secretKey,
-    publishableKey,
-    ...(apiUrl && { apiUrl }),
-    ...(apiVersion && { apiVersion }),
-    ...(jwtKey && { jwtKey }),
+    secretKey: keys.CLERK_SECRET_KEY,
+    publishableKey: keys.CLERK_PUBLISHABLE_KEY,
+    ...(CLERK_API_URL && { apiUrl: CLERK_API_URL }),
+    ...(CLERK_API_VERSION && { apiVersion: CLERK_API_VERSION }),
+    ...(CLERK_JWT_KEY && { jwtKey: CLERK_JWT_KEY }),
   };
 }
 
@@ -174,12 +160,15 @@ async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
 export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
   assertProtectedResourceMetadataOptions(options);
 
-  return (c: Context) => {
-    if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
-    const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
-    const answer = protectedResourceMetadataAnswer(options, c.req.url, publishableKey);
-    return c.json(answer.body, { status: answer.status, headers: answer.headers });
-  };
+  return (c: Context) =>
+    metadataResponse(
+      c,
+      protectedResourceMetadataAnswer(options, {
+        method: c.req.method,
+        publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
+        url: c.req.url,
+      }),
+    );
 }
 
 /**
@@ -194,14 +183,20 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
  * ```
  */
 export function authorizationServerMetadataHandler() {
-  // `arguments`, not a rest parameter, so the declared signature still takes no arguments
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
-  return async (c: Context) => {
-    if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
-    const publishableKey = requirePublishableKey(env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY);
-    const answer = await authorizationServerMetadataAnswer(publishableKey);
-    return c.json(answer.body, { status: answer.status, headers: answer.headers });
-  };
+  return async (c: Context) =>
+    metadataResponse(
+      c,
+      await authorizationServerMetadataAnswer({
+        method: c.req.method,
+        publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
+      }),
+    );
+}
+
+// The CORS preflight's answer has no body
+function metadataResponse(c: Context, { status, headers, body }: MetadataAnswer) {
+  return body === null ? c.body(null, { status, headers }) : c.json(body, { status, headers });
 }
 
 /**
@@ -223,17 +218,10 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
 /**
  * Hono middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
- * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
- * `verifyToken` function. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
- * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
- * through. `clerkClient` is a client, or a function that returns one, called once for each request. Without
- * `clerkClient`, it builds one with `createClerkClient` from `@clerk/backend`, from
- * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, with `CLERK_API_URL`, `CLERK_API_VERSION`,
- * and `CLERK_JWT_KEY` when they are set, kept for each set of those settings. Keep
- * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time. A client from
- * `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called
- * with the token and the Hono context, and returns the auth data, or `undefined` to reject it.
+ * @param options - See `McpAuthOptions`. Without `clerkClient`, it builds one with `createClerkClient` from
+ * `@clerk/backend`, from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, with `CLERK_API_URL`,
+ * `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, kept for each set of those settings. Keep
+ * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
  * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded in the
  * `mcpAuthFailure` context variable. Without a Clerk client, it throws a `Clerk error:` naming a missing key, or
@@ -258,36 +246,26 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  */
 export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   assertMiddlewareAuthOptions(options);
-  const clerkClientFor = clerkClientResolver(
+  const authFor = createBearerAuth(
     'mcpAuth',
-    options.clerkClient,
+    options,
     (c: Context) => envClerkClient(requireClerkKeys(c)),
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY',
   );
 
   return async (c: Context, next: Next) => {
-    const verifyToken = await requestTokenVerifier(options, clerkClientFor, c);
-
-    let result: BearerResult;
-    try {
-      result = await authenticateBearer({
-        options,
-        authorization: c.req.header('authorization'),
-        requestUrl: c.req.url,
-        method: c.req.method,
-        // A clone, so the MCP transport can still read the request
-        body: async () => readJsonBody(await requestWithBody(c)),
-        verifyToken,
-      });
-    } catch (error) {
-      if (!(error instanceof McpAuthError)) throw error;
-      throw withJsonResponse(error);
-    }
-
+    const authenticate = await authFor(c);
+    const result = await authenticate({
+      authorization: c.req.header('authorization'),
+      requestUrl: c.req.url,
+      method: c.req.method,
+      // A clone, so the MCP transport can still read the request
+      body: async () => readJsonBody(await requestWithBody(c)),
+    });
+    if ('serverError' in result) throw withJsonResponse(result.serverError);
     if (!result.ok) {
       if (result.failure) c.set('mcpAuthFailure', result.failure);
-      const answer = failureAnswer(result);
-      return c.json(answer.body, { status: answer.status, headers: answer.headers });
+      return c.json(result.body, { status: result.status, headers: result.headers });
     }
 
     c.set('mcpAuth', result.authInfo);
@@ -295,33 +273,43 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   };
 }
 
+// The requests `requestWithBody` rebuilt, so `mcpAuth` and `streamableHttpHandler` share one copy of the body
+const rebuiltRequests = new WeakMap<Context, Promise<Request>>();
+
 /**
  * The readable request for `publicAccess` and the transport. Middleware that reads the body through the Hono
  * request, as `c.req.json()`, leaves the raw request unreadable, but Hono keeps what it read, so the request is
- * rebuilt around that while preserving its other properties.
+ * rebuilt around that while preserving its other properties, once for each request.
  * @param c - The Hono context of the request
  * @returns The raw request, or a copy of it with the body Hono kept when the raw one was already read
  */
-async function requestWithBody(c: Context): Promise<Request> {
+function requestWithBody(c: Context): Promise<Request> {
   const { raw, bodyCache } = c.req;
-  if (!raw.bodyUsed || Object.keys(bodyCache).length === 0) return raw;
-  // From the URL and each field, as Hono's own `cloneRawRequest` does, not `new Request(raw, ...)`: on Node,
-  // @hono/node-server's lightweight request is not a native `Request`, and with `overrideGlobalObjects: false` the
-  // global `Request` reads it as a URL string and throws
-  return new Request(raw.url, {
-    method: raw.method,
-    headers: raw.headers,
-    body: await c.req.text(),
-    cache: raw.cache,
-    credentials: raw.credentials,
-    integrity: raw.integrity,
-    keepalive: raw.keepalive,
-    mode: raw.mode,
-    redirect: raw.redirect,
-    referrer: raw.referrer,
-    referrerPolicy: raw.referrerPolicy,
-    signal: raw.signal,
-  });
+  if (!raw.bodyUsed || Object.keys(bodyCache).length === 0) return Promise.resolve(raw);
+  const rebuilt =
+    rebuiltRequests.get(c) ??
+    // From the URL and each field, as Hono's own `cloneRawRequest` does, not `new Request(raw, ...)`: on Node,
+    // @hono/node-server's lightweight request is not a native `Request`, and with `overrideGlobalObjects: false` the
+    // global `Request` reads it as a URL string and throws
+    c.req.text().then(
+      (body) =>
+        new Request(raw.url, {
+          method: raw.method,
+          headers: raw.headers,
+          body,
+          cache: raw.cache,
+          credentials: raw.credentials,
+          integrity: raw.integrity,
+          keepalive: raw.keepalive,
+          mode: raw.mode,
+          redirect: raw.redirect,
+          referrer: raw.referrer,
+          referrerPolicy: raw.referrerPolicy,
+          signal: raw.signal,
+        }),
+    );
+  rebuiltRequests.set(c, rebuilt);
+  return rebuilt;
 }
 
 /**
@@ -352,8 +340,8 @@ export function streamableHttpHandler<
   Transport extends WebStandardStreamableHttpTransport,
   Server extends McpServerLike<Transport>,
 >(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
-  assertServerFactory(createServer, 'WebStandardStreamableHTTPServerTransport');
-  assertTransportClass(
+  assertStreamableHttpArgs(
+    createServer,
     Transport,
     'WebStandardStreamableHTTPServerTransport',
     'webStandardStreamableHttp.js',

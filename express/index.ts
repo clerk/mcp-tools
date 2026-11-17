@@ -1,32 +1,22 @@
 import type { McpServerLike, StreamableHttpTransportClass } from '../mcp-types';
 import type express from 'express';
 import {
+  type MetadataAnswer,
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   PUBLIC_BODY_LIMIT,
   assertAuthorizationServerMetadataHandlerCalled,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
-  assertServerFactory,
-  assertTransportClass,
-  authenticateBearer,
-  clerkClientResolver,
+  assertStreamableHttpArgs,
   authorizationServerMetadataAnswer,
-  failureAnswer,
+  createBearerAuth,
   methodNotAllowed,
   protectedResourceMetadataAnswer,
-  requestTokenVerifier,
   requireClerkEnvKeys,
-  requirePublishableKey,
   serverErrorAnswer,
-  type BearerResult,
 } from '../bearer-auth';
-import {
-  type ClerkOAuthClient,
-  type McpAuthFailure,
-  McpAuthError,
-  metadataCorsHeaders,
-} from '../server';
+import type { ClerkOAuthClient, McpAuthFailure } from '../server';
 
 declare global {
   namespace Express {
@@ -80,17 +70,9 @@ interface NodeStreamableHttpTransport {
 /**
  * Express middleware that enforces authentication for MCP requests. By default it verifies the OAuth access token with
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
- * @param options - `resourceUrl`, the exact URL clients use for this endpoint, the `requiredScopes` every request
- * needs, the `challengeScopes` the 401 challenge also asks for, and either the `clerkClient` that verifies tokens or a
- * `verifyToken` function. When a token lacks a `requiredScopes` entry, the 403 lists the granted scopes followed by
- * every missing `requiredScopes` and `challengeScopes` entry. A token that lacks only `challengeScopes` entries is let
- * through. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
- * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`; pass your own, or a function that returns one, called once for
- * each request, when the keys come from elsewhere. The route doesn't need
- * `clerkMiddleware()`: this middleware verifies the token itself. Create the client with both `secretKey` and
- * `publishableKey`: without a publishable key, every request fails. A client from `@clerk/backend` must be version
- * 3.19.0 or later, the first with a reliable audience check. `verifyToken` is called with the token and the request,
- * and returns the auth data, or `undefined` to reject it.
+ * @param options - See `McpAuthOptions`. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
+ * `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`; pass your own when the keys come from elsewhere. The route doesn't
+ * need `clerkMiddleware()`: this middleware verifies the token itself.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
  * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded on
  * `res.locals.mcpAuthFailure`. A token that could not be verified at all gets a JSON server error, and the
@@ -126,15 +108,15 @@ interface NodeStreamableHttpTransport {
  */
 export function mcpAuth(options: McpAuthOptions) {
   assertMiddlewareAuthOptions(options);
-  const clerkClientFor = clerkClientResolver(
+  const authFor = createBearerAuth(
     'mcpAuth',
-    options.clerkClient,
+    options,
     expressClerkClient,
     "clerkClient from '@clerk/express'",
   );
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const verifyToken = await requestTokenVerifier(options, clerkClientFor, req);
+    const authenticate = await authFor(req);
 
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
     // error, or derive a challenge for `http://undefined`
@@ -144,31 +126,24 @@ export function mcpAuth(options: McpAuthOptions) {
       return;
     }
 
-    let result: BearerResult;
-    try {
-      result = await authenticateBearer({
-        options,
-        // Every `Authorization` value, joined as fetch `Headers` join them for the other adapters, so two headers are
-        // challenged as malformed. `req.headers.authorization` keeps only the first, and would verify that one.
-        authorization: req.headersDistinct.authorization?.join(', '),
-        requestUrl,
-        method: req.method,
-        body: () => parsedJsonBody(req),
-        verifyToken,
-      });
-    } catch (error) {
-      if (!(error instanceof McpAuthError)) throw error;
+    const result = await authenticate({
+      // Every `Authorization` value, joined as fetch `Headers` join them for the other adapters, so two headers are
+      // challenged as malformed. `req.headers.authorization` keeps only the first, and would verify that one.
+      authorization: req.headersDistinct.authorization?.join(', '),
+      requestUrl,
+      method: req.method,
+      body: () => parsedJsonBody(req),
+    });
+    if ('serverError' in result) {
       // Logged here, not passed to `next`: Express's default error handler destroys the socket of a sent response,
       // which resets a client still uploading its body, and `finish` never fires when the client disconnects
-      const answer = serverErrorAnswer(error);
+      const answer = serverErrorAnswer(result.serverError);
       res.status(answer.status).json(answer.body);
       return;
     }
-
     if (!result.ok) {
       if (result.failure) res.locals.mcpAuthFailure = result.failure;
-      const answer = failureAnswer(result);
-      res.status(answer.status).set(answer.headers).json(answer.body);
+      res.status(result.status).set(result.headers).json(result.body);
       return;
     }
 
@@ -208,15 +183,8 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
 /**
  * The JSON body `express.json()` parsed, which `publicAccess` checks. Without that middleware a JSON request has no
  * parsed body, and every request without a token would get a 401 with nothing to say why, so that case throws.
- * `express.json()` has already buffered the body by then, up to its own `limit`, so that `limit` is what bounds the
- * bytes a request without a token sends: set it, as `express.json({ limit })`, at or below the size you accept from
- * anonymous clients. Its 100kb default is below `PUBLIC_BODY_LIMIT`. The `PUBLIC_BODY_LIMIT` check here is defence in
- * depth that keeps the rule the other adapters follow: a body larger than that is not public. Without a
- * `Content-Length`, as for a chunked body, the size is that of the parsed body serialized again, which is not the byte
- * count sent: whitespace and number formatting differ, so padding can carry a chunked body past 1 MiB that still
- * counts as under it. Only `express.json()`'s `limit` bounds the original bytes. Only a body sent as
- * `application/json` is checked, as in the other adapters, so a body another parser read, such as a form
- * `express.urlencoded()` parsed, is not public.
+ * `express.json()`'s `limit` is what bounds the bytes buffered (see `PUBLIC_BODY_LIMIT`). Without a `Content-Length`,
+ * the size checked is that of the parsed body serialized again, not the byte count sent.
  * @param req - The incoming request
  * @returns The parsed body, or `undefined` when the request has no JSON body or is over `PUBLIC_BODY_LIMIT`
  */
@@ -228,8 +196,9 @@ function parsedJsonBody(req: express.Request): unknown {
     );
   }
   const declared = req.get('content-length');
-  if (declared !== undefined) return Number(declared) > PUBLIC_BODY_LIMIT ? undefined : req.body;
-  return Buffer.byteLength(JSON.stringify(req.body)) > PUBLIC_BODY_LIMIT ? undefined : req.body;
+  const size =
+    declared === undefined ? Buffer.byteLength(JSON.stringify(req.body)) : Number(declared);
+  return size > PUBLIC_BODY_LIMIT ? undefined : req.body;
 }
 
 /**
@@ -247,16 +216,15 @@ function parsedJsonBody(req: express.Request): unknown {
  * ```
  */
 export function authorizationServerMetadataHandler() {
-  // `arguments`, not a rest parameter, so the declared signature still takes no arguments
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (req: express.Request, res: express.Response) => {
-    if (req.method === 'OPTIONS') {
-      res.status(200).set(metadataCorsHeaders).end();
-      return;
-    }
-    const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
-    const answer = await authorizationServerMetadataAnswer(publishableKey);
-    res.status(answer.status).set(answer.headers).json(answer.body);
+    sendMetadata(
+      res,
+      await authorizationServerMetadataAnswer({
+        method: req.method,
+        publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+      }),
+    );
   };
 }
 
@@ -283,21 +251,22 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
   assertProtectedResourceMetadataOptions(options);
 
   return (req: express.Request, res: express.Response) => {
-    if (req.method === 'OPTIONS') {
-      res.status(200).set(metadataCorsHeaders).end();
-      return;
-    }
-    const publishableKey = requirePublishableKey(process.env.CLERK_PUBLISHABLE_KEY);
-
-    const requestUrl = getRequestUrl(req);
-    if (!requestUrl) {
-      res.status(400).set(metadataCorsHeaders).json({ error: 'invalid_request' });
-      return;
-    }
-
-    const answer = protectedResourceMetadataAnswer(options, requestUrl, publishableKey);
-    res.status(answer.status).set(answer.headers).json(answer.body);
+    sendMetadata(
+      res,
+      protectedResourceMetadataAnswer(options, {
+        method: req.method,
+        publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+        url: getRequestUrl(req),
+      }),
+    );
   };
+}
+
+// The CORS preflight's answer has no body
+function sendMetadata(res: express.Response, { status, headers, body }: MetadataAnswer) {
+  res.status(status).set(headers);
+  if (body === null) res.end();
+  else res.json(body);
 }
 
 // The URL the request was made to, or `undefined` without a `Host` header that parses. Behind a proxy, `req.protocol`
@@ -367,8 +336,12 @@ export function streamableHttpHandler<
   Transport extends NodeStreamableHttpTransport,
   Server extends McpServerLike<Transport>,
 >(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
-  assertServerFactory(createServer, 'StreamableHTTPServerTransport');
-  assertTransportClass(Transport, 'StreamableHTTPServerTransport', 'streamableHttp.js');
+  assertStreamableHttpArgs(
+    createServer,
+    Transport,
+    'StreamableHTTPServerTransport',
+    'streamableHttp.js',
+  );
 
   return async (req: express.Request, res: express.Response) => {
     if (req.method !== 'POST') {
