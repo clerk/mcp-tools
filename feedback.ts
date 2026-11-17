@@ -23,8 +23,14 @@ import { isClerkAuthInfo } from './server';
  */
 export const SUBMIT_FEEDBACK_TOOL_NAME = 'submit_feedback';
 
+/**
+ * The feedback kinds accepted by `submitFeedback` and `submitFeedbackTool`.
+ */
 export const FEEDBACK_KINDS = ['missing', 'broken', 'confusing', 'idea'] as const;
 
+/**
+ * The feedback impacts accepted by `submitFeedback` and `submitFeedbackTool`.
+ */
 export const FEEDBACK_IMPACTS = ['blocked', 'worked_around', 'friction'] as const;
 
 // Asking for the report as soon as the agent finds the problem, instead of once at the end of the task, raised how

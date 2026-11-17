@@ -28,6 +28,8 @@ export {
   type SubmitFeedbackTool,
   type SubmitFeedbackToolOptions,
   type SubmittedFeedback,
+  FEEDBACK_IMPACTS,
+  FEEDBACK_KINDS,
   FeedbackSubmissionError,
   SUBMIT_FEEDBACK_TOOL_NAME,
   submitFeedback,

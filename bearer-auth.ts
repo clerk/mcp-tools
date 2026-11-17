@@ -551,6 +551,7 @@ export function createBearerAuth<Req>(
     clientFor = async () => clerkClient;
   }
   const authenticate = bearerAuthenticator(options);
+  let warnedAudienceRejection = false;
 
   return async (
     request: Req,
@@ -563,7 +564,27 @@ export function createBearerAuth<Req>(
     if (!custom) assertClient(client);
     const verifyToken: TokenVerifier = custom
       ? (token) => custom(token, request)
-      : (token, resource) => verifyClerkOAuthToken(client!, token, resource!);
+      : async (token, resource) => {
+          try {
+            return await verifyClerkOAuthToken(client!, token, resource!);
+          } catch (error) {
+            if (
+              !warnedAudienceRejection &&
+              error instanceof McpTokenVerificationError &&
+              error.code === 'token-verification-failed' &&
+              /^(?:OAuth audience mismatch\.|Invalid (?:OAuth|JWT) audience claim(?: array)? \(aud\))/.test(
+                error.message,
+              )
+            ) {
+              warnedAudienceRejection = true;
+              // Do not log Clerk's message: it can contain audiences from the untrusted token.
+              console.warn(
+                'Clerk warning: an OAuth token was rejected because its aud claim is missing, invalid, or does not match resourceUrl. Add the first MCP server to your instance in the Clerk Dashboard to enable aud, configure the client to send resource matching resourceUrl, and use @clerk/backend 3.19.0 or later (@clerk/express 2.1.70 / @clerk/nextjs 7.9.5 or later).',
+              );
+            }
+            throw error;
+          }
+        };
     try {
       return await authenticate({ ...input, verifyToken });
     } catch (error) {

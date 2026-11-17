@@ -724,6 +724,34 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
     });
   });
 
+  test('rejects serialized cached Clerk auth info without an expiry', async () => {
+    const verified = toClerkAuthInfo(clerkAuthenticated().toAuth(), 't');
+    const cached = JSON.parse(JSON.stringify(verified)) as AuthInfo;
+
+    const res = await verifiedBy(name, () => cached);
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toContain('error="invalid_token"');
+    expect(res.failure).toMatchObject({
+      reason: 'invalid_token',
+      cause: { code: 'token-claims-missing', message: 'Token has no expiration time (expiresAt)' },
+    });
+  });
+
+  test('rejects expired cached Clerk auth info even with private provenance', async () => {
+    const cached = toClerkAuthInfo(clerkAuthenticated().toAuth(), 't')!;
+    cached.expiresAt = Math.floor(Date.now() / 1000) - 60;
+
+    const res = await verifiedBy(name, () => cached);
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toContain('error="invalid_token"');
+    expect(res.failure).toMatchObject({
+      reason: 'invalid_token',
+      cause: { code: 'token-expired' },
+    });
+  });
+
   // Clerk enforces `exp` itself, so auth info from `toClerkAuthInfo` in a custom verifier needs no `expiresAt`
   test('passes auth info a custom verifier built with toClerkAuthInfo, without an expiresAt', async () => {
     const authInfo = toClerkAuthInfo(clerkAuthenticated().toAuth(), 't');

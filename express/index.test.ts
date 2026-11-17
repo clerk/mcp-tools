@@ -230,56 +230,97 @@ describe('mcpAuth', () => {
   });
 
   // Express's default error handler destroys the socket of a sent response, which resets a client still uploading
-  test('answers an McpAuthError for a large unread body without resetting the connection', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = express();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw new Error('network down');
-        },
-      }),
-    );
+  test.each([false, true])(
+    'answers an McpAuthError for a large unread body (connection close: %s)',
+    async (close) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const app = express();
+      if (close)
+        app.use((_req, res, next) => {
+          res.setHeader('Connection', 'close');
+          next();
+        });
+      app.post(
+        '/mcp',
+        mcpAuth({
+          verifyToken: async () => {
+            throw new Error('network down');
+          },
+        }),
+      );
 
-    const answers = await withListening(app, async (baseUrl) => {
-      const { port } = new URL(baseUrl);
-      const results: { status?: number | undefined; body?: string; error?: string }[] = [];
-      for (const size of [1_000_000, 2_000_000, 5_000_000]) {
-        results.push(
-          await new Promise((resolve) => {
-            const body = 'x'.repeat(size);
-            const req = httpRequest(
-              {
-                host: '127.0.0.1',
-                port: Number(port),
-                method: 'POST',
-                path: '/mcp',
-                headers: {
-                  authorization: 'Bearer t',
-                  'content-type': 'application/json',
-                  'content-length': String(size),
+      const answers = await withListening(app, async (baseUrl) => {
+        const { port } = new URL(baseUrl);
+        const results: { status?: number | undefined; body?: string; error?: string }[] = [];
+        for (const size of [1_000_000, 2_000_000, 5_000_000]) {
+          results.push(
+            await new Promise((resolve) => {
+              const body = 'x'.repeat(size);
+              let responseStarted = false;
+              let uploadTimer: ReturnType<typeof setTimeout> | undefined;
+              const stopUpload = () => clearTimeout(uploadTimer);
+              const req = httpRequest(
+                {
+                  host: '127.0.0.1',
+                  port: Number(port),
+                  signal: AbortSignal.timeout(2000),
+                  method: 'POST',
+                  path: '/mcp',
+                  headers: {
+                    authorization: 'Bearer t',
+                    'content-type': 'application/json',
+                    'content-length': String(size),
+                  },
                 },
-              },
-              (res) => {
-                let text = '';
-                res.on('data', (chunk) => (text += chunk));
-                res.on('end', () => resolve({ status: res.statusCode, body: text }));
-              },
-            );
-            req.on('error', (error) => resolve({ error: error.message }));
-            req.end(body);
-          }),
-        );
-      }
-      return results;
-    });
-    consoleError.mockRestore();
+                (res) => {
+                  responseStarted = true;
+                  stopUpload();
+                  let text = '';
+                  res.on('data', (chunk) => (text += chunk));
+                  res.on('error', (error) => resolve({ error: error.message }));
+                  res.on('end', () => {
+                    // The server can answer without reading the upload. Stop it before the test closes the server.
+                    req.destroy();
+                    resolve({ status: res.statusCode, body: text });
+                  });
+                },
+              );
+              req.on('error', (error: NodeJS.ErrnoException) => {
+                stopUpload();
+                // A completed early response is authoritative even if the pending upload hits the closed socket.
+                if (responseStarted && (error.code === 'EPIPE' || error.code === 'ECONNRESET'))
+                  return;
+                resolve({ error: error.message });
+              });
+              req.on('close', stopUpload);
+              let offset = 0;
+              const upload = () => {
+                if (responseStarted || req.destroyed) return;
+                if (offset === body.length) {
+                  req.end();
+                  return;
+                }
+                const chunk = body.slice(offset, offset + 32_768);
+                offset += chunk.length;
+                req.write(chunk, (error) => {
+                  if (error || responseStarted || req.destroyed) return;
+                  uploadTimer = setTimeout(upload, 10);
+                });
+              };
+              req.flushHeaders();
+              upload();
+            }),
+          );
+        }
+        return results;
+      });
+      consoleError.mockRestore();
 
-    expect(answers).toEqual(
-      Array.from({ length: 3 }, () => ({ status: 500, body: '{"error":"server_error"}' })),
-    );
-  });
+      expect(answers).toEqual(
+        Array.from({ length: 3 }, () => ({ status: 500, body: '{"error":"server_error"}' })),
+      );
+    },
+  );
 
   test('logs the McpAuthError even when the client disconnects before the answer', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);

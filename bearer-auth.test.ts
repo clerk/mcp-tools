@@ -6,6 +6,7 @@ import {
   assertProtectedResourceMetadataOptions,
   assertPublicAccess,
   bearerAuthenticator,
+  createBearerAuth,
   protectedResourceMetadataAnswer,
   readJsonBody,
   resourceMetadataUrlFor,
@@ -332,6 +333,108 @@ describe('McpAuthError', () => {
       ).toBeUndefined();
     },
   );
+});
+
+describe('Clerk audience rejection warning', () => {
+  test.each([
+    'OAuth audience mismatch. Verification expected audience ["expected"], but incoming token has aud "private-audience".',
+    'Invalid OAuth audience claim (aud) undefined. Expected a non-empty string or a non-empty array of non-empty strings.',
+    'Invalid JWT audience claim (aud) "private-audience".',
+    'Invalid JWT audience claim array (aud) ["private-audience"].',
+  ])('warns once per auth instance for %s without changing the 401', async (message) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const client = {
+        authenticateRequest: vi.fn().mockResolvedValue({
+          isAuthenticated: false,
+          reason: 'token-verification-failed',
+          message,
+        }),
+      };
+      const resourceUrl = 'https://mcp.example.com/mcp';
+      const make = () =>
+        createBearerAuth(
+          'mcpAuth',
+          { resourceUrl, clerkClient: client },
+          async () => client,
+          'Clerk',
+        );
+      const authenticate = make();
+      const input = { authorization: 'Bearer private-token', requestUrl: resourceUrl };
+      const first = await authenticate(undefined, input);
+      const second = await authenticate(undefined, input);
+
+      expect(first).toMatchObject({
+        ok: false,
+        status: 401,
+        body: { error: 'Unauthorized' },
+        headers: {
+          'WWW-Authenticate':
+            'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+        },
+        failure: { reason: 'invalid_token', cause: { code: 'token-verification-failed', message } },
+      });
+      expect(second).toEqual(first);
+      expect(warn).toHaveBeenCalledOnce();
+      const warning = warn.mock.calls[0]?.[0];
+      expect(warning).toMatch(/^Clerk warning:/);
+      for (const text of [
+        'aud',
+        'Clerk Dashboard',
+        'first MCP server',
+        'resource',
+        '@clerk/backend',
+        '3.19.0',
+      ]) {
+        expect(warning).toContain(text);
+      }
+      expect(warning).not.toContain('private-token');
+      expect(warning).not.toContain('private-audience');
+
+      await make()(undefined, input);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('does not warn about an unrelated rejection or a custom verifier', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const resourceUrl = 'https://mcp.example.com/mcp';
+      const client = {
+        authenticateRequest: vi.fn().mockResolvedValue({
+          isAuthenticated: false,
+          reason: 'token-verification-failed',
+          message: 'JWT signature is invalid.',
+        }),
+      };
+      const input = { authorization: 'Bearer t', requestUrl: resourceUrl };
+      await createBearerAuth(
+        'mcpAuth',
+        { resourceUrl, clerkClient: client },
+        async () => client,
+        'Clerk',
+      )(undefined, input);
+      await createBearerAuth(
+        'mcpAuth',
+        {
+          resourceUrl,
+          verifyToken: () => {
+            throw new McpTokenVerificationError(
+              'token-verification-failed',
+              'OAuth audience mismatch.',
+            );
+          },
+        },
+        async () => client,
+        'Clerk',
+      )(undefined, input);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('verifyClerkOAuthToken', () => {

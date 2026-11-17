@@ -71,6 +71,8 @@ const PINNED: Record<string, Surface> = {
       'BrowserSessionError',
       'CREATE_BROWSER_SESSION_TOOL_NAME',
       'ERROR_CODE_META_KEY',
+      'FEEDBACK_IMPACTS',
+      'FEEDBACK_KINDS',
       'FeedbackSubmissionError',
       'SUBMIT_FEEDBACK_TOOL_NAME',
       'browserSessionInstructions',

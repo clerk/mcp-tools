@@ -4,9 +4,9 @@ import { createSign, generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createClerkClient } from '@clerk/backend';
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
+import { createBearerAuth, serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
 import { isClerkAuthInfo, McpAuthError, McpTokenVerificationError } from './server';
 import { FAKE_PK } from './test/mcp-harness';
 
@@ -100,6 +100,39 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
     expect(error).toMatchObject({ code: 'token-verification-failed' });
     expect((error as McpTokenVerificationError).message).toMatch(message);
   });
+
+  test.each([undefined, 'https://other.example.com/mcp'])(
+    'warns once and keeps the invalid_token response for a real Clerk rejection with aud %s',
+    async (aud) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const authenticate = createBearerAuth(
+          'mcpAuth',
+          { resourceUrl, clerkClient },
+          async () => clerkClient,
+          'Clerk',
+        );
+        const token = accessToken({ aud });
+        for (let request = 0; request < 2; request++) {
+          const result = await authenticate(undefined, {
+            authorization: `Bearer ${token}`,
+            requestUrl: resourceUrl,
+          });
+          expect(result).toMatchObject({
+            ok: false,
+            status: 401,
+            headers: { 'WWW-Authenticate': expect.stringContaining('error="invalid_token"') },
+            body: { error: 'Unauthorized' },
+          });
+        }
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls[0]?.[0]).toMatch(/^Clerk warning:/);
+        expect(warn.mock.calls[0]?.[0]).not.toContain(token);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
   test('rejects a token signed with another key', async () => {
     const other = generateKeyPairSync('rsa', { modulusLength: 2048 });
