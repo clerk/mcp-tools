@@ -2,7 +2,6 @@ import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../m
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
-  type MetadataAnswer,
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertAuthorizationServerMetadataHandlerCalled,
@@ -17,7 +16,12 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
-import type { ClerkOAuthClient, McpAuthError, McpAuthFailure } from '../server';
+import {
+  type ClerkOAuthClient,
+  type McpAuthError,
+  type McpAuthFailure,
+  metadataCorsHeaders,
+} from '../server';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -160,15 +164,19 @@ async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
 export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
   assertProtectedResourceMetadataOptions(options);
 
-  return (c: Context) =>
-    metadataResponse(
-      c,
-      protectedResourceMetadataAnswer(options, {
-        method: c.req.method,
-        publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
-        url: c.req.url,
-      }),
-    );
+  return (c: Context) => {
+    if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
+    // Hono always has a URL, so there is no 400, and without a method there is no preflight answer
+    const answer = protectedResourceMetadataAnswer(options, {
+      method: undefined,
+      publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
+      url: c.req.url,
+    });
+    return c.json(answer.body as Record<string, unknown>, {
+      status: answer.status as 200 | 421,
+      headers: answer.headers,
+    });
+  };
 }
 
 /**
@@ -184,19 +192,14 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
  */
 export function authorizationServerMetadataHandler() {
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
-  return async (c: Context) =>
-    metadataResponse(
-      c,
-      await authorizationServerMetadataAnswer({
-        method: c.req.method,
-        publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
-      }),
-    );
-}
-
-// The CORS preflight's answer has no body
-function metadataResponse(c: Context, { status, headers, body }: MetadataAnswer) {
-  return body === null ? c.body(null, { status, headers }) : c.json(body, { status, headers });
+  return async (c: Context) => {
+    if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
+    const answer = await authorizationServerMetadataAnswer({
+      method: undefined,
+      publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
+    });
+    return c.json(answer.body, { status: answer.status as 200 | 502, headers: answer.headers });
+  };
 }
 
 /**
