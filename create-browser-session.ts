@@ -350,7 +350,7 @@ export async function createBrowserSession(
   request: CreateBrowserSessionRequest,
   options: CreateBrowserSessionOptions,
 ): Promise<BrowserSession> {
-  return requestBrowserSession(request, resolveBrowserSessionConfig(options));
+  return await requestBrowserSession(request, resolveBrowserSessionConfig(options));
 }
 
 // Throws a BrowserSessionError. Nothing reaches the log here: the tool callback logs `error.detail`.
