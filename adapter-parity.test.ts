@@ -1385,3 +1385,348 @@ test('hono publicAccess throws a setup error when a middleware before it read th
       'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
   });
 });
+
+const CARD_PATH = '/mcp/server-card';
+const CARD_TYPE = 'application/mcp-server-card+json';
+const card = {
+  name: 'com.example/weather',
+  version: '1.2.0',
+  description: 'Forecasts and current conditions.',
+};
+
+// Each adapter's Server Card handler on CARD_PATH, mounted for every method so OPTIONS and others reach it. Express and
+// Next.js join in CLRK-220 and CLRK-221.
+const serverCardApps: [Adapter, (options: Options) => App][] = [
+  [
+    'hono',
+    (options) => {
+      const app = new Hono();
+      app.all(CARD_PATH, honoAdapter.serverCardHandler(at(options, origin) as never));
+      return app.fetch;
+    },
+  ],
+];
+
+// The discovery CORS headers: any origin may read the card and revalidate it, with If-None-Match and the ETag
+const discoveryCors = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, HEAD, OPTIONS',
+  'access-control-allow-headers': 'Content-Type, If-None-Match',
+  'access-control-expose-headers': 'ETag',
+  'access-control-max-age': '86400',
+};
+
+const expectHeaders = (headers: Headers, expected: Record<string, string | null>) => {
+  for (const [name, value] of Object.entries(expected)) expect(headers.get(name), name).toBe(value);
+};
+
+/** Sends a request with extra headers, which `Init` has no field for. */
+async function serveWith(app: App, path: string, method: string, headers: Record<string, string>) {
+  if (!('listen' in app)) {
+    return read(await app(new Request(`${origin}${path}`, { method, headers })), origin);
+  }
+  return withListening(app, async (local) =>
+    read(
+      await fetch(`${local}${path}`, { method, headers, signal: AbortSignal.timeout(5000) }),
+      local,
+    ),
+  );
+}
+
+describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
+  const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
+
+  test('serves the card with its media type, a weak ETag, an hour of public caching, and public CORS', async () => {
+    const res = await serve(mount(scalar), CARD_PATH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      $schema: 'https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json',
+      ...card,
+      remotes: [{ type: 'streamable-http', url: 'https://public.example.com/mcp' }],
+    });
+    expectHeaders(res.headers, {
+      'content-type': CARD_TYPE,
+      'cache-control': 'public, max-age=3600',
+      ...discoveryCors,
+    });
+    expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
+  });
+
+  test('answers HEAD with the GET headers and no body', async () => {
+    const app = mount(scalar);
+    const get = await serve(app, CARD_PATH);
+    const head = await serve(app, CARD_PATH, { method: 'HEAD' });
+
+    expect(head.status).toBe(200);
+    expect(head.body).toBeNull();
+    expectHeaders(head.headers, {
+      'content-type': CARD_TYPE,
+      etag: get.headers.get('etag'),
+      'cache-control': 'public, max-age=3600',
+      ...discoveryCors,
+    });
+  });
+
+  test('answers the CORS preflight without caching or a body', async () => {
+    const res = await serve(mount(scalar), CARD_PATH, { method: 'OPTIONS' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+    expect(res.allow).toBe('GET, HEAD, OPTIONS');
+    expectHeaders(res.headers, { ...discoveryCors, 'cache-control': null, etag: null });
+  });
+
+  test.each(['POST', 'PUT', 'DELETE', 'PATCH'])(
+    'answers %s with a JSON 405 and Allow, uncached',
+    async (method) => {
+      const res = await serve(mount(scalar), CARD_PATH, { method });
+
+      expect(res.status).toBe(405);
+      expect(res.allow).toBe('GET, HEAD, OPTIONS');
+      expect(res.body).toEqual({ error: 'method_not_allowed' });
+      expectHeaders(res.headers, {
+        'content-type': 'application/json',
+        'access-control-allow-origin': '*',
+        'cache-control': null,
+        etag: null,
+      });
+    },
+  );
+
+  // A scalar is the configured address, whatever origin the request reaches the app at, as behind a proxy
+  test('advertises a single resourceUrl whatever origin the request has', async () => {
+    const res = await serve(mount(scalar), CARD_PATH);
+
+    expect((res.body as { remotes: unknown }).remotes).toEqual([
+      { type: 'streamable-http', url: 'https://public.example.com/mcp' },
+    ]);
+  });
+
+  test('advertises the listed resourceUrl with the origin of the request, each with its own ETag', async () => {
+    const options = (seen: string) => ({
+      ...card,
+      resourceUrl: ['https://other.example.dev/mcp', `${seen}/mcp`],
+    });
+    const res = await serve(mount(options), CARD_PATH);
+    const other = await serve(
+      mount({ ...card, resourceUrl: ['https://other.example.dev/mcp'] }),
+      CARD_PATH,
+      {},
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { remotes: unknown }).remotes).toEqual([
+      { type: 'streamable-http', url: `${res.origin}/mcp` },
+    ]);
+    expect(other.status).toBe(421);
+    const alone = await serve(
+      mount((seen: string) => ({ ...card, resourceUrl: `${seen}/mcp` })),
+      CARD_PATH,
+    );
+    const elsewhere = await serve(
+      mount({ ...card, resourceUrl: 'https://other.example.dev/mcp' }),
+      CARD_PATH,
+    );
+    expect(alone.headers.get('etag')).toBe(res.headers.get('etag'));
+    expect(elsewhere.headers.get('etag')).not.toBe(res.headers.get('etag'));
+  });
+
+  // RFC 9110 section 15.5.20. The browser's Origin header plays no part, and no other environment's card is sent.
+  test.each([
+    ['an unlisted host', unlisted],
+    ['another scheme', ['http://mcp.example.com/mcp']],
+    ['another port', ['https://mcp.example.com:8443/mcp']],
+  ])('answers a request to %s with an uncached JSON 421', async (_case, resourceUrl) => {
+    const res = await serveWith(mount({ ...card, resourceUrl }), CARD_PATH, 'GET', {
+      origin: 'https://other.example.dev',
+      'if-none-match': '*',
+    });
+
+    expect(res.status).toBe(421);
+    expect(res.body).toEqual({ error: 'misdirected_request' });
+    expectHeaders(res.headers, {
+      'content-type': 'application/json',
+      'access-control-allow-origin': '*',
+      'cache-control': null,
+      etag: null,
+    });
+  });
+
+  test('answers HEAD to an unlisted origin with a 421 and no body', async () => {
+    const res = await serve(mount({ ...card, resourceUrl: unlisted }), CARD_PATH, {
+      method: 'HEAD',
+    });
+
+    expect(res.status).toBe(421);
+    expect(res.body).toBeNull();
+  });
+});
+
+describe.each(serverCardApps)(
+  '%s serverCardHandler conditional requests and caching',
+  (_name, mount) => {
+    const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
+
+    async function tagOf(app: App) {
+      const etag = (await serve(app, CARD_PATH)).headers.get('etag')!;
+      return { etag, opaque: etag.replace(/^W\//, '') };
+    }
+
+    // RFC 9110 section 13.1.2 compares with the weak function of section 8.8.3.2, over a list of entity-tags
+    test.each([
+      ['the ETag itself', ({ etag }: { etag: string }) => etag],
+      ['its opaque-tag without W/', ({ opaque }: { opaque: string }) => opaque],
+      ['a list holding it', ({ etag }: { etag: string }) => `"other", ${etag}`],
+      ['a list with empty elements', ({ etag }: { etag: string }) => ` , ,${etag},`],
+      ['a list after a tag with a comma in it', ({ etag }: { etag: string }) => `"a,b",${etag}`],
+      ['*', () => '*'],
+    ])(
+      'answers GET and HEAD whose If-None-Match is %s with a bodyless 304',
+      async (_case, header) => {
+        const app = mount(scalar);
+        const tag = await tagOf(app);
+        for (const method of ['GET', 'HEAD']) {
+          const res = await serveWith(app, CARD_PATH, method, { 'if-none-match': header(tag) });
+
+          expect(res.status, method).toBe(304);
+          expect(res.body, method).toBeNull();
+          expectHeaders(res.headers, {
+            etag: tag.etag,
+            'cache-control': 'public, max-age=3600',
+            'content-type': null,
+            ...discoveryCors,
+          });
+        }
+      },
+    );
+
+    test.each([
+      ['another tag', () => '"other"'],
+      [
+        'the tag with a suffix',
+        ({ opaque }: { opaque: string }) => `W/${opaque.slice(0, -1)}-gzip"`,
+      ],
+      ['the tag unquoted', ({ opaque }: { opaque: string }) => `W/${opaque.slice(1, -1)}`],
+      ['the tag inside a longer one', ({ opaque }: { opaque: string }) => `"x${opaque.slice(1)}`],
+      ['a list mixing * with the tag', ({ etag }: { etag: string }) => `*, ${etag}`],
+    ])('sends the card in full when If-None-Match is %s', async (_case, header) => {
+      const app = mount(scalar);
+      const res = await serveWith(app, CARD_PATH, 'GET', {
+        'if-none-match': header(await tagOf(app)),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject(card);
+    });
+
+    test('revalidates against the card for the origin of the request', async () => {
+      const res = await serveWith(
+        mount((seen: string) => ({
+          ...card,
+          resourceUrl: ['https://other.example.dev/mcp', `${seen}/mcp`],
+        })),
+        CARD_PATH,
+        'GET',
+        {
+          'if-none-match': (
+            await tagOf(mount({ ...card, resourceUrl: 'https://other.example.dev/mcp' }))
+          ).etag,
+        },
+      );
+
+      expect(res.status).toBe(200);
+    });
+
+    test('caches for a custom maxAge', async () => {
+      const res = await serve(mount({ ...scalar, maxAge: 60 }), CARD_PATH);
+
+      expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    });
+
+    // RFC 9111 section 5.2.2.4: caches may store it, but must revalidate it before each reuse
+    test('with maxAge 0, has caches revalidate before each reuse, keeping the ETag', async () => {
+      const app = mount({ ...scalar, maxAge: 0 });
+      const res = await serve(app, CARD_PATH);
+      const revalidated = await serveWith(app, CARD_PATH, 'GET', {
+        'if-none-match': res.headers.get('etag')!,
+      });
+
+      expect(res.headers.get('cache-control')).toBe('public, no-cache');
+      expect(res.headers.get('etag')).toMatch(/^W\//);
+      expect(revalidated.status).toBe(304);
+      expect(revalidated.headers.get('cache-control')).toBe('public, no-cache');
+    });
+
+    test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '60'])(
+      'throws at setup for the maxAge %s',
+      (maxAge) => {
+        expect(() => mount({ ...scalar, maxAge })).toThrow(
+          'Clerk error: serverCardHandler maxAge must be a whole number of seconds, 0 or more',
+        );
+      },
+    );
+  },
+);
+
+describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
+  const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
+
+  test('serves the card it was created with when the options change later', async () => {
+    const meta = { 'com.example/tier': 'free' };
+    const options = { ...scalar, _meta: meta };
+    const app = mount(options);
+    options.resourceUrl = 'https://evil.example/mcp';
+    meta['com.example/tier'] = 'paid';
+
+    const res = await serve(app, CARD_PATH);
+
+    expect(res.body).toMatchObject({
+      remotes: [{ type: 'streamable-http', url: 'https://public.example.com/mcp' }],
+      _meta: { 'com.example/tier': 'free' },
+    });
+  });
+
+  test('serves a request carrying a token without Clerk keys, a verifier, or any fetch', async () => {
+    vi.unstubAllEnvs();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const app = mount(scalar);
+
+    const res = await serve(app, CARD_PATH, { authorization: 'Bearer some-token' });
+
+    expect(res.status).toBe(200);
+    expect(defaultClient.authenticateRequest).not.toHaveBeenCalled();
+    expect(
+      fetchSpy.mock.calls.filter(([input]) => !String(input).startsWith('http://127.0.0.1')),
+    ).toEqual([]);
+  });
+
+  test.each([
+    ['no options', undefined, 'serverCardHandler takes an options object'],
+    [
+      'no resourceUrl',
+      { ...card },
+      'serverCardHandler resourceUrl must be a URL or a non-empty list',
+    ],
+    [
+      'an empty list',
+      { ...card, resourceUrl: [] },
+      'serverCardHandler resourceUrl must be a URL or a non-empty list',
+    ],
+    [
+      'two URLs for one origin',
+      { ...card, resourceUrl: [`${origin}/a`, `${origin}/b`] },
+      'serverCardHandler resourceUrl lists more than one URL',
+    ],
+    [
+      'a templated listed URL',
+      { ...card, resourceUrl: [`${origin}/{tenant}`] },
+      'serverCardHandler resourceUrl must be one absolute http or https URL',
+    ],
+    ['an invalid card', { ...scalar, name: 'weather' }, 'serverCardHandler name'],
+    ['an unknown key', { ...scalar, headers: [] }, 'serverCardHandler does not take headers'],
+    ['remotes', { ...scalar, remotes: [] }, 'serverCardHandler cannot set remotes'],
+  ])('throws at setup for %s', (_case, options, message) => {
+    expect(() => mount(options as never)).toThrow(`Clerk error: ${message}`);
+  });
+});

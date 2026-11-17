@@ -34,6 +34,7 @@ import {
   protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
   mcpAuth,
+  serverCardHandler,
   streamableHttpHandler,
 } from './index';
 import { clerkAuthenticated, expiresAt, FAKE_PK } from '../test/mcp-harness';
@@ -174,6 +175,61 @@ describe('protectedResourceMetadataHandler', () => {
 
     const res = await app.request('http://myapp.com/.well-known/oauth-protected-resource');
     expect(res.status).toBe(500);
+  });
+});
+
+describe('serverCardHandler', () => {
+  const options = {
+    name: 'com.example/weather',
+    version: '1.2.0',
+    description: 'Forecasts.',
+    resourceUrl: 'https://mcp.example.com/mcp',
+  };
+
+  test('keeps the headers earlier middleware set, on the card and on a 304', async () => {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      c.header('x-request-id', 'r1');
+      await next();
+    });
+    app.all('/mcp/server-card', serverCardHandler(options));
+
+    const res = await app.request('http://myapp.com/mcp/server-card');
+    const notModified = await app.request('http://myapp.com/mcp/server-card', {
+      headers: { 'if-none-match': res.headers.get('etag')! },
+    });
+
+    expect(res.headers.get('x-request-id')).toBe('r1');
+    expect(res.headers.get('content-type')).toBe('application/mcp-server-card+json');
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('x-request-id')).toBe('r1');
+  });
+
+  test('answers HEAD without a body when mounted with app.get', async () => {
+    const app = new Hono();
+    app.get('/mcp/server-card', serverCardHandler(options));
+
+    const res = await app.request('http://myapp.com/mcp/server-card', { method: 'HEAD' });
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('');
+    expect(res.headers.get('etag')).toMatch(/^W\//);
+    expect(res.headers.get('content-type')).toBe('application/mcp-server-card+json');
+  });
+
+  test('keeps the CORS headers a cors() middleware in front of it sets, as the metadata handlers do', async () => {
+    const app = new Hono();
+    app.use('*', cors({ origin: 'https://app.example' }));
+    app.all('/mcp/server-card', serverCardHandler(options));
+
+    const res = await app.request('http://myapp.com/mcp/server-card', {
+      headers: { origin: 'https://app.example' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example');
+    expect(res.headers.get('access-control-expose-headers')).toBe('ETag');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=3600');
   });
 });
 

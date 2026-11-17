@@ -16,6 +16,7 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
+import { type ServerCardHandlerOptions, serverCardResponder } from '../discovery-response';
 import {
   type ClerkOAuthClient,
   type McpAuthError,
@@ -39,6 +40,8 @@ declare module 'hono' {
 
 // Everything in the core subpath, so a Hono app imports from this subpath alone
 export * from '../server';
+
+export type { ServerCardHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -190,6 +193,46 @@ export function authorizationServerMetadataHandler() {
       publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
     });
     return c.json(answer.body, { status: answer.status as 200 | 502, headers: answer.headers });
+  };
+}
+
+/**
+ * A Hono handler that serves an MCP Server Card, the public document a client reads before it connects to learn what
+ * the server is and where to connect. It validates the options and generates the card when it is created, so it
+ * needs no Clerk keys or MCP SDK and makes no request, and later changes to the options change nothing. Mount it with
+ * `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
+ *
+ * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
+ * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body.
+ * OPTIONS gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has an
+ * uncached 421.
+ * @see https://github.com/modelcontextprotocol/ext-server-card
+ * @param options - See `ServerCardHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the card cannot have.
+ * @example
+ * ```ts
+ * app.all(
+ *   '/mcp/server-card',
+ *   serverCardHandler({
+ *     name: 'com.example/weather',
+ *     version: '1.2.0',
+ *     description: 'Forecasts and current conditions.',
+ *     resourceUrl: 'https://mcp.example.com/mcp',
+ *   }),
+ * );
+ * ```
+ */
+export function serverCardHandler(options: ServerCardHandlerOptions) {
+  const respond = serverCardResponder('serverCardHandler', options);
+  return (c: Context) => {
+    const answer = respond({
+      method: c.req.method,
+      url: c.req.url,
+      ifNoneMatch: c.req.header('if-none-match'),
+    });
+    // `c.body`, not `c.json` or a new Response, keeps the media type and the headers earlier middleware set
+    if (answer.body === null) return c.body(null, answer.status, answer.headers);
+    return c.body(answer.body, answer.status as 200 | 405 | 421, answer.headers);
   };
 }
 
