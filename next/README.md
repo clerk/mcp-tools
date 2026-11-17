@@ -282,7 +282,7 @@ export {
 };
 ```
 
-`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. As with `withMcpAuth`, only a list is matched, against the origin of `req.url`; `Host` and `X-Forwarded-*` headers are never read. A self-hosted app under `next start` sees the address it listens on, so use a single URL there. Leave the route out of `auth.protect()` in `clerkMiddleware()`, so clients without a session can read it.
+`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. As with `withClerkMcpAuth`, only a list is matched, against the origin of `req.url`; `Host` and `X-Forwarded-*` headers are never read. A self-hosted app under `next start` sees the address it listens on, so use a single URL there. Leave the route out of `auth.protect()` in `clerkMiddleware()`, so clients without a session can read it.
 
 ### `aiCatalogHandler(options)`
 

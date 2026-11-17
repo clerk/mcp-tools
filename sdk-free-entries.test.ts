@@ -249,8 +249,8 @@ describe('the adapter entry points without Clerk packages', () => {
 
   // The control for the test above: the Next.js Clerk path does load the mocked package, so its absence is recorded
   test('records a load of @clerk/nextjs/server where the Next.js entry loads it', async () => {
-    const { withMcpAuth } = await import('./next/index');
-    const route = withMcpAuth(() => new Response('reached'), {
+    const { withClerkMcpAuth } = await import('./next/index');
+    const route = withClerkMcpAuth(() => new Response('reached'), {
       resourceUrl: 'https://mcp.example.com/mcp',
     });
 
