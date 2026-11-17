@@ -398,6 +398,140 @@ describe('mcpAuth', () => {
     expect(verifyToken).toHaveBeenCalledOnce();
   });
 
+  test.each([
+    ['header.example', 421],
+    ['target.example', 200],
+  ])('selects the absolute-form authority with only %s listed', async (listedHost, status) => {
+    const verifyToken = vi.fn(async (token: string) => ({
+      token,
+      clientId: 'c',
+      scopes: [],
+      expiresAt,
+    }));
+    const downstream = vi.fn((_req: express.Request, res: express.Response) => {
+      res.json({});
+    });
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken, resourceUrl: [`http://${listedHost}/mcp`] }),
+      'POST http://target.example/mcp HTTP/1.1\r\nHost: header.example\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+      (app, handler) => app.post('/mcp', handler, downstream),
+    );
+
+    expect(response.split('\r\n')[0]).toContain(` ${status} `);
+    expect(verifyToken).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+    expect(downstream).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+  });
+
+  test.each([
+    ['http://TARGET.example:8080/mcp?x=1', 'http://target.example:8080/mcp', 'header.example'],
+    ['https://target.example/mcp', 'https://target.example/mcp', '['],
+    ['http://[::1]:8080/mcp', 'http://[::1]:8080/mcp', 'header.example'],
+  ])(
+    'uses the complete absolute-form URL %s (resource %s, Host %s)',
+    async (target, listed, host) => {
+      const verifyToken = vi.fn(async (token: string) => ({
+        token,
+        clientId: 'c',
+        scopes: [],
+        expiresAt,
+      }));
+      const response = await sendRawTo(
+        mcpAuth({ verifyToken, resourceUrl: [listed] }),
+        `POST ${target} HTTP/1.1\r\nHost: ${host}\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+        (app, handler) => {
+          app.set('trust proxy', true);
+          return app.post('/mcp', handler, (_req, res) => {
+            res.json({});
+          });
+        },
+      );
+
+      expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+      expect(verifyToken).toHaveBeenCalledOnce();
+    },
+  );
+
+  test('ignores forwarded authority and scheme for an absolute-form target with trust proxy', async () => {
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken: reject }),
+      'POST https://target.example/mcp HTTP/1.1\r\nHost: header.example\r\nX-Forwarded-Host: forwarded.example\r\nX-Forwarded-Proto: http\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+      (app, handler) => {
+        app.set('trust proxy', true);
+        return app.post('/mcp', handler);
+      },
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 401 Unauthorized');
+    expect(response).toContain(
+      'WWW-Authenticate: Bearer resource_metadata="https://target.example/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  test('accepts an HTTP/1.0 absolute-form target without Host', async () => {
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken: reject }),
+      'POST http://target.example/mcp HTTP/1.0\r\nContent-Length: 0\r\n\r\n',
+    );
+
+    expect(response).toMatch(/^HTTP\/1\.[01] 401 Unauthorized/);
+    expect(response).toContain(
+      'WWW-Authenticate: Bearer resource_metadata="http://target.example/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  test.each([
+    ['http:/target.example/mcp', 400],
+    ['http:///target.example/mcp', 400],
+    // Express cannot route this target, so it answers before calling the middleware.
+    ['http://target.example:bad/mcp', 404],
+    ['http://target.example/mcp#fragment', 400],
+    ['http://user:pass@target.example/mcp', 400],
+    ['http://target.example\\other/mcp', 400],
+    ['ftp://target.example/mcp', 400],
+    ['*', 400],
+  ])(
+    'rejects a malformed or unsupported request-target %s before verification',
+    async (target, status) => {
+      const verifyToken = vi.fn();
+      const downstream = vi.fn((_req: express.Request, res: express.Response) => {
+        res.json({});
+      });
+      const response = await sendRawTo(
+        mcpAuth({ verifyToken, resourceUrl: ['http://header.example/mcp'] }),
+        `POST ${target} HTTP/1.1\r\nHost: header.example\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+        (app, handler) => app.use(handler, downstream),
+      );
+
+      expect(response.split('\r\n')[0]).toContain(` ${status} `);
+      expect(verifyToken).not.toHaveBeenCalled();
+      expect(downstream).not.toHaveBeenCalled();
+    },
+  );
+
+  test('keeps a single resourceUrl authoritative despite a conflicting absolute-form target', async () => {
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken: reject, resourceUrl: 'https://configured.example/mcp' }),
+      'POST http://target.example/mcp HTTP/1.1\r\nHost: header.example\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 401 Unauthorized');
+    expect(response).toContain(
+      'WWW-Authenticate: Bearer resource_metadata="https://configured.example/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  test('uses the absolute-form authority for the challenge despite a conflicting Host', async () => {
+    const response = await sendRawTo(
+      mcpAuth({ verifyToken: reject }),
+      'POST http://target.example/mcp?x=1 HTTP/1.1\r\nHost: header.example\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 401 Unauthorized');
+    expect(response).toContain(
+      'WWW-Authenticate: Bearer resource_metadata="http://target.example/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
   test('points the challenge for an absolute-form request-target at the metadata for its path', async () => {
     const response = await sendRawTo(
       mcpAuth({ verifyToken: reject }),
@@ -418,6 +552,20 @@ describe('protectedResourceMetadataHandler', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  test('uses the absolute-form authority for metadata despite a conflicting Host', async () => {
+    const response = await sendRawTo(
+      protectedResourceMetadataHandler(),
+      'GET http://target.example/.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: header.example\r\nConnection: close\r\n\r\n',
+      (app, handler) => app.all('/.well-known/oauth-protected-resource/mcp', handler),
+    );
+
+    expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    const metadata = JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4)) as {
+      resource: string;
+    };
+    expect(metadata.resource).toBe('http://target.example/mcp');
   });
 
   test('derives the resource of an absolute-form request-target from its path alone', async () => {

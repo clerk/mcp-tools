@@ -247,28 +247,27 @@ function sendMetadata(res: express.Response, { status, headers, body }: Metadata
   res.status(status).set(headers).json(body);
 }
 
-// The URL the request was made to, or `undefined` without a `Host` header that parses. Behind a proxy, `req.protocol`
-// and the host come from `X-Forwarded-*` headers only when the app sets `trust proxy`. `req.host` is the one that reads
-// `X-Forwarded-Host` then; `req.get('host')` is always the raw `Host` header.
+// Absolute-form targets supply the whole URL, including authority and scheme (RFC 9112 sections 3.2.2 and 3.3).
+// For origin-form, preserve Express's proxy policy: `req.protocol` and `req.host` read `X-Forwarded-*` only when the
+// app sets `trust proxy`. A malformed or unsupported target returns `undefined`, never a URL repaired by `URL`.
 function getRequestUrl(req: express.Request): string | undefined {
+  const target = req.originalUrl;
+  if (!target.startsWith('/')) {
+    if (
+      !/^https?:\/\/[^/?#\\@]+(?:[/?]|$)/i.test(target) ||
+      target.includes('\\') ||
+      target.includes('#') ||
+      !URL.canParse(target)
+    ) {
+      return undefined;
+    }
+    return new URL(target).href;
+  }
+
   const host = req.host as string | undefined;
   if (!host) return undefined;
-  const path = requestPath(req.originalUrl);
-  if (path === undefined) return undefined;
-  const url = `${req.protocol}://${host}${path}`;
+  const url = `${req.protocol}://${host}${target}`;
   return URL.canParse(url) ? url : undefined;
-}
-
-// The path and query of a request-target. An absolute-form target, as in `POST http://mcp.example.com/mcp HTTP/1.1`,
-// puts the whole URI in `originalUrl`, and RFC 9112 section 3.2.2 requires a server to accept it. Express routes it by
-// its path, so only that path and its query are kept here. The origin still comes from `req.protocol` and `req.host`,
-// as Express gives them to the rest of the app and as `trust proxy` sets them, although RFC 9112 section 3.2.2 has an
-// origin server take the host from the target: a client sends that form to a proxy, which then sends a matching `Host`.
-function requestPath(originalUrl: string): string | undefined {
-  if (originalUrl.startsWith('/')) return originalUrl;
-  if (!URL.canParse(originalUrl)) return undefined;
-  const { pathname, search } = new URL(originalUrl);
-  return `${pathname}${search}`;
 }
 
 /**

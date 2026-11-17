@@ -219,6 +219,70 @@ const protectedResourceApps: [Adapter, (options?: Options) => App][] = [
   ],
 ];
 
+// Fetch adapters already receive a complete URL. A conflicting Host header must not replace its authority.
+describe.each(authApps.filter(([name]) => name !== 'express'))(
+  '%s request URL authority',
+  (_name, mount) => {
+    test.each([
+      ['header.example', 421],
+      ['target.example', 200],
+    ])('selects the URL authority with only %s listed', async (listedHost, status) => {
+      const verifyToken = vi.fn(async (token: string) => ({
+        token,
+        clientId: 'c',
+        scopes: [],
+        expiresAt,
+      }));
+      const app = mount({ verifyToken, resourceUrl: [`https://${listedHost}/mcp`] });
+      if ('listen' in app) throw new Error('Expected a fetch adapter');
+      const response = await app(
+        new Request('https://target.example/mcp', {
+          method: 'POST',
+          headers: { Host: 'header.example', Authorization: 'Bearer t' },
+        }),
+      );
+
+      expect(response.status).toBe(status);
+      expect(verifyToken).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+      if (status === 200) expect(await response.json()).toMatchObject({ reached: true });
+    });
+
+    test('derives the challenge from the URL authority rather than Host', async () => {
+      const app = mount({ verifyToken: async () => undefined });
+      if ('listen' in app) throw new Error('Expected a fetch adapter');
+      const response = await app(
+        new Request('https://target.example/mcp?x=1', {
+          method: 'POST',
+          headers: { Host: 'header.example' },
+        }),
+      );
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get('WWW-Authenticate')).toBe(
+        'Bearer resource_metadata="https://target.example/.well-known/oauth-protected-resource/mcp"',
+      );
+    });
+  },
+);
+
+describe.each(protectedResourceApps.filter(([name]) => name !== 'express'))(
+  '%s metadata URL authority',
+  (_name, mount) => {
+    test('derives the metadata resource from the URL authority rather than Host', async () => {
+      const app = mount();
+      if ('listen' in app) throw new Error('Expected a fetch adapter');
+      const response = await app(
+        new Request('https://target.example/.well-known/oauth-protected-resource/mcp', {
+          headers: { Host: 'header.example' },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ resource: 'https://target.example/mcp' });
+    });
+  },
+);
+
 const authorizationServerApps: [Adapter, () => App][] = [
   [
     'express',
