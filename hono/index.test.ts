@@ -36,10 +36,7 @@ import {
   mcpAuth,
   streamableHttpHandler,
 } from './index';
-import { clerkAuthenticated, FAKE_PK } from '../test/mcp-harness';
-
-// An expiry an hour away, which a custom verifier's result must have
-const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+import { clerkAuthenticated, expiresAt, FAKE_PK } from '../test/mcp-harness';
 
 const mcpHeaders = {
   'Content-Type': 'application/json',

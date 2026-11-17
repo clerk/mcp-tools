@@ -7,7 +7,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { mcpAuth } from '../hono';
 import { requireAdditionalScopes } from '../server';
-import { connectOAuthClient, oauthMetadata } from './mcp-harness';
+import { connectOAuthClient, expiresAt, oauthMetadata } from './mcp-harness';
 
 const ORIGIN = 'https://mcp.example.com';
 const MCP_URL = new URL('/mcp', ORIGIN);
@@ -143,7 +143,7 @@ describe('a requireAdditionalScopes tool behind mcpAuth that lists its scopes in
       token,
       clientId: 'client_1',
       scopes: scopes.split(',').filter(Boolean),
-      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      expiresAt,
     };
   }
 

@@ -12,13 +12,13 @@ import {
   verifyClerkOAuthToken,
 } from './bearer-auth';
 import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './server';
-import { FAKE_PK, clerkAuthenticated } from './test/mcp-harness';
+import { FAKE_PK, clerkAuthenticated, expiresAt } from './test/mcp-harness';
 
 const authInfo = {
   token: 't',
   clientId: 'client-1',
   scopes: ['profile'],
-  expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  expiresAt,
 };
 
 type Authenticate = ReturnType<typeof bearerAuthenticator>;

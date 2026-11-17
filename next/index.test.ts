@@ -32,7 +32,7 @@ import {
   protectedResourceMetadataHandler,
   withMcpAuth,
 } from './index';
-import { clerkAuthenticated, FAKE_PK } from '../test/mcp-harness';
+import { clerkAuthenticated, expiresAt, FAKE_PK } from '../test/mcp-harness';
 
 const METADATA_ROOT = 'https://mcp.example.com/.well-known/oauth-protected-resource';
 const resourceUrl = 'https://mcp.example.com/mcp';
@@ -109,7 +109,7 @@ const authInfo = (scopes: string[]): AuthInfo => ({
   token: 'token-1',
   clientId: 'client-1',
   scopes,
-  expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  expiresAt,
 });
 
 describe('withMcpAuth with verifyToken', () => {

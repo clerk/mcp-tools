@@ -6,7 +6,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { mcpAuth, requireAdditionalScopes, streamableHttpHandler } from '../hono';
 import type { AuthInfo } from '../mcp-types';
-import { connectOAuthClient, oauthMetadata, textOf } from './mcp-harness';
+import { connectOAuthClient, expiresAt, oauthMetadata, textOf } from './mcp-harness';
 
 const ORIGIN = 'https://mcp.example.com';
 const MCP_URL = new URL('/mcp', ORIGIN);
@@ -23,7 +23,7 @@ function verifyToken(token: string): AuthInfo | undefined {
       token,
       clientId: 'client_1',
       scopes,
-      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      expiresAt,
       extra: { userId: 'user_1' },
     }
   );

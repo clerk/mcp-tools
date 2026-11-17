@@ -28,7 +28,7 @@ const clerkExpressLoad = vi.hoisted(() => {
 vi.mock('@clerk/express', () => clerkExpressLoad.factory());
 
 import { clerkClient } from '@clerk/express';
-import { FAKE_PK, sendRaw, withListening } from '../test/mcp-harness';
+import { FAKE_PK, expiresAt, sendRaw, withListening } from '../test/mcp-harness';
 import {
   McpAuthError,
   type McpAuthOptions,
@@ -36,9 +36,6 @@ import {
   protectedResourceMetadataHandler,
   streamableHttpHandler,
 } from './index';
-
-// An expiry an hour away, which a custom verifier's result must have
-const expiresAt = Math.floor(Date.now() / 1000) + 3600;
 
 function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });

@@ -103,6 +103,9 @@ export function connectOAuthClient(
 /** A publishable key whose Frontend API is `clerk.example.com`. */
 export const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
 
+/** An expiry an hour away, in seconds since the epoch, which a custom verifier's result must have. */
+export const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+
 /** The request state a mocked `authenticateRequest` resolves to for a valid OAuth token with `scopes`. */
 export function clerkAuthenticated(scopes: string[] = []) {
   return {

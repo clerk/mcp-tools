@@ -9,7 +9,7 @@ vi.mock('@clerk/express', () => ({ clerkClient: defaultClient }));
 vi.mock('@clerk/backend', () => ({ createClerkClient: () => defaultClient }));
 vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient }));
 
-import { FAKE_PK, clerkAuthenticated, sendRaw, withListening } from './test/mcp-harness';
+import { FAKE_PK, clerkAuthenticated, expiresAt, sendRaw, withListening } from './test/mcp-harness';
 import type { AuthInfo } from './mcp-types';
 import { type McpAuthFailure, McpTokenVerificationError, toClerkAuthInfo } from './server';
 import { resourceMetadataUrlFor } from './bearer-auth';
@@ -505,8 +505,6 @@ describe('metadata handler headers', () => {
   });
 });
 
-// An expiry an hour away, which a custom verifier's result must have
-const expiresAt = Math.floor(Date.now() / 1000) + 3600;
 const TOKENS: Record<string, AuthInfo> = {
   'token-1': { token: 'token-1', clientId: 'client-1', scopes: ['profile'], expiresAt },
   expired: {
@@ -523,8 +521,14 @@ const verifyToken = (token: string): AuthInfo | undefined => {
   return { token, clientId: 'client-1', scopes: scopes.split(',').filter(Boolean), expiresAt };
 };
 
+/** The options `failureApps` passes to each adapter: only a `verifyToken`, which suits every adapter's request type. */
+type FailureAppOptions = { verifyToken: (token: string) => AuthInfo | undefined };
+
 /** Each adapter's auth entry point on /mcp, calling `record` with the failure it reports for a request it answers. */
-const failureApps: Record<Adapter, (options: object, record: (failure: unknown) => void) => App> = {
+const failureApps: Record<
+  Adapter,
+  (options: FailureAppOptions, record: (failure: unknown) => void) => App
+> = {
   express: (options, record) => {
     const app = express();
     // The adapter sets `res.locals.mcpAuthFailure` just before it sends the answer
@@ -536,13 +540,9 @@ const failureApps: Record<Adapter, (options: object, record: (failure: unknown) 
       };
       next();
     });
-    app.post(
-      '/mcp',
-      expressAdapter.mcpAuth(options as expressAdapter.McpAuthOptions),
-      (_req, res) => {
-        res.json({ reached: true });
-      },
-    );
+    app.post('/mcp', expressAdapter.mcpAuth(options), (_req, res) => {
+      res.json({ reached: true });
+    });
     return app;
   },
   hono: (options, record) => {
@@ -551,28 +551,23 @@ const failureApps: Record<Adapter, (options: object, record: (failure: unknown) 
       await next();
       record(c.get('mcpAuthFailure'));
     });
-    app.post('/mcp', honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions), (c) =>
-      c.json({ reached: true }),
-    );
+    app.post('/mcp', honoAdapter.mcpAuth(options), (c) => c.json({ reached: true }));
     return app.fetch;
   },
   next: (options, record) =>
     nextAdapter.withMcpAuth(async () => Response.json({ reached: true }), {
-      ...(options as nextAdapter.McpAuthOptions),
+      ...options,
       onAuthFailure: record,
     }),
 };
 
-/** POSTs a bearer token to the adapter's auth entry point with `verifyToken`, with the failure it reported. */
-async function verifiedWith(adapter: Adapter, authInfo: AuthInfo) {
+/** POSTs `Bearer t` to the adapter's auth entry point with `verifyToken`, with the failure it reported. */
+async function verifiedBy(adapter: Adapter, verifyToken: FailureAppOptions['verifyToken']) {
   let failure: McpAuthFailure | undefined;
-  const app = failureApps[adapter]({ verifyToken: () => authInfo }, (reported) => {
+  const app = failureApps[adapter]({ verifyToken }, (reported) => {
     failure = reported as McpAuthFailure | undefined;
   });
-  const res = await serve(app, '/mcp', {
-    method: 'POST',
-    authorization: `Bearer ${authInfo.token}`,
-  });
+  const res = await serve(app, '/mcp', { method: 'POST', authorization: 'Bearer t' });
   return { ...res, failure };
 }
 
@@ -691,7 +686,7 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
   ])(
     'answers a result with %s with the invalid_token challenge',
     async (_case, fields, message) => {
-      const res = await verifiedWith(name, { ...issued, ...fields } as AuthInfo);
+      const res = await verifiedBy(name, () => ({ ...issued, ...fields }) as AuthInfo);
 
       expect(res.status).toBe(401);
       expect(res.challenge).toBe(
@@ -708,29 +703,12 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
   test('passes auth info a custom verifier built with toClerkAuthInfo, without an expiresAt', async () => {
     const authInfo = toClerkAuthInfo(clerkAuthenticated().toAuth(), 't');
 
-    const res = await verifiedWith(name, authInfo!);
+    const res = await verifiedBy(name, () => authInfo);
 
     expect(authInfo?.expiresAt).toBeUndefined();
     expect(res.status).toBe(200);
     expect(res.failure).toBeUndefined();
   });
-
-  /** POSTs a token to the adapter's auth entry point with a `verifyToken` that throws `error`. */
-  async function thrownBy(error: Error) {
-    let failure: McpAuthFailure | undefined;
-    const app = failureApps[name](
-      {
-        verifyToken: () => {
-          throw error;
-        },
-      },
-      (reported) => {
-        failure = reported as McpAuthFailure | undefined;
-      },
-    );
-    const res = await serve(app, '/mcp', { method: 'POST', authorization: 'Bearer t' });
-    return { ...res, failure };
-  }
 
   // What the READMEs tell verifier authors: a library error the verifier lets escape, such as jose's `JWTExpired`,
   // means the token could not be verified at all, so it gets the server error, which keeps the client's token
@@ -750,10 +728,12 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
     ],
   ])(
     'answers a verifier that throws %s with a JSON %i and logs the McpAuthError',
-    async (_case, expired, status) => {
+    async (_case, error, status) => {
       const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      const res = await thrownBy(expired);
+      const res = await verifiedBy(name, () => {
+        throw error;
+      });
 
       expect(res.status).toBe(status);
       expect(res.body).toEqual({ error: 'server_error' });
@@ -762,7 +742,7 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
       expect(log.mock.calls[0]?.[0]).toMatchObject({
         name: 'McpAuthError',
         reason: 'verification_failed',
-        cause: expired,
+        cause: error,
       });
     },
   );
@@ -771,7 +751,9 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
   test('answers a verifier that throws an McpTokenVerificationError with the invalid_token challenge', async () => {
     const rejection = new McpTokenVerificationError('token-expired', 'The token expired');
 
-    const res = await thrownBy(rejection);
+    const res = await verifiedBy(name, () => {
+      throw rejection;
+    });
 
     expect(res.status).toBe(401);
     expect(res.challenge).toBe(
