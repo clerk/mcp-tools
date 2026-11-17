@@ -243,7 +243,8 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  *
  * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
  * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with `Cache-Control: no-store`.
+ * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
+ * `Cache-Control: no-store`.
  * @see https://github.com/Agent-Card/ai-catalog
  * @param options - See `AICatalogHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.

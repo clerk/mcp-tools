@@ -2,7 +2,7 @@
 // cache policy, the validator and conditional requests, and the 421 for an origin no listed URL has. The adapters only
 // read the request and send the answer. It imports nothing from `./server`, which re-exports the builders.
 // This module is not a package entry point.
-import { isPlainObject } from './discovery-options';
+import { failFor, isPlainObject } from './discovery-options';
 import { type McpResourceUrl, assertResourceUrls, matchResourceUrl } from './resource-url';
 import { type AICatalogOptions, buildAICatalog } from './ai-catalog';
 import { type ServerCardOptions, buildServerCard } from './server-card';
@@ -101,8 +101,8 @@ const errorAnswer = (
  */
 export function serverCardResponder(caller: string, options: unknown) {
   if (!isPlainObject(options)) {
-    throw new Error(
-      `Clerk error: ${caller} takes an options object with name, version, description, and resourceUrl, as ${caller}({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })`,
+    return failFor(caller)(
+      `takes an options object with name, version, description, and resourceUrl, as ${caller}({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })`,
     );
   }
   const { resourceUrl: configured, maxAge, ...card } = options as ServerCardHandlerOptions;
@@ -160,9 +160,7 @@ function discoveryResponder(
 ) {
   const maxAge = config.maxAge ?? DEFAULT_MAX_AGE;
   if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
-    throw new Error(
-      `Clerk error: ${caller} maxAge must be a whole number of seconds, 0 or more, or left out for 3600`,
-    );
+    failFor(caller)('maxAge must be a whole number of seconds, 0 or more, or left out for 3600');
   }
   // RFC 9111 section 5.2.2.9: `public` explicitly marks the document cacheable, including for a shared cache and a
   // request with an Authorization header (section 3.5). With 0, `no-cache` has a cache revalidate before each reuse

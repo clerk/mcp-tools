@@ -39,7 +39,7 @@ export type AICatalogEntryOptions = {
  */
 export type AICatalogOptions = {
   /**
-   * One entry for each Server Card, in the order the catalog lists them.
+   * One entry for each Server Card, in the order the catalog lists them. It may be empty, as the specification allows.
    */
   entries: readonly AICatalogEntryOptions[];
   /**
