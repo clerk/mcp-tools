@@ -823,6 +823,65 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
     });
   });
 
+  // Clerk lowercases the scheme and host of the client's `resource` but keeps a default port when it builds `aud`
+  test('accepts a token whose audience is the resourceUrl with only its scheme and host lowercased', async () => {
+    const aud = 'https://mcp.example.com:443/mcp';
+    const client = {
+      authenticateRequest: vi.fn(
+        async (_req: Request, { audience }: { audience: string | string[] }) =>
+          [audience].flat().includes(aud)
+            ? clerkAuthenticated()
+            : {
+                isAuthenticated: false,
+                reason: 'token-verification-failed',
+                message:
+                  'Invalid JWT audience claim (aud). (code=token-verification-failed, status=n/a)',
+              },
+      ),
+    };
+
+    const res = await post(
+      mount,
+      { resourceUrl: 'https://MCP.example.com:443/mcp', clerkClient: client },
+      { authorization: 'Bearer t' },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ auth: { clientId: 'client-1' } });
+  });
+
+  test.each([
+    [
+      'https://MCP.example.com:443/mcp',
+      [
+        'https://MCP.example.com:443/mcp',
+        'https://mcp.example.com/mcp',
+        'https://mcp.example.com:443/mcp',
+      ],
+    ],
+    ['https://mcp.example.com', ['https://mcp.example.com', 'https://mcp.example.com/']],
+    // The root's protected resource metadata describes the bare origin, so a client can send that form back
+    ['https://mcp.example.com/', ['https://mcp.example.com/', 'https://mcp.example.com']],
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'],
+  ])(
+    'checks the audience of %s against each distinct form of it',
+    async (resourceUrl, audience) => {
+      const client = clerkClientAnswering(clerkAuthenticated());
+
+      const res = await post(
+        mount,
+        { resourceUrl, clerkClient: client },
+        { authorization: 'Bearer t' },
+      );
+
+      expect(res.status).toBe(200);
+      expect(client.authenticateRequest.mock.calls[0]?.[1]).toEqual({
+        acceptsToken: 'oauth_token',
+        audience,
+      });
+    },
+  );
+
   test.each([
     ['with a token', 'Bearer t', 200],
     ['without a token', undefined, 401],

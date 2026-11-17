@@ -349,18 +349,22 @@ describe('verifyClerkOAuthToken', () => {
   });
 
   test.each([
-    ['https://mcp.example.com', 'https://mcp.example.com/'],
-    ['https://MCP.Example.com:443/mcp', 'https://mcp.example.com/mcp'],
+    ['https://mcp.example.com', ['https://mcp.example.com/']],
+    // Clerk keeps the default port when it lowercases the scheme and host
+    [
+      'https://MCP.Example.com:443/mcp',
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com:443/mcp'],
+    ],
     // The root's protected resource metadata describes the bare origin, so a client can send that form back
-    ['https://mcp.example.com/', 'https://mcp.example.com'],
-  ])('also accepts the other form of %s as the audience', async (resourceUrl, other) => {
+    ['https://mcp.example.com/', ['https://mcp.example.com']],
+  ])('also accepts the other forms of %s as the audience', async (resourceUrl, others) => {
     const authenticateRequest = vi.fn().mockResolvedValue(authenticated);
 
     await verifyClerkOAuthToken({ authenticateRequest }, 't', resourceUrl);
 
     expect(authenticateRequest.mock.calls[0]?.[1]).toEqual({
       acceptsToken: 'oauth_token',
-      audience: [resourceUrl, other],
+      audience: [resourceUrl, ...others],
     });
   });
 

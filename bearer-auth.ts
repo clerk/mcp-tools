@@ -1107,8 +1107,12 @@ export async function verifyClerkOAuthToken(
   // Clerk compares the audience exactly, and a client can send the resource in normalized form, such as
   // `https://mcp.example.com/` for `https://mcp.example.com`, so both forms of the same URL are accepted. For the root
   // the bare origin is accepted too, because that is the `resource` the protected resource metadata describes for it.
+  // Clerk builds `aud` from the client's `resource` with only its scheme and host lowercased, which RFC 3986 section
+  // 6.2.2.1 makes case-insensitive, but keeps a default port that the normalized form drops (section 6.2.3), so the URL
+  // with only its scheme and authority lowercased is accepted as well.
   const url = new URL(audience);
-  const forms = [audience, url.href];
+  const [authority = ''] = /^[^/?#]*\/\/[^/?#]*/.exec(audience) ?? [];
+  const forms = [audience, url.href, authority.toLowerCase() + audience.slice(authority.length)];
   if (url.pathname === '/' && !url.search) forms.push(url.origin);
   const audiences = [...new Set(forms)];
   const requestState = await client.authenticateRequest(
