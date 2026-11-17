@@ -246,29 +246,34 @@ const authorizationServerApps: [Adapter, () => App][] = [
   ],
 ];
 
-/** Serves a GET to the authorization server path with `handler` as the route, and returns the error the app reported. */
-async function reportedError(adapter: Adapter, handler: unknown): Promise<string> {
+/** Serves a request with `handler` as the route, and returns the error the app reported. */
+async function reportedError(
+  adapter: Adapter,
+  handler: unknown,
+  path = AUTH_SERVER_PATH,
+  init: Init = {},
+): Promise<string> {
   let error: unknown = 'no error';
   if (adapter === 'express') {
     const app = express();
-    app.get(AUTH_SERVER_PATH, handler as express.RequestHandler);
+    app.all(path, handler as express.RequestHandler);
     app.use(((err, _req, res, _next) => {
       error = err;
       res.status(500).json({});
     }) satisfies express.ErrorRequestHandler);
-    await serve(app, AUTH_SERVER_PATH);
+    await serve(app, path, init);
   } else if (adapter === 'hono') {
     const app = new Hono();
     app.onError((err, c) => {
       error = err;
       return c.json({}, 500);
     });
-    app.get(AUTH_SERVER_PATH, handler as MiddlewareHandler);
-    await serve(app.fetch, AUTH_SERVER_PATH);
+    app.all(path, handler as MiddlewareHandler);
+    await serve(app.fetch, path, init);
   } else {
     try {
       await (handler as (req: Request) => Promise<Response>)(
-        new Request(`${origin}${AUTH_SERVER_PATH}`),
+        new Request(`${origin}${path}`, requestInit(init)),
       );
     } catch (err) {
       error = err;
@@ -943,6 +948,52 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
       expect(client.authenticateRequest).toHaveBeenCalledTimes(authorization ? 1 : 0);
     },
   );
+
+  describe.each([
+    ['synchronous', (client: unknown) => () => client],
+    ['asynchronous', (client: unknown) => async () => client],
+  ] as const)('%s client resolver', (_kind, resolverFor) => {
+    test.each([
+      ['an object without authenticateRequest', {}],
+      ['null', null],
+      ['undefined', undefined],
+      ['a string', 'sk_test_123'],
+      ['a non-callable authenticateRequest', { authenticateRequest: true }],
+    ])(
+      'reports the setup error for %s before checking any token or public access',
+      async (_case, client) => {
+        const resolve = vi.fn(resolverFor(client));
+        const options = {
+          resourceUrl: `${origin}/mcp`,
+          clerkClient: resolve,
+          publicAccess: { methods: ['initialize'] },
+        };
+        const handler =
+          name === 'next'
+            ? nextAdapter.withMcpAuth(
+                async () => Response.json({ reached: true }),
+                options as nextAdapter.McpAuthOptions,
+              )
+            : name === 'express'
+              ? expressAdapter.mcpAuth(options as expressAdapter.McpAuthOptions)
+              : honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions);
+
+        for (const init of [
+          { method: 'POST' },
+          { body: rpc('initialize') },
+          { authorization: 'Bearer t' },
+        ]) {
+          const error = await reportedError(name, handler, '/mcp', init);
+          expect(error).toMatch(
+            /^Error: Clerk error: .* takes a clerkClient with authenticateRequest, or a function that returns one\. Omit clerkClient to use /,
+          );
+          expect(error).toContain(`Omit clerkClient to use ${defaultClientName[name]}`);
+        }
+        expect(resolve).toHaveBeenCalledTimes(3);
+        expect(defaultClient.authenticateRequest).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   test.each([
     ['an object without authenticateRequest', {}],

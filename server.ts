@@ -83,10 +83,11 @@ export class McpTokenVerificationError extends Error {
 }
 
 /**
- * Thrown by `mcpAuth` and `withMcpAuth` when the token could not be verified at all, such as when the verifier
- * throws or Clerk is unreachable, so the request reaches the framework's error handler instead of a challenge that
- * would make the client discard a valid token. The verifier's error is the `cause`: an `McpTokenVerificationError`
- * when Clerk answered but could not verify the token.
+ * Wraps errors from the shared verifier when the token could not be verified at all, such as when the verifier
+ * throws or Clerk is unreachable. The adapters catch and log this error, then return a JSON server error with the
+ * cause's eligible 429 or 5xx status, or 500, instead of a challenge that would make the client discard a valid token.
+ * The verifier's error is the `cause`: an `McpTokenVerificationError` when Clerk answered but could not verify the
+ * token. Setup errors remain separate and escape to the framework's error handler.
  */
 export class McpAuthError extends Error {
   readonly reason = 'verification_failed';

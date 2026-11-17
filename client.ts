@@ -145,7 +145,9 @@ export async function getMcpClientBySessionId({
   return createReturnValue(client, authProvider, sessionId);
 }
 
-// Return type for known credentials and dynamically registered clients
+/**
+ * Connection returned by the MCP client factories, with its session, connect function, and underlying SDK objects.
+ */
 export interface McpClientConnection {
   /**
    * Represents a session associated with the connected MCP service endpoint.
@@ -172,6 +174,9 @@ export interface McpClientConnection {
   authProvider: OAuthClientProvider;
 }
 
+/**
+ * Options for `createKnownCredentialsMcpClient`, using an existing OAuth client's credentials to connect to an MCP service.
+ */
 export interface CreateKnownCredentialsMcpClientOptions {
   /**
    * OAuth client id, expected to be collected via user input
@@ -274,6 +279,9 @@ export async function createKnownCredentialsMcpClient({
   return createReturnValue(client, authProvider, sessionId);
 }
 
+/**
+ * Options for `createDynamicallyRegisteredMcpClient`, registering a new OAuth client to connect to an MCP service.
+ */
 export interface CreateDynamicallyRegisteredMcpClientOptions {
   /**
    * The endpoint of the MCP service, expected to be collected via user input

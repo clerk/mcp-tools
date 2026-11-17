@@ -533,19 +533,21 @@ export function createBearerAuth<Req>(
   defaultClient: (request: Req) => Promise<ClerkOAuthClient>,
   defaultName: string,
 ) {
+  function assertClient(client: unknown): asserts client is ClerkOAuthClient {
+    if (typeof (client as Partial<ClerkOAuthClient> | null)?.authenticateRequest !== 'function') {
+      throw new Error(
+        `Clerk error: ${caller} takes a clerkClient with authenticateRequest, or a function that returns one. Omit clerkClient to use ${defaultName}`,
+      );
+    }
+  }
+
   const { clerkClient } = options as { clerkClient?: unknown };
   let clientFor = defaultClient;
   if (typeof clerkClient === 'function') {
     clientFor = async () => (clerkClient as () => ClerkOAuthClient | Promise<ClerkOAuthClient>)();
   } else if (clerkClient !== undefined) {
-    if (
-      typeof (clerkClient as Partial<ClerkOAuthClient> | null)?.authenticateRequest !== 'function'
-    ) {
-      throw new Error(
-        `Clerk error: ${caller} takes a clerkClient with authenticateRequest, or a function that returns one. Omit clerkClient to use ${defaultName}`,
-      );
-    }
-    clientFor = async () => clerkClient as ClerkOAuthClient;
+    assertClient(clerkClient);
+    clientFor = async () => clerkClient;
   }
   const authenticate = bearerAuthenticator(options);
 
@@ -557,6 +559,7 @@ export function createBearerAuth<Req>(
     // The Clerk branch always has a `resourceUrl`, so a resource was matched, or the request answered with a 421,
     // before a token is verified
     const client = custom ? undefined : await clientFor(request);
+    if (!custom) assertClient(client);
     const verifyToken: TokenVerifier = custom
       ? (token) => custom(token, request)
       : (token, resource) => verifyClerkOAuthToken(client!, token, resource!);
