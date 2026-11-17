@@ -314,7 +314,7 @@ app.all(
 );
 ```
 
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and keeps earlier middleware headers the same way. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each and pick it by `new URL(c.req.url).origin`.
+It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and keeps earlier middleware headers the same way. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
 
 ### `streamableHttpHandler(createServer, Transport)`
 

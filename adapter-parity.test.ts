@@ -1847,16 +1847,27 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
   });
 
   // The catalog is fixed: it has no resourceUrl to choose by, so the request's origin and Origin header change nothing
-  test('serves the same catalog whatever the request origin and Origin header', async () => {
+  test('serves the same catalog to a request at another origin or with an Origin header', async () => {
     const app = mount(options);
     const plain = await serve(app, CATALOG_PATH);
     const fromElsewhere = await serveWith(app, CATALOG_PATH, 'GET', {
       origin: 'https://other.example.dev',
     });
+    // An Express app is reached at its listener's origin, so only the fetch-style adapters can be sent another one
+    const atAnotherOrigin =
+      'listen' in app
+        ? plain
+        : await read(
+            await app(new Request(`https://other.example.dev${CATALOG_PATH}`)),
+            'https://other.example.dev',
+          );
 
-    expect(fromElsewhere.status).toBe(200);
-    expect(fromElsewhere.body).toEqual(plain.body);
-    expect(fromElsewhere.headers.get('access-control-allow-origin')).toBe('*');
+    for (const res of [fromElsewhere, atAnotherOrigin]) {
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(plain.body);
+      expect(res.headers.get('etag')).toBe(plain.headers.get('etag'));
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    }
   });
 
   test('serves the catalog it was created with when the options change later', async () => {
