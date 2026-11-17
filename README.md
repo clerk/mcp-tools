@@ -100,6 +100,40 @@ For framework-specific implementations, see:
 - [Hono implementation](./hono/README.md#authorizationservermetadatahandler)
 - [Next.js implementation](./next/README.md#authorizationservermetadatahandler)
 
+#### Discovery: Server Cards (beta)
+
+A [Server Card](https://github.com/modelcontextprotocol/ext-server-card) is a public JSON document that tells an MCP client what your server is and where to connect, before it connects or signs in. Server Cards are a **beta** MCP extension, and so is this API: it follows the extension as pinned at commit `526201b`, and publishing a card does not mean every MCP host will find or use it.
+
+`generateServerCard` builds a card from a supported subset of the extension, and each adapter's `serverCardHandler` serves one (Hono today, Express and Next.js to follow):
+
+- **Required:** `name`, in reverse-DNS form with one slash, such as `com.example/weather`; `version`, one version such as `1.2.0`, not a range; and a `description` of 1 to 100 characters.
+- **Optional:** `title`, `websiteUrl`, `icons`, `repository`, and `_meta`. Each `_meta` key needs a namespace of your own, such as `com.example/tier` (prefixes such as `modelcontextprotocol.io/` and `mcp.dev/` are reserved for MCP), and each value must be JSON.
+- **Generated:** `$schema`, and `remotes`, one static streamable HTTP remote at `resourceUrl`. Setting either, or any other key, throws a `Clerk error:`. SSE remotes, URL templates, and header inputs are not supported.
+
+The card's `name` identifies the server; it is not a URL. `resourceUrl` is the URL clients connect to. The card is public and is cached, so never put credentials, tokens, or user data in it.
+
+```ts
+import { generateServerCard } from '@clerk/mcp-tools/server';
+
+const card = generateServerCard({
+  name: 'com.example/weather',
+  version: '1.2.0',
+  description: 'Forecasts and current conditions.',
+  resourceUrl: 'https://mcp.example.com/mcp',
+});
+```
+
+The extension recommends serving the card at your MCP endpoint's URL followed by `/server-card`, such as `/mcp/server-card`. The handlers validate the options and generate the card once, when they are created, with no Clerk keys, MCP SDK, or request. Importing them mounts nothing. Every adapter answers the same way:
+
+- `GET` and `HEAD` get the card as `application/mcp-server-card+json` (`HEAD` without a body), a weak `ETag`, and `Cache-Control: public, max-age=3600`. Set `maxAge` to another whole number of seconds; `0` sends `public, no-cache`, which lets caches store the card but has them revalidate it before each use.
+- A `GET` or `HEAD` whose `If-None-Match` lists the card's tag, or is `*`, gets a `304` without a body.
+- Any origin can read the card and revalidate it: `Access-Control-Allow-Origin: *`, with `If-None-Match` allowed and `ETag` exposed. `OPTIONS` gets the CORS preflight, and other methods a JSON `405` with `Allow: GET, HEAD, OPTIONS`.
+- With a list of `resourceUrl`s, one for each origin, a request gets the card for the URL with its own origin, scheme and port included; the browser's `Origin` header plays no part. A request to any other origin gets a JSON `421`, never another origin's card. Errors are not cached.
+
+For framework-specific implementations, see:
+
+- [Hono implementation](./hono/README.md#servercardhandleroptions)
+
 #### Creating an MCP endpoint
 
 To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters, since each framework has its own way of handling request and response objects, which are critical parts of implementing the MCP protocol:
@@ -841,6 +875,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** The URL from a `resourceUrl` option that a request is for: `resourceUrl` itself when it is one URL, or the listed URL with the request's origin. It is the rule `mcpAuth`, `withClerkMcpAuth`, and `protectedResourceMetadataHandler` apply, so a metadata route of your own can keep its `resource` identical to the URL they check. Answer `421` when it returns `undefined`.
   - **Params:** `resourceUrl: string | readonly string[]` (the `McpResourceUrl` type), `requestUrl: string | URL`
   - **Returns:** `string | undefined`
+
+- `generateServerCard`
+  - **Description:** Generates an MCP [Server Card](https://github.com/modelcontextprotocol/ext-server-card) (beta) from the supported subset described in [Discovery: Server Cards](#discovery-server-cards-beta): the required `name`, `version`, and `description`, the optional `title`, `websiteUrl`, `icons`, `repository`, and namespaced JSON `_meta`, and one generated streamable HTTP remote at `resourceUrl`. It throws a `Clerk error:` for an unknown key, a `$schema` or `remotes` of its own, or a value the card can't have. The card is frozen, and later changes to the options don't reach it.
+  - **Params:** `ServerCardOptions`
+  - **Returns:** `ServerCard`
 
 - `McpAuthError`
   - **Description:** The error `mcpAuth` and `withClerkMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express and Next.js answer `{"error":"server_error"}` with that status, or `500`, and log the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers and logs the same way.
