@@ -655,7 +655,7 @@ describe('streamableHttpHandler', () => {
         headers: mcpHeaders,
         body: initializeBody,
       });
-      expect(() => new Request(request)).toThrow('Failed to parse URL');
+      expect(() => new Request(request)).toThrow(TypeError);
 
       expect((await handoff(reader, request)).url).toBe('http://localhost/mcp');
     },
