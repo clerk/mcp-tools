@@ -134,6 +134,40 @@ For framework-specific implementations, see:
 
 - [Hono implementation](./hono/README.md#servercardhandleroptions)
 
+#### Discovery: AI Catalogs (beta)
+
+An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, usually at `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the catalog specification as pinned at commit `4d522ea`, and publishing a catalog does not mean every MCP host will find or use it.
+
+`generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono today, Express and Next.js to follow):
+
+- **Required:** `entries`, a non-empty list of `{ identifier, url }`, one for each Server Card.
+- **Generated:** `specVersion: "1.0"`, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, trust manifests, signatures, and extensions are not supported.
+
+An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:mcp:weather`; the specification asks open systems to use this `urn:air:{publisher}:{namespace}:{name}` form. It is not a URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `url` is the exact URL the card is retrieved from, and may be on another host. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
+
+```ts
+import { generateAICatalog } from '@clerk/mcp-tools/server';
+
+const catalog = generateAICatalog({
+  entries: [
+    {
+      identifier: 'urn:air:example.com:mcp:weather',
+      url: 'https://mcp.example.com/mcp/server-card',
+    },
+    {
+      identifier: 'urn:air:example.com:mcp:search',
+      url: 'https://cards.saas.example/search/server-card',
+    },
+  ],
+});
+```
+
+The handlers answer as the Server Card handlers do, with the catalog's media type, `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and uncached errors. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin.
+
+For framework-specific implementations, see:
+
+- [Hono implementation](./hono/README.md#aicataloghandleroptions)
+
 #### Creating an MCP endpoint
 
 To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters, since each framework has its own way of handling request and response objects, which are critical parts of implementing the MCP protocol:
@@ -880,6 +914,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** Generates an MCP [Server Card](https://github.com/modelcontextprotocol/ext-server-card) (beta) from the supported subset described in [Discovery: Server Cards](#discovery-server-cards-beta): the required `name`, `version`, and `description`, the optional `title`, `websiteUrl`, `icons`, `repository`, and namespaced JSON `_meta`, and one generated streamable HTTP remote at `resourceUrl`. It throws a `Clerk error:` for an unknown key, a `$schema` or `remotes` of its own, or a value the card can't have. The card is frozen, and later changes to the options don't reach it.
   - **Params:** `ServerCardOptions`
   - **Returns:** `ServerCard`
+
+- `generateAICatalog`
+  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) (beta) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs-beta): `specVersion` `1.0` and one entry for each `{ identifier, url }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, or a `url` that isn't an absolute http or https URL. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
+  - **Params:** `AICatalogOptions`
+  - **Returns:** `AICatalog`
 
 - `McpAuthError`
   - **Description:** The error `mcpAuth` and `withClerkMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express and Next.js answer `{"error":"server_error"}` with that status, or `500`, and log the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers and logs the same way.
