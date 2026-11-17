@@ -17,7 +17,7 @@ export function completeOAuthHandler({
   store: McpClientStore;
   callback: (params: Awaited<ReturnType<typeof completeOAuth>>) => void;
 }): (req: NextRequest) => Promise<Response | ReturnType<typeof callback>> {
-  return async (req: NextRequest): Promise<Response | ReturnType<typeof callback>> => {
+  return async (req: NextRequest) => {
     const qs = req.nextUrl.searchParams;
     const code = qs.get('code');
     const state = qs.get('state');

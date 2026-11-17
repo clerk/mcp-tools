@@ -135,8 +135,6 @@ export type BrowserSessionErrorCode =
  */
 export class BrowserSessionError extends Error {
   /**
-   * @param code - Why the link was not created
-   * @param message - The error's message
    * @param missingScopes - The scopes the token lacks, for `insufficient_scope`
    * @param detail - Safe-to-log detail, such as a status or an error name
    */

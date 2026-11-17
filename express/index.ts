@@ -16,7 +16,7 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
-import type { ClerkOAuthClient, McpAuthFailure } from '../server';
+import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 declare global {
   namespace Express {
@@ -53,16 +53,11 @@ export type ProtectedResourceMetadataOptions =
  */
 interface NodeStreamableHttpTransport {
   /**
-   * Handles one MCP request and writes the response.
-   * @param req - The incoming request, carrying the auth info `mcpAuth` set in `req.auth`
-   * @param res - The response to write to
-   * @param parsedBody - The request body, already parsed
-   * @returns A promise that resolves once the request is handled
+   * Handles one MCP request, carrying the auth info `mcpAuth` set in `req.auth`, and writes the response.
    */
   handleRequest(req: express.Request, res: express.Response, parsedBody: unknown): Promise<void>;
   /**
    * Closes the transport.
-   * @returns A promise that resolves once the transport is closed
    */
   close(): Promise<void>;
 }
@@ -108,7 +103,7 @@ interface NodeStreamableHttpTransport {
  */
 export function mcpAuth(options: McpAuthOptions) {
   assertMiddlewareAuthOptions(options);
-  const authFor = createBearerAuth(
+  const authenticate = createBearerAuth(
     'mcpAuth',
     options,
     expressClerkClient,
@@ -116,21 +111,11 @@ export function mcpAuth(options: McpAuthOptions) {
   );
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const authenticate = await authFor(req);
-
-    // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
-    // error, or derive a challenge for `http://undefined`
-    const requestUrl = getRequestUrl(req);
-    if (!requestUrl) {
-      res.status(400).json({ error: 'invalid_request' });
-      return;
-    }
-
-    const result = await authenticate({
+    const result = await authenticate(req, {
       // Every `Authorization` value, joined as fetch `Headers` join them for the other adapters, so two headers are
       // challenged as malformed. `req.headers.authorization` keeps only the first, and would verify that one.
       authorization: req.headersDistinct.authorization?.join(', '),
-      requestUrl,
+      requestUrl: getRequestUrl(req),
       method: req.method,
       body: () => parsedJsonBody(req),
     });
@@ -217,11 +202,11 @@ function parsedJsonBody(req: express.Request): unknown {
  */
 export function authorizationServerMetadataHandler() {
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
-  return async (req: express.Request, res: express.Response) => {
+  return async (req: express.Request, res: express.Response): Promise<void> => {
+    if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
     sendMetadata(
       res,
       await authorizationServerMetadataAnswer({
-        method: req.method,
         publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
       }),
     );
@@ -232,11 +217,7 @@ export function authorizationServerMetadataHandler() {
  * An Express handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
  * `CLERK_PUBLISHABLE_KEY`. Mount it at the path `mcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
- * @param options - The options you give `mcpAuth`, and `properties`, additional metadata such as `resource_name`,
- * which overrides the generated metadata. `resourceUrl` makes the metadata's `resource` the URL `mcpAuth` checks;
- * without it, the `resource` is the URL the metadata route was requested at, without the well-known path.
- * `scopes_supported` lists `requiredScopes` then `challengeScopes`, unless `properties` sets it, and then that list
- * must include each of them.
+ * @param options - See `ProtectedResourceMetadataOptions`
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
  * `CLERK_PUBLISHABLE_KEY` is not set.
  * @example
@@ -250,11 +231,11 @@ export function authorizationServerMetadataHandler() {
 export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
   assertProtectedResourceMetadataOptions(options);
 
-  return (req: express.Request, res: express.Response) => {
+  return (req: express.Request, res: express.Response): void => {
+    if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
-        method: req.method,
         publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
         url: getRequestUrl(req),
       }),
@@ -262,11 +243,8 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
   };
 }
 
-// The CORS preflight's answer has no body
 function sendMetadata(res: express.Response, { status, headers, body }: MetadataAnswer) {
-  res.status(status).set(headers);
-  if (body === null) res.end();
-  else res.json(body);
+  res.status(status).set(headers).json(body);
 }
 
 // The URL the request was made to, or `undefined` without a `Host` header that parses. Behind a proxy, `req.protocol`
@@ -294,18 +272,14 @@ function requestPath(originalUrl: string): string | undefined {
 }
 
 /**
- * An express handler that will handle MCP requests using the streamable http
- * transport, given a factory that creates an MCP server object from the MCP
- * SDK. A fresh server and transport are created for each request so that
- * concurrent requests don't share state.
- * @param createServer - A factory that returns a new MCP server, such as
- * `McpServer` from the MCP SDK, on every call. Passing a server object
- * instead throws when the handler is created.
- * @param Transport - The SDK's Node.js transport class,
- * `StreamableHTTPServerTransport` from
- * `@modelcontextprotocol/sdk/server/streamableHttp.js`. It is taken as an
- * argument so that this package never imports the SDK, which only apps serving
- * MCP with this handler need to install.
+ * An express handler that will handle MCP requests using the streamable http transport, given a factory that creates an
+ * MCP server object from the MCP SDK. A fresh server and transport are created for each request so that concurrent
+ * requests don't share state.
+ * @param createServer - A factory that returns a new MCP server, such as `McpServer` from the MCP SDK, on every call.
+ * Passing a server object instead throws when the handler is created.
+ * @param Transport - The SDK's Node.js transport class, `StreamableHTTPServerTransport` from
+ * `@modelcontextprotocol/sdk/server/streamableHttp.js`. It is taken as an argument so that this package never imports
+ * the SDK, which only apps serving MCP with this handler need to install.
  * @returns The handler
  * @example
  * ```ts
@@ -326,11 +300,9 @@ function requestPath(originalUrl: string): string | undefined {
  * // A request that isn't a POST gets a 405 with `Allow: POST`: the server is stateless
  * app.all("/mcp", express.json(), streamableHttpHandler(createServer, StreamableHTTPServerTransport));
  * ```
- * @typeParam Transport - The transport the class creates, inferred from the
- * class alone
- * @typeParam Server - The server `createServer` returns. It is a separate type
- * parameter so that `Transport` is not inferred from the SDK's general
- * `Transport` interface, which `McpServer.connect` takes.
+ * @typeParam Transport - The transport the class creates, inferred from the class alone
+ * @typeParam Server - The server `createServer` returns. It is a separate type parameter so that `Transport` is not
+ * inferred from the SDK's general `Transport` interface, which `McpServer.connect` takes.
  */
 export function streamableHttpHandler<
   Transport extends NodeStreamableHttpTransport,

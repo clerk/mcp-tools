@@ -31,11 +31,7 @@ export * from '../server';
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withMcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
- * @param options - The options you give `withMcpAuth`, and `properties`, additional metadata such as
- * `resource_name`, which overrides the generated metadata. `resourceUrl` makes the metadata's `resource` the URL
- * `withMcpAuth` checks; without it, the `resource` is the URL the metadata route was requested at, without the
- * well-known path. `scopes_supported` lists `requiredScopes` then `challengeScopes`, unless `properties` sets it, and
- * then that list must include each of them.
+ * @param options - See `ProtectedResourceMetadataOptions`
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is not set. Exporting `protectedResourceMetadataHandler` itself as `GET`,
  * without calling it, throws a `Clerk error:` on the first request.
@@ -60,8 +56,6 @@ export function protectedResourceMetadataHandler(
 
   return (req: Request): Response => {
     const answer = protectedResourceMetadataAnswer(options, {
-      // `metadataCorsHandler` answers the preflight
-      method: undefined,
       publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
       keyName: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
       url: req.url,
@@ -80,7 +74,6 @@ export function authorizationServerMetadataHandler(): () => Promise<Response> {
   assertAuthorizationServerMetadataHandlerCalled(arguments.length);
   return async (): Promise<Response> => {
     const answer = await authorizationServerMetadataAnswer({
-      method: undefined,
       publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
       keyName: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
     });
@@ -93,12 +86,7 @@ export function authorizationServerMetadataHandler(): () => Promise<Response> {
  * clients that operate in web browsers.
  */
 export function metadataCorsHandler(): () => Response {
-  return (): Response => {
-    return new Response(null, {
-      status: 200,
-      headers: metadataCorsHeaders,
-    });
-  };
+  return () => new Response(null, { status: 200, headers: metadataCorsHeaders });
 }
 
 /**
@@ -180,7 +168,7 @@ export function withMcpAuth(
   );
   assertMcpAuthOptions('withMcpAuth', options);
 
-  const authFor = createBearerAuth(
+  const authenticate = createBearerAuth(
     'withMcpAuth from @clerk/mcp-tools/next',
     options,
     nextClerkClient,
@@ -188,8 +176,7 @@ export function withMcpAuth(
   );
 
   return async (req) => {
-    const authenticate = await authFor(req);
-    const result = await authenticate({
+    const result = await authenticate(req, {
       authorization: req.headers.get('authorization') ?? undefined,
       requestUrl: req.url,
       method: req.method,

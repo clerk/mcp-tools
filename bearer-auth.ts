@@ -22,7 +22,7 @@ import {
 /**
  * The options every auth entry point takes, with `resourceUrl` optional as it is for a custom verifier.
  */
-export type BaseAuthOptions = {
+type BaseAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
@@ -88,22 +88,14 @@ type CustomVerifierAuthOptions<Req> = BaseAuthOptions & {
 };
 
 /**
- * The options of every adapter's auth entry point, for the framework's request type `Req`. Without `verifyToken`,
- * Clerk verifies each token, and `resourceUrl` is required as its audience. With `verifyToken`, that function
- * verifies each token instead, `resourceUrl` is optional, and `clerkClient` is not allowed.
+ * Base for each adapter's `McpAuthOptions`.
  */
 export type MiddlewareAuthOptions<Req> =
   | (BaseAuthOptions & {
-      /**
-       * Required with Clerk, which rejects a token whose `aud` claim does not include the URL for the request's
-       * origin. Otherwise as described on `BaseAuthOptions`.
-       */
       resourceUrl: McpResourceUrl;
       /**
        * The Clerk client that verifies tokens, or a function that returns one, called once for each request, such as
-       * to read the keys when a request arrives. Create the client with both `secretKey` and `publishableKey`:
-       * without a publishable key, every request fails. A client from `@clerk/backend` must be version 3.19.0 or
-       * later, the first with a reliable audience check.
+       * to read the keys when a request arrives.
        */
       clerkClient?:
         | ClerkOAuthClient
@@ -114,10 +106,7 @@ export type MiddlewareAuthOptions<Req> =
   | CustomVerifierAuthOptions<Req>;
 
 /**
- * The options of every adapter's `protectedResourceMetadataHandler`: the adapter's `McpAuthOptions`, all optional,
- * plus `properties`, so one object can be passed to both. The handler reads `resourceUrl`, `requiredScopes`,
- * `challengeScopes`, and `properties`, and ignores the adapter's other `McpAuthOptions` keys: `clerkClient` and
- * `verifyToken` in every adapter, and `onAuthFailure` in Next.js.
+ * Base for each adapter's `ProtectedResourceMetadataOptions`.
  */
 export type ProtectedResourceMetadataOptions<
   AuthOptions extends BaseAuthOptions = BaseAuthOptions,
@@ -146,14 +135,14 @@ const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set<
 ]);
 
 // What `bearerAuthenticator` decides for a request: let it through, with `authInfo` `undefined` for a request without
-// a token that `publicAccess` let through, or answer it. `failure` is `undefined` only for the 405 to a GET on a
-// server whose handshake is public, which is not an auth failure.
+// a token that `publicAccess` let through, or answer it. `failure` is `undefined` only for the 400 to a request
+// without a URL and the 405 to a GET on a server whose handshake is public, which are not auth failures.
 type BearerResult =
   | { ok: true; authInfo: (AuthInfo & { resourceMetadataUrl: string }) | undefined }
   | {
       ok: false;
       failure: McpAuthFailure | undefined;
-      status: 401 | 403 | 405 | 421;
+      status: 400 | 401 | 403 | 405 | 421;
       headers: Record<string, string>;
       body: typeof methodNotAllowed.body | { error: string };
     };
@@ -528,16 +517,14 @@ export function assertVerifierOrResourceUrl(options: unknown, message: string) {
 }
 
 /**
- * The auth check of an adapter's entry point, made at startup: `clerkClient` is checked here, and the work that depends
- * only on the options is done once. For each request it resolves the token verifier first: with `verifyToken`, that
- * function with the request; otherwise the Clerk client, before any token is read, so a missing client is thrown as it
- * is, on a request with or without a token, instead of as the `cause` of an `McpAuthError` once a token arrives.
+ * The auth check of an adapter's entry point. `clerkClient` is checked at startup. Each request resolves its token
+ * verifier first, the Clerk client before any token is read, so a missing client throws as it is, then is checked.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param options - The entry point's options, already checked
  * @param defaultClient - Returns the adapter's default client for a request, used without `clerkClient`
  * @param defaultName - The default client, as the message names it, such as `clerkClient from '@clerk/express'`
- * @returns A function that takes the framework's request and returns its check, which resolves to the
- * `bearerAuthenticator` result, or to `serverError` when the token could not be verified at all
+ * @returns The check, resolving to the `bearerAuthenticator` result, or to `serverError` when the token could not
+ * be verified at all
  */
 export function createBearerAuth<Req>(
   caller: string,
@@ -561,7 +548,10 @@ export function createBearerAuth<Req>(
   }
   const authenticate = bearerAuthenticator(options);
 
-  return async (request: Req) => {
+  return async (
+    request: Req,
+    input: Omit<BearerRequest, 'verifyToken'>,
+  ): Promise<BearerResult | { ok: false; serverError: McpAuthError }> => {
     const custom = options.verifyToken;
     // The Clerk branch always has a `resourceUrl`, so a resource was matched, or the request answered with a 421,
     // before a token is verified
@@ -569,17 +559,12 @@ export function createBearerAuth<Req>(
     const verifyToken: TokenVerifier = custom
       ? (token) => custom(token, request)
       : (token, resource) => verifyClerkOAuthToken(client!, token, resource!);
-
-    return async (
-      input: Omit<BearerRequest, 'verifyToken'>,
-    ): Promise<BearerResult | { ok: false; serverError: McpAuthError }> => {
-      try {
-        return await authenticate({ ...input, verifyToken });
-      } catch (error) {
-        if (!(error instanceof McpAuthError)) throw error;
-        return { ok: false, serverError: error };
-      }
-    };
+    try {
+      return await authenticate({ ...input, verifyToken });
+    } catch (error) {
+      if (!(error instanceof McpAuthError)) throw error;
+      return { ok: false, serverError: error };
+    }
   };
 }
 
@@ -721,8 +706,7 @@ function resourceFromMetadataUrl(metadataUrl: string): string {
 }
 
 /**
- * The status, headers, and JSON body a metadata handler sends. A `body` of `null` is the CORS preflight answer,
- * sent without a body.
+ * The status, headers, and JSON body a metadata handler sends.
  */
 export type MetadataAnswer = {
   status: 200 | 400 | 421 | 502;
@@ -731,17 +715,13 @@ export type MetadataAnswer = {
 };
 
 /**
- * A metadata request, as the adapter reads it: its method, which only an adapter that answers the CORS preflight
- * itself passes, and the publishable key from the app's environment, with the variable's name for the error when it
- * is missing or invalid, which is thrown to the framework.
+ * A metadata request, as the adapter reads it: the publishable key from the app's environment, with the variable's
+ * name for the error when it is missing or invalid, which is thrown to the framework.
  */
 type MetadataRequest = {
-  method: string | undefined;
   publishableKey: string | undefined;
   keyName?: string | undefined;
 };
-
-const preflightAnswer: MetadataAnswer = { status: 200, headers: metadataCorsHeaders, body: null };
 
 /**
  * The answer every `protectedResourceMetadataHandler` gives a request: the metadata with `metadataResponseHeaders`,
@@ -757,7 +737,6 @@ const preflightAnswer: MetadataAnswer = { status: 200, headers: metadataCorsHead
 export function protectedResourceMetadataAnswer(
   { resourceUrl, requiredScopes, challengeScopes, properties }: ProtectedResourceMetadataOptions,
   {
-    method,
     publishableKey,
     keyName = 'CLERK_PUBLISHABLE_KEY',
     url,
@@ -765,7 +744,6 @@ export function protectedResourceMetadataAnswer(
     url: string | undefined;
   },
 ): MetadataAnswer {
-  if (method === 'OPTIONS') return preflightAnswer;
   const authServerUrl = requirePublishableKey(publishableKey, keyName);
   if (url === undefined) {
     return { status: 400, headers: metadataCorsHeaders, body: { error: 'invalid_request' } };
@@ -794,11 +772,9 @@ export function protectedResourceMetadataAnswer(
  * @param request - The request
  */
 export async function authorizationServerMetadataAnswer({
-  method,
   publishableKey,
   keyName = 'CLERK_PUBLISHABLE_KEY',
 }: MetadataRequest): Promise<MetadataAnswer> {
-  if (method === 'OPTIONS') return preflightAnswer;
   requirePublishableKey(publishableKey, keyName);
   try {
     const metadata = await fetchAuthorizationServerMetadata({
@@ -862,8 +838,9 @@ type BearerRequest = {
   authorization: string | undefined;
   /**
    * The URL the request was made to, used to pick a listed `resourceUrl`, or to derive one when it is not set.
+   * `undefined` when the request has none, which gets a 400.
    */
-  requestUrl: string;
+  requestUrl: string | undefined;
   /**
    * The request's HTTP method, which `publicAccess` needs: only a POST carries JSON-RPC messages.
    */
@@ -907,12 +884,6 @@ export function bearerAuthenticator({
     requiredScopes,
     challengeScopes: extraChallengeScopes,
   });
-  // The listed URL for each origin, parsed once here rather than on each request
-  const listed =
-    typeof resourceUrl === 'object'
-      ? new Map(resourceUrl.map((url) => [new URL(url).origin, url]))
-      : undefined;
-
   return async ({
     authorization,
     requestUrl,
@@ -920,6 +891,17 @@ export function bearerAuthenticator({
     body,
     verifyToken,
   }: BearerRequest): Promise<BearerResult> => {
+    // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
+    // error, or derive a challenge for `http://undefined`
+    if (requestUrl === undefined) {
+      return {
+        ok: false,
+        failure: undefined,
+        status: 400,
+        headers: {},
+        body: { error: 'invalid_request' },
+      };
+    }
     let resourceMetadataUrl: string;
     // The resource a token must be for, when `resourceUrl` names it. A URL derived from the request is not checked:
     // it can be an internal URL that no token names.
@@ -927,7 +909,7 @@ export function bearerAuthenticator({
     if (resourceUrl === undefined) {
       resourceMetadataUrl = requestResourceMetadataUrl(requestUrl);
     } else {
-      const matched = listed ? listed.get(new URL(requestUrl).origin) : (resourceUrl as string);
+      const matched = matchResourceUrl(resourceUrl, requestUrl);
       if (!matched) return fail({ reason: 'misdirected_request' }, 421, 'misdirected_request');
       resourceMetadataUrl = resourceMetadataUrlFor(matched);
       expectedResource = matched;

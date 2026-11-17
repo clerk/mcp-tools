@@ -43,8 +43,8 @@ export * from '../server';
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
  * its audience, and `clerkClient` defaults to one built from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the
- * app's environment. With `verifyToken`, that
- * function verifies each token with the Hono context, `resourceUrl` is optional, and `clerkClient` is not allowed.
+ * app's environment. With `verifyToken`, that function verifies each token with the Hono context, `resourceUrl` is
+ * optional, and `clerkClient` is not allowed.
  */
 export type McpAuthOptions = MiddlewareAuthOptions<Context>;
 
@@ -62,15 +62,11 @@ export type ProtectedResourceMetadataOptions =
  */
 interface WebStandardStreamableHttpTransport {
   /**
-   * Handles one MCP request.
-   * @param request - The incoming request
-   * @param options - The auth info of the request's verified token, if any
-   * @returns The response to send
+   * Handles one MCP request, with the auth info of its verified token, if any, and returns the response.
    */
   handleRequest(request: Request, options: { authInfo: AuthInfo | undefined }): Promise<Response>;
   /**
    * Closes the transport.
-   * @returns A promise that resolves once the transport is closed
    */
   close(): Promise<void>;
 }
@@ -146,11 +142,7 @@ async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
  * A Hono handler that serves RFC 9728 protected resource metadata for a Clerk instance, using the publishable key in
  * the `CLERK_PUBLISHABLE_KEY` environment variable. Mount it at the path `mcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
- * @param options - The options you give `mcpAuth`, and `properties`, additional metadata such as `resource_name`,
- * which overrides the generated metadata. `resourceUrl` makes the metadata's `resource` the URL `mcpAuth` checks;
- * without it, the `resource` is the URL the metadata route was requested at, without the well-known path.
- * `scopes_supported` lists `requiredScopes` then `challengeScopes`, unless `properties` sets it, and then that list
- * must include each of them.
+ * @param options - See `ProtectedResourceMetadataOptions`
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
  * `CLERK_PUBLISHABLE_KEY` is not set.
  * @example
@@ -166,9 +158,8 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (c: Context) => {
     if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
-    // Hono always has a URL, so there is no 400, and without a method there is no preflight answer
+    // Hono always has a URL, so there is no 400
     const answer = protectedResourceMetadataAnswer(options, {
-      method: undefined,
       publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
       url: c.req.url,
     });
@@ -195,7 +186,6 @@ export function authorizationServerMetadataHandler() {
   return async (c: Context) => {
     if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
     const answer = await authorizationServerMetadataAnswer({
-      method: undefined,
       publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
     });
     return c.json(answer.body, { status: answer.status as 200 | 502, headers: answer.headers });
@@ -249,7 +239,7 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  */
 export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   assertMiddlewareAuthOptions(options);
-  const authFor = createBearerAuth(
+  const authenticate = createBearerAuth(
     'mcpAuth',
     options,
     (c: Context) => envClerkClient(requireClerkKeys(c)),
@@ -257,8 +247,7 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
   );
 
   return async (c: Context, next: Next) => {
-    const authenticate = await authFor(c);
-    const result = await authenticate({
+    const result = await authenticate(c, {
       authorization: c.req.header('authorization'),
       requestUrl: c.req.url,
       method: c.req.method,
