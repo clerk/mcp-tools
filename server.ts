@@ -118,13 +118,6 @@ export class McpAuthError extends Error {
 }
 
 /**
- * The exact URL clients use for an MCP endpoint, or a list of them, one for each origin, for a server that answers on
- * several hostnames. With a list, a request uses the URL with its own origin, and a request to any other origin gets a
- * 421 Misdirected Request (RFC 9110 section 15.5.20).
- */
-export type McpResourceUrl = string | readonly string[];
-
-/**
  * A protocol method that `publicAccess.methods` can open to requests without a token. `initialize` is the handshake
  * of the protocol revisions before 2026-07-28 and covers its `notifications/initialized` notification, and
  * `server/discover` replaces it from 2026-07-28. The methods that run something, `tools/call`, `resources/read`, and
@@ -380,26 +373,7 @@ export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is Cle
 
 export { requireAdditionalScopes } from './scope-challenge';
 
-/**
- * The URL from `resourceUrl` that a request to `requestUrl` is for: `resourceUrl` itself when it is one URL, or the
- * listed URL with the request's origin. `undefined` when no listed URL has that origin. This is the rule `mcpAuth`,
- * `withClerkMcpAuth`, and `protectedResourceMetadataHandler` apply to their `resourceUrl`, so use it in a protected resource
- * metadata route of your own, such as one for another authorization server, to keep its `resource` identical to the
- * URL they check, and answer `421` when it returns `undefined`.
- * @example
- * ```ts
- * const resource = matchResourceUrl(['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'], request.url);
- * if (!resource) return new Response(null, { status: 421 });
- * ```
- */
-export function matchResourceUrl(
-  resourceUrl: string | readonly string[],
-  requestUrl: string | URL,
-): string | undefined {
-  if (typeof resourceUrl === 'string') return resourceUrl;
-  const { origin } = new URL(requestUrl);
-  return resourceUrl.find((url) => URL.canParse(url) && new URL(url).origin === origin);
-}
+export { type McpResourceUrl, matchResourceUrl } from './resource-url';
 
 /**
  * CORS headers for OAuth metadata endpoints

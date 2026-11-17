@@ -4,19 +4,18 @@ import type { AuthInfo } from './mcp-types';
 import { copyClerkVerification } from './clerk-auth-info';
 import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
+import { type McpResourceUrl, assertResourceUrls, matchResourceUrl } from './resource-url';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
 import {
   type ClerkOAuthClient,
   type McpAuthFailure,
   type McpPublicMethod,
-  type McpResourceUrl,
   type PublicAccess,
   McpAuthError,
   McpTokenVerificationError,
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
   isClerkAuthInfo,
-  matchResourceUrl,
   metadataCorsHeaders,
   toClerkAuthInfo,
 } from './server';
@@ -431,31 +430,6 @@ export function assertMcpAuthOptions(
   assertPublicAccess(caller, options?.publicAccess);
 }
 
-// Each URL is checked once here, so a request only has to find the one with its origin.
-function assertResourceUrls(caller: string, resourceUrl: unknown) {
-  const urls: unknown = typeof resourceUrl === 'string' ? [resourceUrl] : resourceUrl;
-  if (!Array.isArray(urls) || urls.length === 0) {
-    throw new Error(`Clerk error: ${caller} resourceUrl must be a URL or a non-empty list of URLs`);
-  }
-
-  const origins = new Set<string>();
-  for (const url of urls) {
-    if (typeof url !== 'string' || !isResourceUrl(url)) {
-      throw new Error(
-        `Clerk error: ${caller} resourceUrl must be an absolute http or https URL without credentials or a fragment`,
-      );
-    }
-    // The request's origin picks the URL, so two URLs with one origin would leave the choice ambiguous
-    const { origin } = new URL(url);
-    if (origins.has(origin)) {
-      throw new Error(
-        `Clerk error: ${caller} resourceUrl lists more than one URL for ${origin}. List one URL for each origin`,
-      );
-    }
-    origins.add(origin);
-  }
-}
-
 /**
  * Throws a `Clerk error:` message unless `options` is `undefined` or an object with only the keys of the adapter's
  * `mcpAuth` options and `properties`, then checks `resourceUrl` and the scopes as `mcpAuth` does, that `properties`
@@ -506,14 +480,6 @@ export function assertProtectedResourceMetadataOptions(
 // challenge's `scope` and the metadata's `scopes_supported` both come from here, so the two can't drift apart.
 function requestedScopes({ requiredScopes = [], challengeScopes = [] }: BaseAuthOptions): string[] {
   return [...new Set([...requiredScopes, ...challengeScopes])];
-}
-
-// A URL with another scheme, such as `mailto:`, has no origin for the challenge, `new Request` throws on a URL with
-// credentials, and a resource identifier must not have a fragment (RFC 8707 section 2).
-function isResourceUrl(value: string): boolean {
-  if (!URL.canParse(value) || value.includes('#')) return false;
-  const url = new URL(value);
-  return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password;
 }
 
 /**
