@@ -104,7 +104,7 @@ For framework-specific implementations, see:
 
 A [Server Card](https://github.com/modelcontextprotocol/ext-server-card) is a public JSON document that tells an MCP client what your server is and where to connect, before it connects or signs in. Server Cards are a **beta** MCP extension, and so is this API: it follows the extension as pinned at commit `526201b`, and publishing a card does not mean every MCP host will find or use it.
 
-`generateServerCard` builds a card from a supported subset of the extension, and each adapter's `serverCardHandler` serves one (Hono today, Express and Next.js to follow):
+`generateServerCard` builds a card from a supported subset of the extension, and each adapter's `serverCardHandler` serves one (Hono and Next.js today, Express to follow):
 
 - **Required:** `name`, in reverse-DNS form with one slash, such as `com.example/weather`; `version`, one version such as `1.2.0`, not a range; and a `description` of 1 to 100 characters.
 - **Optional:** `title`, `websiteUrl`, `icons`, `repository`, and `_meta`. Each `_meta` key needs a namespace of your own, such as `com.example/tier` (prefixes such as `modelcontextprotocol.io/` and `mcp.dev/` are reserved for MCP), and each value must be JSON.
@@ -133,12 +133,13 @@ The extension recommends serving the card at your MCP endpoint's URL followed by
 For framework-specific implementations, see:
 
 - [Hono implementation](./hono/README.md#servercardhandleroptions)
+- [Next.js implementation](./next/README.md#servercardhandleroptions)
 
 #### Discovery: AI Catalogs (beta)
 
 An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, usually at `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the catalog specification as pinned at commit `4d522ea`, and publishing a catalog does not mean every MCP host will find or use it.
 
-`generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono today, Express and Next.js to follow):
+`generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono and Next.js today, Express to follow):
 
 - **Required:** `entries`, a non-empty list of `{ identifier, url }`, one for each Server Card.
 - **Generated:** `specVersion: "1.0"`, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, trust manifests, signatures, and extensions are not supported.
@@ -167,6 +168,7 @@ The handlers answer as the Server Card handlers do, with the catalog's media typ
 For framework-specific implementations, see:
 
 - [Hono implementation](./hono/README.md#aicataloghandleroptions)
+- [Next.js implementation](./next/README.md#aicataloghandleroptions)
 
 #### Creating an MCP endpoint
 
