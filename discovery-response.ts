@@ -109,10 +109,14 @@ function discoveryResponder(
       `Clerk error: ${caller} maxAge must be a whole number of seconds, 0 or more, or left out for 3600`,
     );
   }
-  const resourceUrl = config.resourceUrl as McpResourceUrl;
-  // RFC 9111 section 5.2.2.9: `public` lets a shared cache reuse the document for a request with an Authorization
-  // header (section 3.5). With 0, `no-cache` lets caches store it but not reuse it without revalidating (section
-  // 5.2.2.4), which the ETag makes cheap.
+  // A copy, so a list changed after setup can't select a URL without a built document
+  const resourceUrl: McpResourceUrl =
+    typeof config.resourceUrl === 'string'
+      ? config.resourceUrl
+      : [...(config.resourceUrl as string[])];
+  // RFC 9111 section 5.2.2.9: `public` explicitly marks the document cacheable, including for a shared cache and a
+  // request with an Authorization header (section 3.5). With 0, `no-cache` has a cache revalidate before each reuse
+  // (section 5.2.2.4), which the ETag makes cheap.
   const cacheControl = maxAge === 0 ? 'public, no-cache' : `public, max-age=${maxAge}`;
 
   const representations = new Map(
@@ -168,7 +172,7 @@ function weakEtag(body: string): string {
 }
 
 // One list element: optional whitespace, then an optional entity-tag, then a comma or the end. Empty elements are
-// skipped (RFC 9110 section 5.6.1). An opaque-tag may itself contain a comma (section 8.8.3).
+// skipped (RFC 9110 section 5.6.1.2). An opaque-tag may itself contain a comma (section 8.8.3).
 const LIST_ELEMENT = /^[ \t]*(?:(?:W\/)?("[\x21\x23-\x7e\x80-\xff]*"))?[ \t]*(?:,|$)/;
 
 /**

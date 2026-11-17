@@ -1687,6 +1687,26 @@ describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
     });
   });
 
+  test('keeps the listed URLs it was created with when the list changes later', async () => {
+    const lacking = ['https://other.example.dev/mcp'];
+    const lackingApp = mount({ ...card, resourceUrl: lacking });
+    let listed: string[] = [];
+    const listedApp = mount((seen: string) => {
+      listed = ['https://other.example.dev/mcp', `${seen}/mcp`];
+      return { ...card, resourceUrl: listed };
+    });
+
+    lacking.push(`${origin}/mcp`);
+    listed[1] = 'https://evil.example/mcp';
+
+    expect((await serve(lackingApp, CARD_PATH)).status).toBe(421);
+    const res = await serve(listedApp, CARD_PATH);
+    expect(res.status).toBe(200);
+    expect((res.body as { remotes: unknown }).remotes).toEqual([
+      { type: 'streamable-http', url: `${res.origin}/mcp` },
+    ]);
+  });
+
   test('serves a request carrying a token without Clerk keys, a verifier, or any fetch', async () => {
     vi.unstubAllEnvs();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
