@@ -2,6 +2,7 @@
 // cache policy, the validator and conditional requests, and the 421 for an origin no listed URL has. The adapters only
 // read the request and send the answer. It imports nothing from `./server`, which re-exports the builders.
 // This module is not a package entry point.
+import { isPlainObject } from './discovery-options';
 import { type McpResourceUrl, assertResourceUrls, matchResourceUrl } from './resource-url';
 import { type AICatalogOptions, buildAICatalog } from './ai-catalog';
 import { type ServerCardOptions, buildServerCard } from './server-card';
@@ -74,15 +75,15 @@ const discoveryCorsHeaders = {
   'Access-Control-Max-Age': '86400',
 };
 
-const json = (
+// The JSON error a request gets, with its body even for HEAD: the responder drops a HEAD answer's body in one place
+const errorAnswer = (
   status: 400 | 405 | 421,
   error: string,
-  head: boolean,
-  headers = {},
+  headers: Record<string, string> = {},
 ): DiscoveryAnswer => ({
   status,
   headers: { ...discoveryCorsHeaders, 'Content-Type': 'application/json', ...headers },
-  body: head ? null : JSON.stringify({ error }),
+  body: JSON.stringify({ error }),
 });
 
 /**
@@ -93,7 +94,7 @@ const json = (
  * @returns The function that answers each request
  */
 export function serverCardResponder(caller: string, options: unknown) {
-  if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+  if (!isPlainObject(options)) {
     throw new Error(
       `Clerk error: ${caller} takes an options object with name, version, description, and resourceUrl, as ${caller}({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })`,
     );
@@ -128,7 +129,7 @@ export function serverCardResponder(caller: string, options: unknown) {
  */
 export function aiCatalogResponder(caller: string, options: unknown) {
   // Anything but an object goes to the builder as it is, which names the options it takes
-  const isObject = typeof options === 'object' && options !== null && !Array.isArray(options);
+  const isObject = isPlainObject(options);
   const { maxAge, ...catalog } = isObject ? (options as AICatalogHandlerOptions) : {};
   return discoveryResponder(caller, {
     maxAge,
@@ -177,20 +178,19 @@ function discoveryResponder(
     }),
   );
 
-  return ({ method, url, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
+  const answer = ({ method, url, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
     if (method === 'OPTIONS') {
       return { status: 200, headers: { ...discoveryCorsHeaders, Allow: ALLOW }, body: null };
     }
-    const head = method === 'HEAD';
-    if (method !== 'GET' && !head) {
-      return json(405, 'method_not_allowed', false, { Allow: ALLOW });
+    if (method !== 'GET' && method !== 'HEAD') {
+      return errorAnswer(405, 'method_not_allowed', { Allow: ALLOW });
     }
     // Without a URL there is no origin to select by, so this is answered as protected resource metadata is
-    if (url === undefined) return json(400, 'invalid_request', head);
+    if (url === undefined) return errorAnswer(400, 'invalid_request');
     const key = select(url);
     const representation = key === undefined ? undefined : representations.get(key);
     // RFC 9110 section 15.5.20. No representation is selected, so If-None-Match is not evaluated.
-    if (representation === undefined) return json(421, 'misdirected_request', head);
+    if (representation === undefined) return errorAnswer(421, 'misdirected_request');
     const { body, etag } = representation;
 
     const validators = { ...discoveryCorsHeaders, ETag: etag, 'Cache-Control': cacheControl };
@@ -198,11 +198,13 @@ function discoveryResponder(
     if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
       return { status: 304, headers: validators, body: null };
     }
-    return {
-      status: 200,
-      headers: { ...validators, 'Content-Type': config.mediaType },
-      body: head ? null : body,
-    };
+    return { status: 200, headers: { ...validators, 'Content-Type': config.mediaType }, body };
+  };
+
+  // HEAD gets the headers GET would, without the content
+  return (request: DiscoveryRequest): DiscoveryAnswer => {
+    const response = answer(request);
+    return request.method === 'HEAD' ? { ...response, body: null } : response;
   };
 }
 

@@ -1,6 +1,13 @@
 // The Server Card builder: the supported subset of the MCP Server Card extension, pinned at
 // modelcontextprotocol/ext-server-card@526201bbc80231daa40ffcdecfc9da4e54e5dc93. `./server` re-exports its public
 // names, so it must not import `./server`. This module is not a package entry point.
+import {
+  type Fail,
+  assertKnownKeys,
+  deepFreeze,
+  failFor,
+  isPlainObject,
+} from './discovery-options';
 import { isResourceUrl } from './resource-url';
 
 /**
@@ -186,26 +193,20 @@ const RESERVED_META_PREFIX = /(^|\.)(modelcontextprotocol|mcp)\.[^.]+$/;
  * @returns The card, frozen. It throws a `Clerk error:` naming the first option the card cannot have.
  */
 export function buildServerCard(caller: string, options: unknown): ServerCard {
-  const fail = (message: string): never => {
-    throw new Error(`Clerk error: ${caller} ${message}`);
-  };
+  const fail = failFor(caller);
   if (!isPlainObject(options)) {
     return fail(
       "takes an options object with name, version, description, and resourceUrl, as generateServerCard({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })",
     );
   }
-  for (const key of Object.keys(options)) {
-    if (generatedKeys.has(key)) {
-      fail(
-        `cannot set ${key}: the card's $schema and its streamable HTTP remote at resourceUrl are generated`,
-      );
-    }
-    if (!optionKeys.has(key)) {
-      fail(
-        `does not take ${key}. A Server Card supports name, version, description, resourceUrl, title, websiteUrl, icons, repository, and _meta`,
-      );
-    }
-  }
+  assertKnownKeys(fail, options, {
+    allowed: optionKeys,
+    generated: generatedKeys,
+    generatedMessage: (key) =>
+      `cannot set ${key}: the card's $schema and its streamable HTTP remote at resourceUrl are generated`,
+    unknownMessage: (key) =>
+      `does not take ${key}. A Server Card supports name, version, description, resourceUrl, title, websiteUrl, icons, repository, and _meta`,
+  });
   const { name, version, description, resourceUrl, title, websiteUrl, icons, repository, _meta } =
     options;
 
@@ -267,19 +268,14 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
   );
 }
 
-function assertText(
-  fail: (message: string) => never,
-  key: string,
-  value: unknown,
-  optional: boolean,
-) {
+function assertText(fail: Fail, key: string, value: unknown, optional: boolean) {
   if (optional && value === undefined) return;
   if (typeof value !== 'string' || value.length === 0 || value.length > 100) {
     fail(`${key} must be 1 to 100 characters`);
   }
 }
 
-function assertMeta(fail: (message: string) => never, meta: unknown) {
+function assertMeta(fail: Fail, meta: unknown) {
   if (!isPlainObject(meta)) fail("_meta must be an object, such as { 'com.example/tier': 'free' }");
   for (const [key, value] of Object.entries(meta as object)) {
     const match = META_KEY.exec(key);
@@ -342,16 +338,4 @@ function isHttpUrl(value: unknown): value is string {
 // and the schema's remote pattern allows no whitespace
 function isStaticHttpUrl(value: unknown): value is string {
   return typeof value === 'string' && isResourceUrl(value) && !/[\s{}]/.test(value);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== 'object' || value === null) return value;
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
 }

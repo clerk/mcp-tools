@@ -138,7 +138,7 @@ export function metadataCorsHandler(): () => Response {
  */
 export function serverCardHandler(options: ServerCardHandlerOptions): (req: Request) => Response {
   assertDiscoveryHandlerCalled('serverCardHandler', options);
-  return discoveryRoute(serverCardResponder('serverCardHandler', options));
+  return discoveryHandler(serverCardResponder('serverCardHandler', options));
 }
 
 /**
@@ -178,7 +178,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  */
 export function aiCatalogHandler(options: AICatalogHandlerOptions): (req: Request) => Response {
   assertDiscoveryHandlerCalled('aiCatalogHandler', options);
-  return discoveryRoute(aiCatalogResponder('aiCatalogHandler', options));
+  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
 }
 
 // Exported uncalled as a method, the factory is called with the request, which would otherwise fail on a missing option
@@ -190,7 +190,7 @@ function assertDiscoveryHandlerCalled(caller: string, options: unknown) {
   }
 }
 
-function discoveryRoute(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
+function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
   // The request's own URL selects a listed resourceUrl, as for `protectedResourceMetadataHandler`; Host and
   // X-Forwarded-* are never read. The serialized body is sent as it is, so it is the one the ETag was computed from.
   return (req: Request): Response => {

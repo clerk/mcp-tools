@@ -1,6 +1,7 @@
 // The AI Catalog builder: a catalog of linked MCP Server Cards, the supported subset of the AI Catalog specification
 // pinned at Agent-Card/ai-catalog@4d522ea41c025118e55c7e689b72cc15bf332937. `./server` re-exports its public names, so
 // it must not import `./server`. This module is not a package entry point.
+import { assertKnownKeys, deepFreeze, failFor, isPlainObject } from './discovery-options';
 import { isResourceUrl } from './resource-url';
 
 /**
@@ -86,6 +87,11 @@ export function generateAICatalog(options: AICatalogOptions): AICatalog {
   return buildAICatalog('generateAICatalog', options);
 }
 
+const catalogKeys = new Set(['entries']);
+const generatedCatalogKeys = new Set(['specVersion']);
+const entryKeys = new Set(['identifier', 'url']);
+const generatedEntryKeys = new Set(['type']);
+
 /**
  * Validates the options of `generateAICatalog` or an `aiCatalogHandler` and generates the catalog, a frozen copy that
  * shares nothing with the options.
@@ -94,24 +100,20 @@ export function generateAICatalog(options: AICatalogOptions): AICatalog {
  * @returns The catalog, frozen. It throws a `Clerk error:` naming the first option the catalog cannot have.
  */
 export function buildAICatalog(caller: string, options: unknown): AICatalog {
-  const fail = (message: string): never => {
-    throw new Error(`Clerk error: ${caller} ${message}`);
-  };
+  const fail = failFor(caller);
   if (!isPlainObject(options)) {
     return fail(
       "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' }] })",
     );
   }
-  for (const key of Object.keys(options)) {
-    if (key === 'specVersion') {
-      fail("cannot set specVersion: the catalog's specVersion and each entry's type are generated");
-    }
-    if (key !== 'entries') {
-      fail(
-        `does not take ${key}. An AI Catalog here supports only entries, each linking one Server Card by identifier and url`,
-      );
-    }
-  }
+  assertKnownKeys(fail, options, {
+    allowed: catalogKeys,
+    generated: generatedCatalogKeys,
+    generatedMessage: () =>
+      "cannot set specVersion: the catalog's specVersion and each entry's type are generated",
+    unknownMessage: (key) =>
+      `does not take ${key}. An AI Catalog here supports only entries, each linking one Server Card by identifier and url`,
+  });
   const { entries } = options;
   if (!Array.isArray(entries) || entries.length === 0 || !entries.every(isPlainObject)) {
     return fail(
@@ -122,16 +124,14 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   const identifiers = new Set<string>();
   const linked = (entries as Record<string, unknown>[]).map((entry, index) => {
     const at = `entries[${index}]`;
-    for (const key of Object.keys(entry)) {
-      if (key === 'type') {
-        fail(`cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`);
-      }
-      if (key !== 'identifier' && key !== 'url') {
-        fail(
-          `${at} does not take ${key}. An entry supports identifier and url only: inline documents, other artifact types, versions, trust manifests, and extensions are not supported`,
-        );
-      }
-    }
+    assertKnownKeys(fail, entry, {
+      allowed: entryKeys,
+      generated: generatedEntryKeys,
+      generatedMessage: () =>
+        `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
+      unknownMessage: (key) =>
+        `${at} does not take ${key}. An entry supports identifier and url only: inline documents, other artifact types, versions, trust manifests, and extensions are not supported`,
+    });
     const { identifier, url } = entry;
     if (!isIdentifier(identifier)) {
       fail(
@@ -162,16 +162,4 @@ function isIdentifier(value: unknown): value is string {
   if (!URL.canParse(value)) return true;
   const { protocol } = new URL(value);
   return protocol !== 'http:' && protocol !== 'https:';
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== 'object' || value === null) return value;
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
 }
