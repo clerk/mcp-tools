@@ -382,6 +382,13 @@ export {
   type ServerCardRepository,
   generateServerCard,
 } from './server-card';
+export {
+  type AICatalog,
+  type AICatalogEntry,
+  type AICatalogEntryOptions,
+  type AICatalogOptions,
+  generateAICatalog,
+} from './ai-catalog';
 
 /**
  * CORS headers for OAuth metadata endpoints

@@ -1,9 +1,11 @@
 import { describe, expectTypeOf, test } from 'vitest';
 
 import {
+  type AICatalog,
   type ClerkAuthInfo,
   type ClerkOAuthAuth,
   type ServerCard,
+  generateAICatalog,
   generateProtectedResourceMetadata,
   generateServerCard,
 } from './server';
@@ -76,5 +78,36 @@ describe('generateServerCard types', () => {
     generateServerCard({ ...required, _meta: { 'com.example/x': () => 1 } });
     // @ts-expect-error a theme is light or dark
     generateServerCard({ ...required, icons: [{ src: 'i.png', theme: 'blue' }] });
+  });
+});
+
+describe('generateAICatalog types', () => {
+  const entry = {
+    identifier: 'urn:air:example.com:mcp:weather',
+    url: 'https://example.com/mcp/server-card',
+  };
+
+  test('takes linked entries and returns a read-only catalog of Server Cards', () => {
+    const catalog = generateAICatalog({ entries: [entry] });
+    expectTypeOf(catalog).toEqualTypeOf<AICatalog>();
+    expectTypeOf(catalog.specVersion).toEqualTypeOf<'1.0'>();
+    expectTypeOf(catalog.entries[0]!.type).toEqualTypeOf<'application/mcp-server-card+json'>();
+    // @ts-expect-error the catalog is read-only
+    catalog.entries[0]!.url = 'https://evil.example/card';
+  });
+
+  test('rejects generated fields and members outside the linked-card subset', () => {
+    // @ts-expect-error specVersion is generated
+    generateAICatalog({ entries: [entry], specVersion: '1.0' });
+    // @ts-expect-error no host information
+    generateAICatalog({ entries: [entry], host: { displayName: 'Example' } });
+    // @ts-expect-error each entry's type is generated
+    generateAICatalog({ entries: [{ ...entry, type: 'application/mcp-server-card+json' }] });
+    // @ts-expect-error no inline documents
+    generateAICatalog({ entries: [{ identifier: entry.identifier, data: {} }] });
+    // @ts-expect-error no trust manifests
+    generateAICatalog({ entries: [{ ...entry, trustManifest: {} }] });
+    // @ts-expect-error an entry needs its url
+    generateAICatalog({ entries: [{ identifier: entry.identifier }] });
   });
 });

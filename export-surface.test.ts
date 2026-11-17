@@ -15,6 +15,7 @@ const SERVER: Surface = {
     'McpAuthError',
     'McpTokenVerificationError',
     'fetchAuthorizationServerMetadata',
+    'generateAICatalog',
     'generateProtectedResourceMetadata',
     'generateServerCard',
     'isClerkAuthInfo',
@@ -24,6 +25,10 @@ const SERVER: Surface = {
     'toClerkAuthInfo',
   ],
   types: [
+    'AICatalog',
+    'AICatalogEntry',
+    'AICatalogEntryOptions',
+    'AICatalogOptions',
     'ClerkAuthInfo',
     'ClerkOAuthAuth',
     'ClerkOAuthClient',
