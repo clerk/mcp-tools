@@ -197,6 +197,7 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
     const answer = respond({
       method: req.method,
       url: req.url,
+      ifMatch: req.headers.get('if-match'),
       ifNoneMatch: req.headers.get('if-none-match'),
     });
     return new Response(answer.body, { status: answer.status, headers: answer.headers });

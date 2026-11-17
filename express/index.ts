@@ -327,7 +327,8 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
     const { status, headers, body } = respond({
       method: req.method,
       url: getRequestUrl(req),
-      // Node joins repeated If-None-Match headers with commas
+      // Node joins repeated If-Match and If-None-Match headers with commas
+      ifMatch: req.get('if-match'),
       ifNoneMatch: req.get('if-none-match'),
     });
     // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,

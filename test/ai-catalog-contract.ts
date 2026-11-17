@@ -28,7 +28,7 @@ export function aiCatalogErrors(document: unknown): string[] {
     errors.push('extensions is not a map');
   }
   if (!Array.isArray(document.entries)) return [...errors, 'entries is not an array'];
-  document.entries.forEach((entry: unknown, index) => {
+  Array.from(document.entries).forEach((entry: unknown, index) => {
     const at = `entries[${index}]`;
     if (!isObject(entry)) return errors.push(`${at} is not an object`);
     if (!isText(entry.identifier)) errors.push(`${at}.identifier is not text`);
@@ -40,7 +40,10 @@ export function aiCatalogErrors(document: unknown): string[] {
     for (const key of ['displayName', 'version', 'description', 'updatedAt']) {
       if (entry[key] !== undefined && !isText(entry[key])) errors.push(`${at}.${key} is not text`);
     }
-    if (entry.tags !== undefined && !(Array.isArray(entry.tags) && entry.tags.every(isText))) {
+    if (
+      entry.tags !== undefined &&
+      !(Array.isArray(entry.tags) && Array.from(entry.tags).every(isText))
+    ) {
       errors.push(`${at}.tags is not a list of text`);
     }
     for (const key of ['publisher', 'trustManifest', 'extensions']) {

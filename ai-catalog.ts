@@ -117,7 +117,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   });
   const { entries } = options;
   // The pinned specification: "This array MAY be empty."
-  if (!Array.isArray(entries) || !entries.every(isPlainObject)) {
+  if (!Array.isArray(entries) || !Array.from(entries).every(isPlainObject)) {
     return fail(
       "entries must be a list of { identifier, url }, such as [{ identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' }]",
     );

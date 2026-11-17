@@ -238,7 +238,7 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
   if (websiteUrl !== undefined && !isHttpUrl(websiteUrl)) {
     fail('websiteUrl must be an absolute http or https URL');
   }
-  if (icons !== undefined && !(Array.isArray(icons) && icons.every(isIcon))) {
+  if (icons !== undefined && !(Array.isArray(icons) && Array.from(icons).every(isIcon))) {
     fail(
       "icons must be a list of { src, mimeType?, sizes?, theme? }, each src an http, https, or data: URL and theme 'light' or 'dark'",
     );
@@ -270,7 +270,7 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
 
 function assertText(fail: Fail, key: string, value: unknown, optional: boolean) {
   if (optional && value === undefined) return;
-  if (typeof value !== 'string' || value.length === 0 || value.length > 100) {
+  if (typeof value !== 'string' || value.length === 0 || [...value].length > 100) {
     fail(`${key} must be 1 to 100 characters`);
   }
 }
@@ -307,10 +307,10 @@ function isIcon(icon: unknown): boolean {
   if (!isPlainObject(icon) || !Object.keys(icon).every((key) => iconKeys.has(key))) return false;
   const { src, mimeType, sizes, theme } = icon;
   return (
-    (isHttpUrl(src) || (typeof src === 'string' && src.startsWith('data:') && URL.canParse(src))) &&
+    (isHttpUrl(src) || (isUri(src) && src.startsWith('data:'))) &&
     (mimeType === undefined || typeof mimeType === 'string') &&
     (sizes === undefined ||
-      (Array.isArray(sizes) && sizes.every((size) => typeof size === 'string'))) &&
+      (Array.isArray(sizes) && Array.from(sizes).every((size) => typeof size === 'string'))) &&
     (theme === undefined || theme === 'light' || theme === 'dark')
   );
 }
@@ -328,14 +328,28 @@ function isRepository(repository: unknown): boolean {
   );
 }
 
+// Validate the emitted string, not WHATWG URL's repaired/escaped serialization. RFC 3986 Appendix A permits
+// pchar and / in paths, plus ? in queries/fragments, with square brackets reserved for an authority's IP literal.
+const PCHAR = "-a-zA-Z0-9._~!$&'()*+,;=:@%";
+const URI_PATTERN = new RegExp(
+  `^[a-zA-Z][a-zA-Z0-9+.-]*:(?://[${PCHAR}\\[\\]]*)?[${PCHAR}/]*(?:\\?[${PCHAR}/?]*)?(?:#[${PCHAR}/?]*)?$`,
+);
+
+function isUri(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    URI_PATTERN.test(value) &&
+    !/\s|%(?![a-fA-F0-9]{2})/.test(value) &&
+    URL.canParse(value)
+  );
+}
+
 function isHttpUrl(value: unknown): value is string {
-  if (typeof value !== 'string' || !URL.canParse(value)) return false;
-  const { protocol } = new URL(value);
-  return protocol === 'http:' || protocol === 'https:';
+  return isUri(value) && /^https?:\/\//i.test(value);
 }
 
 // The remote is a URL the client connects to as it is, so it can't look like the extension's `{variable}` templates,
 // and the schema's remote pattern allows no whitespace
 function isStaticHttpUrl(value: unknown): value is string {
-  return typeof value === 'string' && isResourceUrl(value) && !/[\s{}]/.test(value);
+  return isHttpUrl(value) && /^https?:\/\//.test(value) && isResourceUrl(value);
 }

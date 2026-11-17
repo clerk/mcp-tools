@@ -51,13 +51,17 @@ export type DiscoveryRequest = {
    * The request's `If-None-Match` field, its lines joined with commas
    */
   ifNoneMatch: string | null | undefined;
+  /**
+   * The request's `If-Match` field, its lines joined with commas
+   */
+  ifMatch: string | null | undefined;
 };
 
 /**
  * The status, headers, and serialized body an adapter sends, `null` for no body.
  */
 export type DiscoveryAnswer = {
-  status: 200 | 304 | 400 | 405 | 421;
+  status: 200 | 304 | 400 | 405 | 412 | 421;
   headers: Record<string, string>;
   body: string | null;
 };
@@ -65,12 +69,12 @@ export type DiscoveryAnswer = {
 const DEFAULT_MAX_AGE = 3600;
 const ALLOW = 'GET, HEAD, OPTIONS';
 
-// Any origin may read a discovery document, which is public, and revalidate it: If-None-Match is not a CORS-safelisted
-// request header, and ETag is not a safelisted response header
+// Any origin may read a public discovery document and send preconditions: If-Match and If-None-Match are not
+// CORS-safelisted request headers, and ETag is not a safelisted response header
 const discoveryCorsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': ALLOW,
-  'Access-Control-Allow-Headers': 'Content-Type, If-None-Match',
+  'Access-Control-Allow-Headers': 'Content-Type, If-Match, If-None-Match',
   'Access-Control-Expose-Headers': 'ETag',
 };
 
@@ -78,7 +82,7 @@ const discoveryCorsHeaders = {
 // `no-store` keeps every error out of caches (RFC 9111 section 5.2.2.5): without it, a 405 is heuristically cacheable
 // (RFC 9110 section 15.1), and a cache may reuse it with heuristic freshness (RFC 9111 section 4.2.2).
 const errorAnswer = (
-  status: 400 | 405 | 421,
+  status: 400 | 405 | 412 | 421,
   error: string,
   headers: Record<string, string> = {},
 ): DiscoveryAnswer => ({
@@ -169,7 +173,7 @@ function discoveryResponder(
 
   const pick = representationPicker(config.build());
 
-  const answer = ({ method, url, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
+  const answer = ({ method, url, ifMatch, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
     if (method === 'OPTIONS') {
       return { status: 200, headers: { ...discoveryCorsHeaders, Allow: ALLOW }, body: null };
     }
@@ -179,6 +183,12 @@ function discoveryResponder(
     const picked = pick(url);
     if ('status' in picked) return picked;
     const { body, etag } = picked;
+
+    // RFC 9110 sections 13.1.1 and 13.2.2: If-Match precedes If-None-Match and uses strong comparison. Our ETags
+    // are always weak, so no listed tag can match; only * succeeds now that a representation has been selected.
+    if (ifMatch != null && ifMatch.trim() !== '*') {
+      return errorAnswer(412, 'precondition_failed');
+    }
 
     const validators = { ...discoveryCorsHeaders, ETag: etag, 'Cache-Control': cacheControl };
     // RFC 9110 section 15.4.5: a 304 has the ETag and Cache-Control a 200 would have, but no content or Content-Type
@@ -233,7 +243,7 @@ function representationPicker(
     if (url === undefined) return errorAnswer(400, 'invalid_request');
     const key = documents.select(url);
     const representation = key === undefined ? undefined : byUrl.get(key);
-    // RFC 9110 section 15.5.20. No representation is selected, so If-None-Match is not evaluated.
+    // RFC 9110 sections 13.2.1 and 15.5.20. No representation is selected, so preconditions are not evaluated.
     return representation ?? errorAnswer(421, 'misdirected_request');
   };
 }

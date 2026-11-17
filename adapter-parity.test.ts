@@ -1479,11 +1479,11 @@ const discoveryApps = discoveryAdapters.flatMap(([name, mount]) => [
   ] as const,
 ]);
 
-// The discovery CORS headers: any origin may read the document and revalidate it, with If-None-Match and the ETag
+// The discovery CORS headers: any origin may read the document and send If-Match or If-None-Match with the ETag
 const discoveryCors = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, OPTIONS',
-  'access-control-allow-headers': 'Content-Type, If-None-Match',
+  'access-control-allow-headers': 'Content-Type, If-Match, If-None-Match',
   'access-control-expose-headers': 'ETag',
   // The pinned discovery CORS block sets no preflight lifetime
   'access-control-max-age': null,
@@ -1617,6 +1617,55 @@ describe.each(discoveryApps)('%s conditional requests and caching', (_name, moun
     expect(res.body).toMatchObject(doc.served);
   });
 
+  // RFC 9110 section 13.1.1 requires strong comparison: these weak ETags never match a listed tag.
+  test.each([
+    ['another tag', () => '"other"'],
+    ['the weak ETag itself', ({ etag }: { etag: string }) => etag],
+    ['its opaque-tag without W/', ({ opaque }: { opaque: string }) => opaque],
+    ['a list holding it', ({ etag }: { etag: string }) => `"other", ${etag}`],
+    ['an empty field', () => ''],
+  ])('rejects GET and HEAD whose If-Match is %s before If-None-Match', async (_case, header) => {
+    const app = mount(doc.options);
+    const tag = await tagOf(app);
+    for (const method of ['GET', 'HEAD']) {
+      const res = await serveWith(app, doc.path, method, {
+        'if-match': header(tag),
+        'if-none-match': '*',
+      });
+
+      expect(res.status, method).toBe(412);
+      expect(res.body).toEqual(method === 'HEAD' ? null : { error: 'precondition_failed' });
+      expectHeaders(res.headers, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json',
+        etag: null,
+        ...discoveryCors,
+      });
+    }
+  });
+
+  test.each(['GET', 'HEAD'])(
+    'accepts If-Match: * on %s before evaluating If-None-Match',
+    async (method) => {
+      const app = mount(doc.options);
+      const res = await serveWith(app, doc.path, method, { 'if-match': '*' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(method === 'HEAD' ? null : expect.objectContaining(doc.served));
+
+      const unchanged = await serveWith(app, doc.path, method, {
+        'if-match': '*',
+        'if-none-match': '*',
+      });
+      expect(unchanged.status).toBe(304);
+      expect(unchanged.body).toBeNull();
+    },
+  );
+
+  test.each(['OPTIONS', 'POST'])('does not evaluate If-Match on %s', async (method) => {
+    const res = await serveWith(mount(doc.options), doc.path, method, { 'if-match': '"other"' });
+    expect(res.status).toBe(method === 'OPTIONS' ? 200 : 405);
+  });
+
   test('caches for a custom maxAge', async () => {
     const res = await serve(mount({ ...doc.options, maxAge: 60 }), doc.path);
 
@@ -1647,8 +1696,45 @@ describe.each(discoveryApps)('%s conditional requests and caching', (_name, moun
   );
 });
 
+test.each(['GET', 'HEAD'])(
+  'Express keeps a missing-host 400 ahead of If-Match on %s',
+  async (method) => {
+    const app = express();
+    app.all(CARD_PATH, expressAdapter.serverCardHandler({ ...card, resourceUrl: unlisted }));
+    const raw = await withListening(app, (local) =>
+      sendRaw(
+        local,
+        `${method} ${CARD_PATH} HTTP/1.0\r\nIf-Match: "other"\r\nConnection: close\r\n\r\n`,
+      ),
+    );
+    expect(raw).toMatch(/^HTTP\/1\.1 400 /);
+    expect(raw).toMatch(/Cache-Control: no-store/i);
+    const body = raw.split('\r\n\r\n')[1];
+    expect(body).toBe(method === 'HEAD' ? '' : '{"error":"invalid_request"}');
+  },
+);
+
 describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
   const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
+
+  test.each(['description', 'title'])('counts %s by Unicode code points at setup', (key) => {
+    expect(() => mount({ ...scalar, [key]: '🌤'.repeat(100) })).not.toThrow();
+    expect(() => mount({ ...scalar, [key]: '🌤'.repeat(101) })).toThrow(
+      `${key} must be 1 to 100 characters`,
+    );
+  });
+
+  test.each([
+    { resourceUrl: 'HTTPS://example.com/mcp' },
+    { resourceUrl: 'https:example.com/mcp' },
+    { websiteUrl: 'https://example.com/a b' },
+    { icons: [{ src: 'https://example.com/a b' }] },
+    { repository: { url: 'https://example.com/a b', source: 'github' } },
+    { icons: Object.assign([], { length: 1 }) },
+    { icons: [{ src: 'https://example.com/icon.png', sizes: Object.assign([], { length: 1 }) }] },
+  ])('rejects schema-invalid options at setup: %j', (options) => {
+    expect(() => mount({ ...scalar, ...options })).toThrow('Clerk error: serverCardHandler');
+  });
 
   test('serves the card with its media type, a weak ETag, an hour of public caching, and public CORS', async () => {
     const res = await serve(mount(scalar), CARD_PATH);
@@ -1711,6 +1797,7 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
   ])('answers a request to %s with a JSON 421 that is never stored', async (_case, resourceUrl) => {
     const res = await serveWith(mount({ ...card, resourceUrl }), CARD_PATH, 'GET', {
       origin: 'https://other.example.dev',
+      'if-match': '"other"',
       'if-none-match': '*',
     });
 
@@ -1725,8 +1812,8 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
   });
 
   test('answers HEAD to an unlisted origin with a 421 and no body', async () => {
-    const res = await serve(mount({ ...card, resourceUrl: unlisted }), CARD_PATH, {
-      method: 'HEAD',
+    const res = await serveWith(mount({ ...card, resourceUrl: unlisted }), CARD_PATH, 'HEAD', {
+      'if-match': '"other"',
     });
 
     expect(res.status).toBe(421);
@@ -1826,6 +1913,12 @@ describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
 });
 
 describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
+  test.each([
+    { entries: Object.assign([], { length: 1 }) },
+    { entries: Object.assign([catalogEntries[0]], { length: 2 }) },
+  ])('rejects sparse entries at setup: %j', (options) => {
+    expect(() => mount(options)).toThrow('Clerk error: aiCatalogHandler entries must be a list');
+  });
   const options = { entries: catalogEntries };
 
   test('serves the catalog with its media type, a weak ETag, an hour of public caching, and public CORS', async () => {

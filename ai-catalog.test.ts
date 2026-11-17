@@ -93,8 +93,9 @@ describe('generateAICatalog contract', () => {
       ],
     });
 
-    expect(aiCatalogErrors(catalog)).toEqual([]);
-    expect(linkedCardCatalogErrors(catalog)).toEqual([]);
+    const serialized = JSON.parse(JSON.stringify(catalog));
+    expect(aiCatalogErrors(serialized)).toEqual([]);
+    expect(linkedCardCatalogErrors(serialized)).toEqual([]);
   });
 
   // The pinned specification: "This array MAY be empty."
@@ -102,8 +103,24 @@ describe('generateAICatalog contract', () => {
     const catalog = generateAICatalog({ entries: [] });
 
     expect(catalog).toEqual({ specVersion: '1.0', entries: [] });
-    expect(aiCatalogErrors(catalog)).toEqual([]);
-    expect(linkedCardCatalogErrors(catalog)).toEqual([]);
+    const serialized = JSON.parse(JSON.stringify(catalog));
+    expect(aiCatalogErrors(serialized)).toEqual([]);
+    expect(linkedCardCatalogErrors(serialized)).toEqual([]);
+  });
+
+  test.each([
+    { entries: Object.assign([], { length: 1 }) },
+    { entries: Object.assign([weather], { length: 2 }) },
+  ])('rejects sparse entries rather than serializing null: %j', ({ entries }) => {
+    expect(() => generateAICatalog({ entries } as never)).toThrow(
+      'generateAICatalog entries must be a list',
+    );
+    const sparse = {
+      specVersion: '1.0',
+      entries: entries.map((entry) => ({ ...entry, type: CARD_TYPE })),
+    };
+    expect(linkedCardCatalogErrors(sparse)).not.toEqual([]);
+    expect(linkedCardCatalogErrors(JSON.parse(JSON.stringify(sparse)))).not.toEqual([]);
   });
 
   test('the contract check accepts the pinned specification example', () => {

@@ -126,8 +126,8 @@ const card = generateServerCard({
 The extension recommends serving the card at your MCP endpoint's URL followed by `/server-card`, such as `/mcp/server-card`. The handlers validate the options and generate the card once, when they are created, with no Clerk keys, MCP SDK, or request. Importing them mounts nothing. Every adapter answers the same way:
 
 - `GET` and `HEAD` get the card as `application/mcp-server-card+json` (`HEAD` without a body), a weak `ETag`, and `Cache-Control: public, max-age=3600`. Set `maxAge` to another whole number of seconds; `0` sends `public, no-cache`, which lets caches store the card but has them revalidate it before each use.
-- A `GET` or `HEAD` whose `If-None-Match` lists the card's tag, or is `*`, gets a `304` without a body.
-- Any origin can read the card and revalidate it: `Access-Control-Allow-Origin: *`, with `If-None-Match` allowed and `ETag` exposed. `OPTIONS` gets the CORS preflight, and other methods a JSON `405` with `Allow: GET, HEAD, OPTIONS`. Every error, such as that `405` or a `421`, is sent with `Cache-Control: no-store`, so no cache keeps it.
+- A `GET` or `HEAD` whose `If-None-Match` lists the card's tag, or is `*`, gets a `304` without a body. `If-Match` is evaluated first: only `*` succeeds, since a weak ETag cannot satisfy its strong comparison; other values get `412` (RFC 9110 §13.1.1, §13.2.2).
+- Any origin can read the card and revalidate it: `Access-Control-Allow-Origin: *`, with `If-Match` and `If-None-Match` allowed and `ETag` exposed. `OPTIONS` gets the CORS preflight, and other methods a JSON `405` with `Allow: GET, HEAD, OPTIONS`. Every error, such as that `405` or a `421`, is sent with `Cache-Control: no-store`, so no cache keeps it.
 - With a list of `resourceUrl`s, one for each origin, a request gets the card for the URL with its own origin, scheme and port included; the browser's `Origin` header plays no part. A request to any other origin gets a JSON `421`, never another origin's card. Errors are not cached.
 
 For framework-specific implementations, see:

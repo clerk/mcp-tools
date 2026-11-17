@@ -72,8 +72,102 @@ describe('generateServerCard', () => {
       remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }],
       _meta: { 'com.example/tier': { plan: 'free', limits: [1, 2.5, null, true] } },
     });
-    expect(validateServerCard(card), JSON.stringify(validateServerCard.errors)).toBe(true);
-    expect(validateServerCard(generateServerCard(required))).toBe(true);
+    expect(
+      validateServerCard(JSON.parse(JSON.stringify(card))),
+      JSON.stringify(validateServerCard.errors),
+    ).toBe(true);
+    expect(validateServerCard(JSON.parse(JSON.stringify(generateServerCard(required))))).toBe(true);
+  });
+
+  test.each(['description', 'title'] as const)('counts %s by Unicode code points', (key) => {
+    const card = generateServerCard({ ...required, [key]: '🌤'.repeat(100) });
+    expect(card[key]).toBe('🌤'.repeat(100));
+    expect(validateServerCard(JSON.parse(JSON.stringify(card)))).toBe(true);
+    expect(() => generateServerCard({ ...required, [key]: '🌤'.repeat(101) })).toThrow(
+      `${key} must be 1 to 100 characters`,
+    );
+  });
+
+  test.each([
+    'https://example.com/mcp?key=a%20b&next=%2Fexact#section',
+    'https://[::1]:8443/a%20b?x=y/z?x',
+    'HTTPS://EXAMPLE.COM/a%20b',
+  ])('preserves valid optional URI strings in schema-valid serialized output: %s', (url) => {
+    const card = generateServerCard({
+      ...required,
+      websiteUrl: url,
+      icons: [{ src: url }],
+      repository: { url, source: 'git' },
+    });
+    expect(card.websiteUrl).toBe(url);
+    expect(card.icons?.[0]?.src).toBe(url);
+    expect(card.repository?.url).toBe(url);
+    expect(
+      validateServerCard(JSON.parse(JSON.stringify(card))),
+      JSON.stringify(validateServerCard.errors),
+    ).toBe(true);
+  });
+
+  test('preserves an encoded endpoint exactly in schema-valid serialized output', () => {
+    const resourceUrl = 'https://example.com/a%20b?next=%2Fexact&x=1';
+    const card = generateServerCard({ ...required, resourceUrl });
+    expect(card.remotes[0]?.url).toBe(resourceUrl);
+    expect(validateServerCard(JSON.parse(JSON.stringify(card)))).toBe(true);
+  });
+
+  test.each(['HTTPS://example.com/mcp', 'https:example.com/mcp'])(
+    'rejects a remote URL outside the pinned pattern: %s',
+    (resourceUrl) => {
+      expect(() => generateServerCard({ ...required, resourceUrl })).toThrow(
+        'generateServerCard resourceUrl',
+      );
+    },
+  );
+
+  test.each([
+    'https://example.com/a b',
+    'https://example.com/a\tb',
+    'https://example.com/a\nb',
+    'https://example.com/a%zz',
+    'https://example.com/a[b]',
+    'https://example.com/café',
+    'https://example.com/a\\b',
+    'https://example.com/end\n',
+    'https://example.com/a\0b',
+  ])('rejects a raw non-URI string in every optional URI field: %s', (url) => {
+    for (const options of [
+      { websiteUrl: url },
+      { icons: [{ src: url }] },
+      { repository: { url, source: 'git' } },
+    ]) {
+      expect(() => generateServerCard({ ...required, ...options })).toThrow(
+        'Clerk error: generateServerCard',
+      );
+    }
+  });
+
+  test.each(['data:image/svg+xml,<svg> </svg>', 'data:image/png;base64,a b'])(
+    'rejects a non-URI data icon: %s',
+    (src) => {
+      expect(() => generateServerCard({ ...required, icons: [{ src }] })).toThrow(
+        'generateServerCard icons',
+      );
+    },
+  );
+
+  test.each([
+    { icons: Object.assign([], { length: 1 }) },
+    { icons: Object.assign([{ src: 'https://example.com/icon.png' }], { length: 2 }) },
+    { icons: [{ src: 'https://example.com/icon.png', sizes: Object.assign([], { length: 1 }) }] },
+    {
+      icons: [
+        { src: 'https://example.com/icon.png', sizes: Object.assign(['48x48'], { length: 2 }) },
+      ],
+    },
+  ])('rejects missing array positions instead of serializing null: %j', (options) => {
+    expect(() => generateServerCard({ ...required, ...options } as never)).toThrow(
+      'generateServerCard icons',
+    );
   });
 
   // Controls on constraints the schema itself enforces, so a validator that accepted everything would fail them
