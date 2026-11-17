@@ -1,14 +1,14 @@
+import { type MachineAuthObject, createClerkClient } from '@clerk/backend';
+import { auth, clerkClient as nextClerkClient } from '@clerk/nextjs/server';
 import type { Request as ExpressRequest } from 'express';
 import type { Context } from 'hono';
-import { describe, test } from 'vitest';
+import { describe, expectTypeOf, test } from 'vitest';
 
 import {
-  type McpAuthOptions as ExpressMcpAuthOptions,
   mcpAuth as expressMcpAuth,
   protectedResourceMetadataHandler as expressMetadataHandler,
 } from './express';
 import {
-  type McpAuthOptions as HonoMcpAuthOptions,
   mcpAuth as honoMcpAuth,
   protectedResourceMetadataHandler as honoMetadataHandler,
 } from './hono';
@@ -17,7 +17,7 @@ import {
   withMcpAuth as nextWithMcpAuth,
   protectedResourceMetadataHandler as nextMetadataHandler,
 } from './next';
-import type { ClerkOAuthClient } from './server';
+import { type ClerkOAuthAuth, type ClerkOAuthClient, toClerkAuthInfo } from './server';
 
 describe('the mcpAuth options', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
@@ -115,17 +115,6 @@ describe('the mcpAuth options', () => {
     expressMcpAuth(expressOptions);
     expressMetadataHandler(expressOptions);
 
-    const expressVerifierOptions = {
-      verifyToken: async (_token: string, _req: ExpressRequest) => undefined,
-      resourceUrl,
-    };
-    expressMcpAuth(expressVerifierOptions);
-    expressMetadataHandler(expressVerifierOptions);
-
-    const honoOptions = { resourceUrl, requiredScopes: ['profile'] };
-    honoMcpAuth(honoOptions);
-    honoMetadataHandler(honoOptions);
-
     const honoVerifierOptions = { verifyToken: async (_token: string, _c: Context) => undefined };
     honoMcpAuth(honoVerifierOptions);
     honoMetadataHandler(honoVerifierOptions);
@@ -188,14 +177,36 @@ describe('the mcpAuth options', () => {
     // @ts-expect-error a misspelled key
     honoMcpAuth({ resourceUrl, publicAccess: { method: true } });
   });
+});
 
-  test('name one options type per adapter', () => {
-    const express: ExpressMcpAuthOptions = { resourceUrl };
-    const hono: HonoMcpAuthOptions = { verifyToken };
-    const next: NextMcpAuthOptions = { verifyToken };
-    expressMcpAuth(express);
-    honoMcpAuth(hono);
-    nextWithMcpAuth(handler, next);
+describe('the clerkClient option', () => {
+  const resourceUrl = 'https://mcp.example.com/mcp';
+  const clerkClient = createClerkClient({ secretKey: 'sk_test_types' });
+  const handler = () => new Response();
+
+  test("accepts the app's own client from createClerkClient in every adapter", () => {
+    expressMcpAuth({ resourceUrl, clerkClient });
+    honoMcpAuth({ resourceUrl, clerkClient });
+    nextWithMcpAuth(handler, { resourceUrl, clerkClient });
+  });
+
+  test('accepts clerkClient from @clerk/nextjs/server in the Next.js adapter', () => {
+    nextWithMcpAuth(handler, { resourceUrl, clerkClient: nextClerkClient });
+  });
+
+  test("toClerkAuthInfo accepts Clerk's own OAuth auth object", async () => {
+    toClerkAuthInfo(await auth({ acceptsToken: 'oauth_token' }), 'token');
+  });
+
+  test("ClerkOAuthAuth is a part of Clerk's authenticated OAuth auth object", () => {
+    expectTypeOf<
+      Extract<MachineAuthObject<'oauth_token'>, { isAuthenticated: true }>
+    >().toExtend<ClerkOAuthAuth>();
+  });
+
+  test('rejects a value without authenticateRequest', () => {
+    // @ts-expect-error not a Clerk client
+    honoMcpAuth({ resourceUrl, clerkClient: {} });
   });
 });
 

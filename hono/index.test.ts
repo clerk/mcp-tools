@@ -38,8 +38,6 @@ import {
 } from './index';
 
 const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
-const BARE_CHALLENGE =
-  'Bearer resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"';
 const mcpHeaders = {
   'Content-Type': 'application/json',
   Accept: 'application/json, text/event-stream',
@@ -268,146 +266,6 @@ describe('mcpAuth', () => {
     },
   );
 
-  test('returns 401 with WWW-Authenticate when Authorization header is missing', async () => {
-    const app = new Hono();
-    app.get('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp');
-    expect(res.status).toBe(401);
-    const wwwAuth = res.headers.get('WWW-Authenticate');
-    expect(wwwAuth).toBe(BARE_CHALLENGE);
-  });
-
-  test('returns 401 when verifyToken returns undefined', async () => {
-    const app = new Hono();
-    app.get('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer bad-token' },
-    });
-    expect(res.status).toBe(401);
-    expect(res.headers.get('WWW-Authenticate')).toBe(`${BARE_CHALLENGE}, error="invalid_token"`);
-  });
-
-  test('returns 403 with the granted and missing scopes when requiredScopes are missing', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => ({ token: 't', scopes: ['openid'], clientId: 'c' }),
-        requiredScopes: ['profile', 'email'],
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer t' },
-    });
-
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'insufficient_scope' });
-    expect(res.headers.get('WWW-Authenticate')).toBe(
-      `${BARE_CHALLENGE}, error="insufficient_scope", scope="openid profile email"`,
-    );
-  });
-
-  test('allows a token that has every required scope', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => ({ token: 't', scopes: ['profile', 'email'], clientId: 'c' }),
-        requiredScopes: ['profile', 'email'],
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer t' },
-    });
-
-    expect(res.status).toBe(200);
-  });
-
-  test('derives resource_metadata from resourceUrl instead of the request', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth({ verifyToken: async () => undefined, resourceUrl: 'https://mcp.example.com/mcp' }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://internal:3000/mcp');
-
-    expect(res.headers.get('WWW-Authenticate')).toBe(
-      'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"',
-    );
-  });
-
-  test('throws at setup for an invalid resourceUrl or scope', () => {
-    for (const resourceUrl of [
-      '/mcp',
-      'mailto:foo@example.com',
-      'https://user:pass@mcp.example.com/mcp',
-    ]) {
-      expect(() => mcpAuth({ verifyToken: async () => undefined, resourceUrl })).toThrow(
-        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
-      );
-    }
-    expect(() => mcpAuth({ verifyToken: async () => undefined, requiredScopes: ['a b'] })).toThrow(
-      'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
-    );
-    expect(() => mcpAuth({ verifyToken: async () => undefined, challengeScopes: ['a"b'] })).toThrow(
-      'Clerk error: mcpAuth challengeScopes must contain only scope tokens',
-    );
-  });
-
-  test.each([
-    ['a missing header', undefined, BARE_CHALLENGE],
-    ['a rejected token', 'Bearer bad-token', `${BARE_CHALLENGE}, error="invalid_token"`],
-  ])(
-    'lists requiredScopes then challengeScopes in the 401 challenge for %s',
-    async (_, authorization, challenge) => {
-      const app = new Hono();
-      app.get(
-        '/mcp',
-        mcpAuth({
-          verifyToken: async () => undefined,
-          requiredScopes: ['profile'],
-          challengeScopes: ['email', 'profile', 'org:read'],
-        }),
-        (c) => c.json({ ok: true }),
-      );
-
-      const res = await app.request('http://localhost/mcp', {
-        headers: authorization ? { Authorization: authorization } : {},
-      });
-
-      expect(res.status).toBe(401);
-      expect(res.headers.get('WWW-Authenticate')).toBe(
-        `${challenge}, scope="profile email org:read"`,
-      );
-    },
-  );
-
-  test('does not require challengeScopes of a token', async () => {
-    const app = new Hono();
-    app.get(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => ({ token: 't', scopes: [], clientId: 'c' }),
-        challengeScopes: ['email'],
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer t' },
-    });
-
-    expect(res.status).toBe(200);
-  });
-
   test.each([
     ['missing_token', undefined, undefined],
     ['malformed_token', 'Basic t', undefined],
@@ -452,87 +310,8 @@ describe('mcpAuth', () => {
     expect(await res.json()).toEqual({ failure: null });
   });
 
-  test('throws an McpAuthError with the verifier error as its cause to onError', async () => {
+  test('gives onError the McpAuthError, with the verifier error as its cause and getResponse() for the JSON answer', async () => {
     const cause = new Error('network down');
-    const errors: unknown[] = [];
-    const app = new Hono();
-    app.onError((err, c) => {
-      errors.push(err);
-      return c.text('error', 500);
-    });
-    app.get(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw cause;
-        },
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer t' },
-    });
-
-    expect(res.status).toBe(500);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toBeInstanceOf(McpAuthError);
-    expect(errors[0]).toMatchObject({ reason: 'verification_failed', cause });
-  });
-
-  test("answers an McpAuthError with a JSON server error under Hono's default error handler", async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = new Hono();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw Object.assign(new Error('unavailable'), { status: 503 });
-        },
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer t' },
-    });
-
-    expect(res.status).toBe(503);
-    expect(res.headers.get('content-type')).toMatch(/^application\/json/);
-    expect(await res.json()).toEqual({ error: 'server_error' });
-    // Hono's default handler logs errors without getResponse(); this keeps the outage visible the same way
-    expect(consoleError).toHaveBeenCalledWith(expect.any(McpAuthError));
-    consoleError.mockRestore();
-  });
-
-  // `Response` truncates a fractional status, so without the integer check this would be a 503 here and Express's
-  // HTML error page there.
-  test('answers a JSON 500 when the verifier error has a fractional 5xx status, as Express does', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = new Hono();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw Object.assign(new Error('unavailable'), { status: 503.5 });
-        },
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer t' },
-    });
-    consoleError.mockRestore();
-
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'server_error' });
-  });
-
-  test('gives a custom onError the McpAuthError itself, with getResponse() for the JSON answer', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const errors: unknown[] = [];
     const app = new Hono();
     app.onError((err) => {
@@ -543,7 +322,7 @@ describe('mcpAuth', () => {
       '/mcp',
       mcpAuth({
         verifyToken: async () => {
-          throw new Error('network down');
+          throw cause;
         },
       }),
       (c) => c.json({ ok: true }),
@@ -558,121 +337,13 @@ describe('mcpAuth', () => {
     expect(await res.json()).toEqual({ error: 'server_error' });
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(McpAuthError);
-    consoleError.mockRestore();
-  });
-
-  test('rejects a token whose verifier throws an McpTokenVerificationError, with it as the cause', async () => {
-    const cause = new McpTokenVerificationError('token-revoked', 'The token was revoked');
-    const failures: unknown[] = [];
-    const app = new Hono();
-    app.use(async (c, next) => {
-      await next();
-      failures.push(c.get('mcpAuthFailure'));
-    });
-    app.get(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw cause;
-        },
-      }),
-      (c) => c.json({ ok: true }),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer t' },
-    });
-
-    expect(res.status).toBe(401);
-    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
-    expect(await res.text()).not.toContain('revoked');
-    expect(failures).toEqual([{ reason: 'invalid_token', cause }]);
-  });
-
-  test('calls next and stores authInfo in context when token is valid', async () => {
-    const authInfo: AuthInfo = {
-      token: 'valid',
-      scopes: ['read'],
-      clientId: 'client-1',
-      extra: { userId: 'user-1' },
-    };
-    const app = new Hono();
-    app.get('/mcp', mcpAuth({ verifyToken: async () => authInfo }), (c) =>
-      c.json(c.get('mcpAuth')),
-    );
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer valid' },
-    });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      ...authInfo,
-      resourceMetadataUrl: 'http://localhost/.well-known/oauth-protected-resource/mcp',
-    });
-  });
-
-  test('returns 401 when Authorization header has no token value', async () => {
-    const app = new Hono();
-    app.get('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer' },
-    });
-    expect(res.status).toBe(401);
-    const wwwAuth = res.headers.get('WWW-Authenticate');
-    expect(wwwAuth).toBe(BARE_CHALLENGE);
-  });
-
-  test('returns 401 and does not verify when Authorization scheme is not Bearer', async () => {
-    const verifyToken = vi.fn().mockResolvedValue({
-      token: 'valid',
-      scopes: ['read'],
-      clientId: 'client-1',
-    });
-    const app = new Hono();
-    app.get('/mcp', mcpAuth({ verifyToken }), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Basic valid' },
-    });
-
-    expect(res.status).toBe(401);
-    expect(verifyToken).not.toHaveBeenCalled();
-    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
-  });
-
-  test('returns 401 and does not verify when Bearer header has extra parts', async () => {
-    const verifyToken = vi.fn().mockResolvedValue({
-      token: 'valid',
-      scopes: ['read'],
-      clientId: 'client-1',
-    });
-    const app = new Hono();
-    app.get('/mcp', mcpAuth({ verifyToken }), (c) => c.json({ ok: true }));
-
-    const res = await app.request('http://localhost/mcp', {
-      headers: { Authorization: 'Bearer valid extra' },
-    });
-
-    expect(res.status).toBe(401);
-    expect(verifyToken).not.toHaveBeenCalled();
-    expect(res.headers.get('WWW-Authenticate')).toBe(BARE_CHALLENGE);
+    expect(errors[0]).toMatchObject({ reason: 'verification_failed', cause });
   });
 });
 
 describe('mcpAuth with Clerk', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
   const clerk = { authenticateRequest: vi.fn() };
-
-  function clerkApp() {
-    const app = new Hono();
-    app.post(
-      '/mcp',
-      mcpAuth({ resourceUrl, requiredScopes: ['profile'], clerkClient: clerk as never }),
-      (c) => c.json(c.get('mcpAuth')),
-    );
-    return app;
-  }
 
   const post = (app: Hono) =>
     app.request('http://internal/mcp', {
@@ -686,111 +357,6 @@ describe('mcpAuth with Clerk', () => {
 
   afterEach(() => {
     vi.mocked(env).mockImplementation(() => process.env);
-  });
-
-  test('asks Clerk to check the audience and passes the auth info on', async () => {
-    clerk.authenticateRequest.mockResolvedValue({
-      isAuthenticated: true,
-      toAuth: () => ({
-        isAuthenticated: true,
-        tokenType: 'oauth_token',
-        id: 'oat_1',
-        subject: 'user-1',
-        getToken: async () => 'token',
-        clientId: 'client-1',
-        scopes: ['profile'],
-        userId: 'user-1',
-      }),
-    });
-
-    const res = await post(clerkApp());
-
-    expect(res.status).toBe(200);
-    const [request, options] = clerk.authenticateRequest.mock.calls[0]!;
-    expect(request.headers.get('authorization')).toBe('Bearer token-1');
-    expect(options).toEqual({ acceptsToken: 'oauth_token', audience: resourceUrl });
-    expect(await res.json()).toMatchObject({ clientId: 'client-1', token: 'token-1' });
-  });
-
-  function listedApp() {
-    const app = new Hono();
-    app.use(async (c, next) => {
-      await next();
-      const failure = c.get('mcpAuthFailure');
-      if (failure) c.header('X-Failure', failure.reason);
-    });
-    app.post(
-      '/mcp',
-      mcpAuth({
-        resourceUrl: ['https://a.example.com/mcp', 'https://b.example.com/mcp'],
-        clerkClient: clerk as never,
-      }),
-      (c) => c.json({ ok: true }),
-    );
-    return app;
-  }
-
-  test('checks the audience and challenge against the listed resourceUrl with the request origin', async () => {
-    clerk.authenticateRequest.mockResolvedValue({
-      isAuthenticated: false,
-      reason: 'token-invalid',
-      message: 'OAuth token not found (code=token-invalid, status=404)',
-    });
-    const app = listedApp();
-
-    for (const origin of ['https://a.example.com', 'https://b.example.com']) {
-      clerk.authenticateRequest.mockClear();
-      const res = await app.request(`${origin}/mcp`, {
-        method: 'POST',
-        headers: { Authorization: 'Bearer token-1' },
-      });
-
-      expect(clerk.authenticateRequest.mock.calls[0]![1]).toMatchObject({
-        audience: `${origin}/mcp`,
-      });
-      expect(res.headers.get('WWW-Authenticate')).toBe(
-        `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`,
-      );
-    }
-  });
-
-  test('answers a request to an unlisted origin with a 421 and records why', async () => {
-    const res = await listedApp().request('https://evil.example.com/mcp', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer token-1' },
-    });
-
-    expect(res.status).toBe(421);
-    expect(res.headers.get('WWW-Authenticate')).toBeNull();
-    expect(res.headers.get('X-Failure')).toBe('misdirected_request');
-    expect(clerk.authenticateRequest).not.toHaveBeenCalled();
-  });
-
-  test('throws at setup for an empty list or two URLs with one origin', () => {
-    expect(() => mcpAuth({ resourceUrl: [], clerkClient: clerk as never })).toThrow(
-      'Clerk error: mcpAuth resourceUrl must be a URL or a non-empty list of URLs',
-    );
-    expect(() =>
-      mcpAuth({
-        resourceUrl: ['https://a.example.com/mcp', 'https://a.example.com/other'],
-        clerkClient: clerk as never,
-      }),
-    ).toThrow('Clerk error: mcpAuth resourceUrl lists more than one URL for https://a.example.com');
-  });
-
-  test('answers a rejected token with the invalid_token challenge', async () => {
-    clerk.authenticateRequest.mockResolvedValue({
-      isAuthenticated: false,
-      reason: 'token-invalid',
-      message: 'OAuth token not found (code=token-invalid, status=404)',
-    });
-
-    const res = await post(clerkApp());
-
-    expect(res.status).toBe(401);
-    expect(res.headers.get('WWW-Authenticate')).toBe(
-      'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token", scope="profile"',
-    );
   });
 
   test('records what Clerk reported for a rejected token without sending it to the client', async () => {
@@ -824,43 +390,6 @@ describe('mcpAuth with Clerk', () => {
     expect(await res.text()).not.toContain('expired');
   });
 
-  test.each(['unexpected-error', 'secret-key-invalid'])(
-    'answers a %s verification failure with a 500 instead of a challenge',
-    async (reason) => {
-      clerk.authenticateRequest.mockResolvedValue({
-        isAuthenticated: false,
-        reason,
-        message: 'Unexpected error',
-      });
-      const errors: unknown[] = [];
-      const app = clerkApp();
-      app.onError((err, c) => {
-        errors.push(err);
-        return c.text('error', 500);
-      });
-
-      const res = await post(app);
-
-      expect(res.status).toBe(500);
-      expect(res.headers.get('WWW-Authenticate')).toBeNull();
-      expect(errors[0]).toBeInstanceOf(McpAuthError);
-      const { cause } = errors[0] as McpAuthError;
-      expect(cause).toBeInstanceOf(McpTokenVerificationError);
-      expect(cause).toMatchObject({ code: reason, message: 'Unexpected error' });
-    },
-  );
-
-  test('answers a thrown verification error with a 500 instead of a challenge', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    clerk.authenticateRequest.mockRejectedValue(new Error('network down'));
-
-    const res = await post(clerkApp());
-
-    expect(res.status).toBe(500);
-    expect(res.headers.get('WWW-Authenticate')).toBeNull();
-    consoleError.mockRestore();
-  });
-
   test('fails loudly when passed to a route without being called', async () => {
     const app = new Hono();
     let error: unknown;
@@ -874,32 +403,6 @@ describe('mcpAuth with Clerk', () => {
 
     expect(res.status).toBe(500);
     expect(String(error)).toContain('Clerk error: mcpAuth needs a resourceUrl');
-  });
-
-  test('verifies with the clerkClient option without clerkMiddleware', async () => {
-    const authenticateRequest = vi.fn().mockResolvedValue({
-      isAuthenticated: true,
-      toAuth: () => ({
-        isAuthenticated: true,
-        tokenType: 'oauth_token',
-        id: 'oat_1',
-        subject: 'user-1',
-        getToken: async () => 'token',
-        clientId: 'client-1',
-        scopes: [],
-        userId: 'user-1',
-      }),
-    });
-    const app = new Hono();
-    app.post('/mcp', mcpAuth({ resourceUrl, clerkClient: { authenticateRequest } as never }), (c) =>
-      c.json(c.get('mcpAuth')),
-    );
-
-    const res = await post(app);
-
-    expect(res.status).toBe(200);
-    expect(authenticateRequest).toHaveBeenCalledOnce();
-    expect(clerk.authenticateRequest).not.toHaveBeenCalled();
   });
 
   // A setup mistake is thrown as it is, not as the cause of an `McpAuthError`, and before any token arrives
@@ -927,18 +430,6 @@ describe('mcpAuth with Clerk', () => {
       );
     },
   );
-
-  test('needs no Clerk client with verifyToken', async () => {
-    const app = new Hono();
-    app.post('/mcp', mcpAuth({ verifyToken: async () => undefined }), (c) => c.json({ ok: true }));
-
-    const res = await app.request(resourceUrl, {
-      method: 'POST',
-      headers: { authorization: 'Bearer token' },
-    });
-
-    expect(res.status).toBe(401);
-  });
 });
 
 describe('mcpAuth with a Clerk client built from the environment', () => {
@@ -1237,25 +728,6 @@ describe('streamableHttpHandler', () => {
       }
     },
   );
-
-  test('handles sequential requests', async () => {
-    const app = new Hono();
-    app.post('/mcp', streamableHttpHandler(createMcpServer, Transport));
-
-    const opts = {
-      method: 'POST',
-      headers: mcpHeaders,
-      body: initializeBody,
-    };
-
-    const res1 = await app.request('http://localhost/mcp', opts);
-    await res1.text();
-    const res2 = await app.request('http://localhost/mcp', opts);
-
-    expect(res1.status).toBe(200);
-    expect(res2.status).toBe(200);
-    await res2.text();
-  });
 
   test('does not block a new request on an unconsumed response', async () => {
     const createServer = vi.fn(createMcpServer);

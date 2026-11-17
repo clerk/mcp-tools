@@ -9,6 +9,7 @@ import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotoco
 
 import { createBrowserSessionTool } from '../tools';
 import { requireAdditionalScopes } from '../server';
+import { oauthMetadata } from './mcp-harness';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
 
@@ -58,24 +59,8 @@ function resourceMetadataUrl(origin: string) {
 }
 
 function metadata(origin: string, path: string): Response | undefined {
-  if (path === '/.well-known/oauth-protected-resource/mcp') {
-    return Response.json({
-      resource: `${origin}/mcp`,
-      authorization_servers: [origin],
-      // Differs from the challenge's `scope`, so a client that ignored it would ask for this list instead.
-      scopes_supported: ['profile', 'offline_access', ...REQUIRED_SCOPES],
-    });
-  }
-  if (path === '/.well-known/oauth-authorization-server') {
-    return Response.json({
-      issuer: origin,
-      authorization_endpoint: `${origin}/authorize`,
-      token_endpoint: `${origin}/token`,
-      response_types_supported: ['code'],
-      code_challenge_methods_supported: ['S256'],
-    });
-  }
-  return undefined;
+  // Differs from the challenge's `scope`, so a client that ignored it would ask for this list instead.
+  return oauthMetadata(origin, path, ['profile', 'offline_access', ...REQUIRED_SCOPES]);
 }
 
 function unauthorized(origin: string) {

@@ -998,14 +998,6 @@ describe('createBrowserSessionTool', () => {
       );
     }
 
-    test('sends a fixed organization', async () => {
-      const fetchImpl = okFetch({ session_organization_id: 'org_1' });
-      const client = await connectWithOrg(fetchImpl, 'org_1');
-      const result = await client.callTool({ name: 'create_browser_session', arguments: {} });
-      expect(result.isError).toBeFalsy();
-      expect(sentBody(fetchImpl).session_organization_id).toBe('org_1');
-    });
-
     test('resolves the organization per call from the verified auth info', async () => {
       const fetchImpl = okFetch({ session_organization_id: 'org_user_1' });
       const resolve = vi.fn(
@@ -1111,15 +1103,15 @@ describe('createBrowserSessionTool', () => {
       expect(sentBody(fetchImpl).session_organization_id).toBe('org_1');
     });
 
-    test('refuses an empty organization ID when built', () => {
-      expect(() => createBrowserSessionTool({ ...options(okFetch()), organizationId: '' })).toThrow(
-        'Clerk error: createBrowserSessionTool organizationId',
-      );
-    });
-
-    test('refuses a value that is neither a string nor a function when built', () => {
+    test.each([
+      ['an empty string', ''],
+      ['a number', 42],
+    ])('refuses %s as the organization when built', (_kind, organizationId) => {
       expect(() =>
-        createBrowserSessionTool({ ...options(okFetch()), organizationId: 42 as never }),
+        createBrowserSessionTool({
+          ...options(okFetch()),
+          organizationId: organizationId as never,
+        }),
       ).toThrow('Clerk error: createBrowserSessionTool organizationId');
     });
   });

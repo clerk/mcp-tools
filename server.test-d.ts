@@ -13,12 +13,6 @@ describe('generateProtectedResourceMetadata types', () => {
 
   test('accepts a publishable key or an authorization server URL', () => {
     generateProtectedResourceMetadata({ resourceUrl, publishableKey });
-    generateProtectedResourceMetadata({ resourceUrl, authServerUrl });
-    generateProtectedResourceMetadata({
-      resourceUrl,
-      publishableKey,
-      properties: { resource_name: 'Example' },
-    });
     generateProtectedResourceMetadata({
       resourceUrl,
       authServerUrl,
@@ -26,12 +20,9 @@ describe('generateProtectedResourceMetadata types', () => {
     });
   });
 
-  test('rejects both a publishable key and an authorization server URL', () => {
+  test('rejects both or neither of a publishable key and an authorization server URL', () => {
     // @ts-expect-error both
     generateProtectedResourceMetadata({ resourceUrl, publishableKey, authServerUrl });
-  });
-
-  test('rejects neither a publishable key nor an authorization server URL', () => {
     // @ts-expect-error neither
     generateProtectedResourceMetadata({ resourceUrl });
   });

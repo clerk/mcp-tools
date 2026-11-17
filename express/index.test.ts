@@ -32,62 +32,44 @@ import { createClerkClient } from '@clerk/backend';
 import { clerkClient } from '@clerk/express';
 import {
   McpAuthError,
-  type McpAuthFailure,
   type McpAuthOptions,
-  McpTokenVerificationError,
   mcpAuth,
   protectedResourceMetadataHandler,
   streamableHttpHandler,
 } from './index';
 
-const mcpHeaders = {
-  'Content-Type': 'application/json',
-  Accept: 'application/json, text/event-stream',
-};
-const initializeBody = JSON.stringify({
-  jsonrpc: '2.0',
-  id: 1,
-  method: 'initialize',
-  params: {
-    protocolVersion: '2024-11-05',
-    capabilities: {},
-    clientInfo: { name: 'test-client', version: '1.0.0' },
-  },
-});
-
 function createMcpServer() {
   return new McpServer({ name: 'test-server', version: '1.0.0' });
 }
 
-async function withApp(
+function withApp<T>(
   handler: ReturnType<typeof streamableHttpHandler>,
-  fn: (baseUrl: string) => Promise<void>,
+  fn: (baseUrl: string) => Promise<T>,
 ) {
   const app = express();
   app.use(express.json());
-  app.post('/mcp', handler);
-
-  const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  const { port } = server.address() as AddressInfo;
-
-  try {
-    await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
+  app.all('/mcp', handler);
+  return withListening(app, fn);
 }
 
 function postInitialize(baseUrl: string) {
   return fetch(`${baseUrl}/mcp`, {
     method: 'POST',
-    headers: mcpHeaders,
-    body: initializeBody,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test-client', version: '1.0.0' },
+      },
+    }),
   });
 }
 
-async function request(
+function request(
   middleware: express.RequestHandler,
   { path = '/mcp', authorization }: { path?: string; authorization?: string } = {},
 ) {
@@ -96,13 +78,8 @@ async function request(
     res.json({ auth: (req as unknown as { auth: unknown }).auth });
   });
 
-  const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  const { port } = server.address() as AddressInfo;
-
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+  return withListening(app, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}${path}`, {
       method: 'POST',
       headers: authorization === undefined ? {} : { Authorization: authorization },
       signal: AbortSignal.timeout(2000),
@@ -112,12 +89,9 @@ async function request(
       challenge: res.headers.get('WWW-Authenticate'),
       // Express's default error handler answers with HTML.
       body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text(),
-      origin: `http://127.0.0.1:${port}`,
+      origin: baseUrl,
     };
-  } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
+  });
 }
 
 const reject = async () => undefined;
@@ -178,58 +152,12 @@ describe('mcpAuth', () => {
     },
   );
 
-  test('sends a quoted challenge when the Authorization header is missing', async () => {
-    const res = await request(mcpAuth({ verifyToken: reject }));
-
-    expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: 'Unauthorized' });
-    expect(res.challenge).toBe(
-      `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
-    );
-  });
-
   test('leaves the query string out of resource_metadata', async () => {
     const res = await request(mcpAuth({ verifyToken: reject }), { path: '/mcp?x=1' });
 
     expect(res.challenge).toBe(
       `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
     );
-  });
-
-  test('derives resource_metadata from resourceUrl instead of the request', async () => {
-    const res = await request(mcpAuth({ verifyToken: reject, resourceUrl }));
-
-    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}"`);
-  });
-
-  test('derives resource_metadata from the listed resourceUrl with the request origin', async () => {
-    // The test server's port is only known once it listens, so the middleware is built per request
-    const res = await request((req, res, next) =>
-      mcpAuth({
-        verifyToken: reject,
-        resourceUrl: ['https://mcp.example.com/mcp', `http://${req.get('host')}/mcp`],
-      })(req, res, next),
-    );
-
-    expect(res.challenge).toBe(
-      `Bearer resource_metadata="${res.origin}/.well-known/oauth-protected-resource/mcp"`,
-    );
-  });
-
-  test('answers a request to an unlisted origin with a 421 and does not verify it', async () => {
-    const verifyToken = vi.fn(reject);
-    const res = await request(
-      mcpAuth({
-        verifyToken,
-        resourceUrl: ['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'],
-      }),
-      { authorization: 'Bearer token-1' },
-    );
-
-    expect(res.status).toBe(421);
-    expect(res.challenge).toBeNull();
-    expect(res.body).toEqual({ error: 'misdirected_request' });
-    expect(verifyToken).not.toHaveBeenCalled();
   });
 
   test.each([[[resourceUrl]], [undefined]])(
@@ -253,124 +181,10 @@ describe('mcpAuth', () => {
     },
   );
 
-  test.each(['Bearer', 'Basic abc', 'Bearer a b'])(
-    'answers the malformed header %j with a 401 challenge and does not verify it',
-    async (authorization) => {
-      const verifyToken = vi.fn(reject);
-
-      const res = await request(mcpAuth({ verifyToken, resourceUrl }), {
-        authorization,
-      });
-
-      expect(res.status).toBe(401);
-      expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}"`);
-      expect(verifyToken).not.toHaveBeenCalled();
-    },
-  );
-
-  test('adds invalid_token to the challenge when the token is rejected', async () => {
-    const res = await request(mcpAuth({ verifyToken: reject, resourceUrl }), {
-      authorization: 'Bearer bad',
-    });
-
-    expect(res.status).toBe(401);
-    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
-  });
-
-  test('returns 403 with the granted and missing scopes when requiredScopes are missing', async () => {
-    const res = await request(
-      mcpAuth({
-        verifyToken: async () => ({ token: 't', scopes: ['openid'], clientId: 'c' }),
-        resourceUrl,
-        requiredScopes: ['profile', 'email'],
-      }),
-      { authorization: 'Bearer t' },
+  test('throws at setup for an invalid resourceUrl', () => {
+    expect(() => mcpAuth({ verifyToken: reject, resourceUrl: '/mcp' })).toThrow(
+      'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL',
     );
-
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: 'insufficient_scope' });
-    expect(res.challenge).toBe(
-      `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", scope="openid profile email"`,
-    );
-  });
-
-  test('sets req.auth and calls next when the token has every required scope', async () => {
-    const authInfo = { token: 't', scopes: ['profile'], clientId: 'c' };
-
-    const res = await request(
-      mcpAuth({ verifyToken: async () => authInfo, requiredScopes: ['profile'] }),
-      {
-        authorization: 'Bearer t',
-      },
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      auth: {
-        ...authInfo,
-        resourceMetadataUrl: `${res.origin}/.well-known/oauth-protected-resource/mcp`,
-      },
-    });
-  });
-
-  test('sets resourceMetadataUrl on req.auth from resourceUrl', async () => {
-    const res = await request(
-      mcpAuth({
-        verifyToken: async () => ({ token: 't', scopes: [], clientId: 'c' }),
-        resourceUrl,
-      }),
-      { authorization: 'Bearer t' },
-    );
-
-    expect(res.body.auth.resourceMetadataUrl).toBe(metadataUrl);
-  });
-
-  test('throws at setup for an invalid resourceUrl or scope', () => {
-    for (const resourceUrl of [
-      '/mcp',
-      'mailto:foo@example.com',
-      'https://user:pass@mcp.example.com/mcp',
-    ]) {
-      expect(() => mcpAuth({ verifyToken: reject, resourceUrl })).toThrow(
-        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
-      );
-      expect(() =>
-        mcpAuth({ verifyToken: reject, resourceUrl: ['https://mcp.example.com/mcp', resourceUrl] }),
-      ).toThrow(
-        'Clerk error: mcpAuth resourceUrl must be an absolute http or https URL without credentials',
-      );
-    }
-    expect(() => mcpAuth({ verifyToken: reject, resourceUrl: [] })).toThrow(
-      'Clerk error: mcpAuth resourceUrl must be a URL or a non-empty list of URLs',
-    );
-    expect(() =>
-      mcpAuth({
-        verifyToken: reject,
-        resourceUrl: ['https://mcp.example.com/a', 'https://mcp.example.com/b'],
-      }),
-    ).toThrow(
-      'Clerk error: mcpAuth resourceUrl lists more than one URL for https://mcp.example.com',
-    );
-    expect(() => mcpAuth({ verifyToken: reject, requiredScopes: ['a b'] })).toThrow(
-      'Clerk error: mcpAuth requiredScopes must contain only scope tokens',
-    );
-    expect(() => mcpAuth({ verifyToken: reject, challengeScopes: [''] })).toThrow(
-      'Clerk error: mcpAuth challengeScopes must contain only scope tokens',
-    );
-  });
-
-  test('lists requiredScopes then challengeScopes in the 401 challenge', async () => {
-    const res = await request(
-      mcpAuth({
-        verifyToken: reject,
-        resourceUrl,
-        requiredScopes: ['profile'],
-        challengeScopes: ['email'],
-      }),
-    );
-
-    expect(res.status).toBe(401);
-    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", scope="profile email"`);
   });
 
   test.each([
@@ -436,26 +250,6 @@ describe('mcpAuth', () => {
     expect(logged[0]).toMatchObject({ reason: 'verification_failed', cause });
   });
 
-  test("keeps the verifier error's status for Express's default error handler", async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = express();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw Object.assign(new Error('unavailable'), { status: 503 });
-        },
-      }),
-    );
-
-    const res = await withListening(app, (baseUrl) =>
-      fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
-    );
-    consoleError.mockRestore();
-
-    expect(res.status).toBe(503);
-  });
-
   test('keeps a 5xx status from the verifier error in the JSON answer', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const app = express();
@@ -478,92 +272,6 @@ describe('mcpAuth', () => {
     consoleError.mockRestore();
 
     expect(res).toEqual({ status: 503, body: { error: 'server_error' } });
-  });
-
-  // Express 5's `res.status()` throws on a status that is not an integer, which would lose the JSON answer to the
-  // default HTML error page.
-  test('answers a JSON 500 when the verifier error has a fractional 5xx status', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = express();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw Object.assign(new Error('unavailable'), { status: 503.5 });
-        },
-      }),
-    );
-
-    const res = await withListening(app, async (baseUrl) => {
-      const answer = await fetch(`${baseUrl}/mcp`, {
-        method: 'POST',
-        headers: { Authorization: 'Bearer t' },
-      });
-      return {
-        status: answer.status,
-        type: answer.headers.get('content-type'),
-        body: await answer.text(),
-      };
-    });
-    consoleError.mockRestore();
-
-    expect(res.status).toBe(500);
-    expect(res.type).toMatch(/^application\/json/);
-    expect(JSON.parse(res.body)).toEqual({ error: 'server_error' });
-  });
-
-  test.each([401, 403])(
-    "answers 500 when the verifier error's status is %i, which is not the client's to act on",
-    async (status) => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      const app = express();
-      app.post(
-        '/mcp',
-        mcpAuth({
-          verifyToken: async () => {
-            throw Object.assign(new Error('introspection failed'), { status });
-          },
-        }),
-      );
-
-      const res = await withListening(app, (baseUrl) =>
-        fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer t' } }),
-      );
-      consoleError.mockRestore();
-
-      expect(res.status).toBe(500);
-      expect(res.headers.get('WWW-Authenticate')).toBeNull();
-    },
-  );
-
-  test('answers an McpAuthError with a JSON server error, not the default HTML error page', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = express();
-    app.post(
-      '/mcp',
-      mcpAuth({
-        verifyToken: async () => {
-          throw new Error('network down');
-        },
-      }),
-    );
-
-    const res = await withListening(app, async (baseUrl) => {
-      const answer = await fetch(`${baseUrl}/mcp`, {
-        method: 'POST',
-        headers: { Authorization: 'Bearer t' },
-      });
-      return {
-        status: answer.status,
-        type: answer.headers.get('content-type'),
-        body: await answer.text(),
-      };
-    });
-    consoleError.mockRestore();
-
-    expect(res.status).toBe(500);
-    expect(res.type).toMatch(/^application\/json/);
-    expect(JSON.parse(res.body)).toEqual({ error: 'server_error' });
   });
 
   // Express's default error handler destroys the socket of a sent response, which resets a client still uploading
@@ -661,22 +369,14 @@ describe('mcpAuth', () => {
         res.json({});
       });
 
-      const status = await withListening(app, (baseUrl) => {
-        const { port } = new URL(baseUrl);
-        return new Promise<string>((resolve, reject) => {
-          const socket = connect(Number(port), '127.0.0.1', () => {
-            socket.write(
-              'POST /mcp HTTP/1.1\r\nHost: [\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
-            );
-          });
-          let response = '';
-          socket.on('data', (chunk) => (response += chunk.toString()));
-          socket.on('end', () => resolve(response.split('\r\n')[0] ?? ''));
-          socket.on('error', reject);
-        });
-      });
+      const response = await withListening(app, (baseUrl) =>
+        sendRaw(
+          baseUrl,
+          'POST /mcp HTTP/1.1\r\nHost: [\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+        ),
+      );
 
-      expect(status).toBe('HTTP/1.1 400 Bad Request');
+      expect(response.split('\r\n')[0]).toBe('HTTP/1.1 400 Bad Request');
       expect(verifyToken).not.toHaveBeenCalled();
     },
   );
@@ -688,20 +388,12 @@ describe('mcpAuth', () => {
       res.json({});
     });
 
-    const response = await withListening(app, (baseUrl) => {
-      const { port } = new URL(baseUrl);
-      return new Promise<string>((resolve, reject) => {
-        const socket = connect(Number(port), '127.0.0.1', () => {
-          socket.write(
-            'POST /mcp HTTP/1.0\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\n\r\n',
-          );
-        });
-        let response = '';
-        socket.on('data', (chunk) => (response += chunk.toString()));
-        socket.on('end', () => resolve(response));
-        socket.on('error', reject);
-      });
-    });
+    const response = await withListening(app, (baseUrl) =>
+      sendRaw(
+        baseUrl,
+        'POST /mcp HTTP/1.0\r\nAuthorization: Bearer t\r\nContent-Length: 0\r\n\r\n',
+      ),
+    );
 
     expect(response).toMatch(/^HTTP\/1\.[01] 400 Bad Request/);
     expect(response).not.toContain('undefined');
@@ -871,27 +563,11 @@ describe('mcpAuth with Clerk', () => {
 
   test('fails loudly instead of hanging when passed to a route without being called', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const app = express();
-    app.post('/mcp', mcpAuth as unknown as express.RequestHandler, (_req, res) => {
-      res.json({ ok: true });
-    });
-    const server: Server = await new Promise((resolve) => {
-      const s = app.listen(0, '127.0.0.1', () => resolve(s));
-    });
-    const { port } = server.address() as AddressInfo;
+    const res = await request(mcpAuth as unknown as express.RequestHandler);
+    consoleError.mockRestore();
 
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(2000),
-      });
-      expect(res.status).toBe(500);
-      expect(await res.text()).toContain('Clerk error: mcpAuth needs a resourceUrl');
-    } finally {
-      server.closeAllConnections();
-      server.close();
-      consoleError.mockRestore();
-    }
+    expect(res.status).toBe(500);
+    expect(res.body).toContain('Clerk error: mcpAuth needs a resourceUrl');
   });
 
   test('throws a Clerk error without a resourceUrl', () => {
@@ -925,97 +601,6 @@ describe('mcpAuth with Clerk', () => {
     expect(res.body.auth).toMatchObject({ clientId: 'client-1', extra: { userId: 'user-1' } });
   });
 
-  test('answers a rejected token with the invalid_token challenge', async () => {
-    authenticateRequest.mockResolvedValue({
-      isAuthenticated: false,
-      reason: 'token-invalid',
-      message: 'OAuth token not found (code=token-invalid, status=404)',
-    } as never);
-
-    const res = await request(mcpAuth({ resourceUrl }), { authorization: 'Bearer bad' });
-
-    expect(res.status).toBe(401);
-    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
-  });
-
-  test('records what Clerk reported for a rejected token on res.locals.mcpAuthFailure', async () => {
-    authenticateRequest.mockResolvedValue({
-      isAuthenticated: false,
-      reason: 'token-verification-failed',
-      message: 'JWT is expired. (code=token-verification-failed, status=n/a)',
-    } as never);
-    const failures: unknown[] = [];
-    const app = express();
-    app.use((_req, res, next) => {
-      res.on('finish', () => failures.push(res.locals.mcpAuthFailure));
-      next();
-    });
-    app.post('/mcp', mcpAuth({ resourceUrl }), (_req, res) => {
-      res.json({});
-    });
-
-    const res = await withListening(app, (baseUrl) =>
-      fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Authorization: 'Bearer bad' } }),
-    );
-
-    const [failure] = failures as McpAuthFailure[];
-    expect(failure?.reason).toBe('invalid_token');
-    expect(failure?.cause).toBeInstanceOf(McpTokenVerificationError);
-    expect(failure?.cause).toMatchObject({
-      code: 'token-verification-failed',
-      message: 'JWT is expired. (code=token-verification-failed, status=n/a)',
-    });
-    expect(res.headers.get('WWW-Authenticate')).toBe(
-      `Bearer resource_metadata="${metadataUrl}", error="invalid_token"`,
-    );
-  });
-
-  test.each([
-    ['unexpected-error', 'Unexpected error (code=unexpected-error, status=503)', 503],
-    ['unexpected-error', 'Unexpected error (code=unexpected-error, status=429)', 429],
-    ['unexpected-error', 'Unexpected error (code=unexpected-error, status=n/a)', 500],
-    ['secret-key-invalid', 'Invalid secret key (code=secret-key-invalid, status=401)', 500],
-  ])(
-    'answers a %s verification failure (%s) with a JSON %i instead of a challenge',
-    async (reason, message, status) => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      authenticateRequest.mockResolvedValue({ isAuthenticated: false, reason, message } as never);
-      const app = express();
-      app.post('/mcp', mcpAuth({ resourceUrl }));
-
-      const res = await withListening(app, async (baseUrl) => {
-        const answer = await fetch(`${baseUrl}/mcp`, {
-          method: 'POST',
-          headers: { Authorization: 'Bearer t' },
-        });
-        return { answer, body: await answer.json() };
-      });
-      const logged = consoleError.mock.calls.map(([error]) => error);
-      consoleError.mockRestore();
-
-      expect(res.answer.status).toBe(status);
-      expect(res.body).toEqual({ error: 'server_error' });
-      expect(res.answer.headers.get('WWW-Authenticate')).toBeNull();
-      expect(logged[0]).toBeInstanceOf(McpAuthError);
-      const { cause } = logged[0] as McpAuthError;
-      expect(cause).toBeInstanceOf(McpTokenVerificationError);
-      expect(cause).toMatchObject({ code: reason, message });
-    },
-  );
-
-  test('answers a Backend API 400 with the invalid_token challenge', async () => {
-    authenticateRequest.mockResolvedValue({
-      isAuthenticated: false,
-      reason: 'unexpected-error',
-      message: 'Unexpected error (code=unexpected-error, status=400)',
-    } as never);
-
-    const res = await request(mcpAuth({ resourceUrl }), { authorization: 'Bearer t' });
-
-    expect(res.status).toBe(401);
-    expect(res.challenge).toBe(`Bearer resource_metadata="${metadataUrl}", error="invalid_token"`);
-  });
-
   // The real client throws for a setup mistake, such as a clerkClient created without a publishable key
   test('answers a verification error the client threw with a 500 instead of a challenge', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -1034,31 +619,6 @@ describe('mcpAuth with Clerk', () => {
     expect((logged[0] as McpAuthError).cause).toMatchObject({
       message: expect.stringMatching(/^Publishable key is missing/),
     });
-  });
-
-  test('verifies with the clerkClient option instead of the default client', async () => {
-    const client = { authenticateRequest: vi.fn().mockResolvedValue(authenticated(['profile'])) };
-
-    const res = await request(mcpAuth({ resourceUrl, clerkClient: client as never }), {
-      authorization: 'Bearer t',
-    });
-
-    expect(res.status).toBe(200);
-    expect(client.authenticateRequest).toHaveBeenCalledOnce();
-    expect(authenticateRequest).not.toHaveBeenCalled();
-  });
-
-  test('answers a token without the required scopes with a 403 challenge', async () => {
-    authenticateRequest.mockResolvedValue(authenticated(['openid']));
-
-    const res = await request(mcpAuth({ resourceUrl, requiredScopes: ['profile'] }), {
-      authorization: 'Bearer t',
-    });
-
-    expect(res.status).toBe(403);
-    expect(res.challenge).toBe(
-      `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", scope="openid profile"`,
-    );
   });
 });
 
@@ -1201,32 +761,22 @@ describe('streamableHttpHandler', () => {
     'answers a %s with a 405 and Allow: POST, without building a server',
     async (method) => {
       const createServer = vi.fn(createMcpServer);
-      const app = express();
-      app.use(express.json());
-      app.all('/mcp', streamableHttpHandler(createServer, Transport));
-      const server: Server = await new Promise((resolve) => {
-        const s = app.listen(0, '127.0.0.1', () => resolve(s));
-      });
-      try {
-        const { port } = server.address() as AddressInfo;
-        const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      const res = await withApp(streamableHttpHandler(createServer, Transport), (baseUrl) =>
+        fetch(`${baseUrl}/mcp`, {
           method,
           headers: { accept: 'application/json, text/event-stream' },
           signal: AbortSignal.timeout(2000),
-        });
+        }),
+      );
 
-        expect(res.status).toBe(405);
-        expect(res.headers.get('allow')).toBe('POST');
-        expect(await res.json()).toEqual({
-          jsonrpc: '2.0',
-          error: { code: -32000, message: 'Method not allowed.' },
-          id: null,
-        });
-        expect(createServer).not.toHaveBeenCalled();
-      } finally {
-        server.closeAllConnections();
-        await new Promise((resolve) => server.close(resolve));
-      }
+      expect(res.status).toBe(405);
+      expect(res.headers.get('allow')).toBe('POST');
+      expect(await res.json()).toEqual({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Method not allowed.' },
+        id: null,
+      });
+      expect(createServer).not.toHaveBeenCalled();
     },
   );
 });

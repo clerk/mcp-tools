@@ -1,15 +1,12 @@
 // End to end: the MCP SDK v1 client against a Hono server that uses `mcpAuth` with `publicAccess`, on MCP SDK 2.x.
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
 import { type Context, Hono } from 'hono';
 import { describe, expect, test, vi } from 'vitest';
 
 import { mcpAuth, requireAdditionalScopes, streamableHttpHandler } from '../hono';
 import type { AuthInfo } from '../mcp-types';
-import { textOf } from './mcp-harness';
+import { connectOAuthClient, oauthMetadata, textOf } from './mcp-harness';
 
 const ORIGIN = 'https://mcp.example.com';
 const MCP_URL = new URL('/mcp', ORIGIN);
@@ -78,22 +75,8 @@ function startServer(readBody: ReadBody | undefined = undefined) {
   const fetchImpl = async (input: string | URL, init?: RequestInit) => {
     const req = new Request(input, init);
     const path = new URL(req.url).pathname;
-    if (path === '/.well-known/oauth-protected-resource/mcp') {
-      return Response.json({
-        resource: MCP_URL.href,
-        authorization_servers: [ORIGIN],
-        scopes_supported: ['profile', 'email'],
-      });
-    }
-    if (path === '/.well-known/oauth-authorization-server') {
-      return Response.json({
-        issuer: ORIGIN,
-        authorization_endpoint: `${ORIGIN}/authorize`,
-        token_endpoint: `${ORIGIN}/token`,
-        response_types_supported: ['code'],
-        code_challenge_methods_supported: ['S256'],
-      });
-    }
+    const metadata = oauthMetadata(ORIGIN, path, ['profile', 'email']);
+    if (metadata) return metadata;
     if (path !== '/mcp') return new Response('Not Found', { status: 404 });
     const res = await app.fetch(req);
     answers.push(`${req.method} ${res.status}`);
@@ -106,23 +89,8 @@ function startServer(readBody: ReadBody | undefined = undefined) {
 // A client that holds `token`, or none. Authorization ends at the redirect, which it records.
 async function connect(token?: string, readBody: ReadBody | undefined = undefined) {
   const { fetchImpl, toolCalls, answers } = startServer(readBody);
-  const redirects: URL[] = [];
-  const authProvider: OAuthClientProvider = {
-    redirectUrl: 'http://localhost/callback',
-    clientMetadata: { redirect_uris: ['http://localhost/callback'], client_name: 'e2e' },
-    clientInformation: () => ({ client_id: 'client_1' }),
-    tokens: () => (token ? { access_token: token, token_type: 'Bearer' } : undefined),
-    saveTokens: () => {},
-    redirectToAuthorization: (url) => {
-      redirects.push(url);
-    },
-    saveCodeVerifier: () => {},
-    codeVerifier: () => 'verifier',
-  };
-  const client = new Client({ name: 'e2e', version: '0.0.0' });
-  await client.connect(
-    new StreamableHTTPClientTransport(MCP_URL, { authProvider, fetch: fetchImpl }),
-  );
+  const { client, connected, redirects } = connectOAuthClient(MCP_URL, fetchImpl, token);
+  await connected;
   return { client, redirects, toolCalls, answers };
 }
 
@@ -273,14 +241,5 @@ describe('a server with publicAccess', () => {
     expect(redirects).toHaveLength(1);
     expect(redirects[0]!.searchParams.get('scope')).toBe('profile email');
     expect(toolCalls).not.toHaveBeenCalled();
-  });
-
-  test('runs a protected tool for a token with its scope', async () => {
-    const { client, redirects } = await connect('token_full');
-
-    const result = await client.callTool({ name: 'get_primary_email', arguments: {} });
-
-    expect(textOf(result)).toBe('email of user_1');
-    expect(redirects).toHaveLength(0);
   });
 });

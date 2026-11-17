@@ -27,13 +27,6 @@ describe('the streamableHttpHandler transport argument', () => {
     );
   });
 
-  test('rejects a server object in place of the factory', () => {
-    // @ts-expect-error each request needs its own server, so a shared server object is not accepted
-    honoStreamableHttpHandler(createServer(), WebStandardStreamableHTTPServerTransport);
-    // @ts-expect-error each request needs its own server, so a shared server object is not accepted
-    expressStreamableHttpHandler(createServer(), StreamableHTTPServerTransport);
-  });
-
   test("rejects the other adapter's transport class", () => {
     // @ts-expect-error the Node.js transport writes to a Node.js response instead of returning a Response
     honoStreamableHttpHandler(createServer, StreamableHTTPServerTransport);

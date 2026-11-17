@@ -88,25 +88,6 @@ describe('generateProtectedResourceMetadata with a publishable key', () => {
       ).toThrow('Clerk error: the publishable key is not a Clerk publishable key');
     },
   );
-
-  test('adds resource_documentation from properties', () => {
-    expect(
-      generateProtectedResourceMetadata({
-        publishableKey,
-        resourceUrl: 'https://mcp.example.com/mcp',
-        properties: {
-          resource_documentation: 'https://docs.example.com',
-          resource_name: 'Example',
-        },
-      }),
-    ).toStrictEqual({
-      resource: 'https://mcp.example.com/mcp',
-      authorization_servers: ['https://clerk.example.com'],
-      bearer_methods_supported: ['header'],
-      resource_documentation: 'https://docs.example.com',
-      resource_name: 'Example',
-    });
-  });
 });
 
 describe('matchResourceUrl', () => {

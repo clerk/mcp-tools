@@ -1,8 +1,5 @@
 // End to end: the MCP SDK v1 client against a customer tool on an MCP SDK 2.x server.
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { Hono } from 'hono';
@@ -10,6 +7,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { mcpAuth } from '../hono';
 import { requireAdditionalScopes } from '../server';
+import { connectOAuthClient, oauthMetadata } from './mcp-harness';
 
 const ORIGIN = 'https://mcp.example.com';
 const MCP_URL = new URL('/mcp', ORIGIN);
@@ -50,22 +48,8 @@ function startServer() {
   const fetchImpl = async (input: string | URL, init?: RequestInit) => {
     const req = new Request(input, init);
     const path = new URL(req.url).pathname;
-    if (path === '/.well-known/oauth-protected-resource/mcp') {
-      return Response.json({
-        resource: MCP_URL.href,
-        authorization_servers: [ORIGIN],
-        scopes_supported: ['profile', ...TOOL_SCOPES],
-      });
-    }
-    if (path === '/.well-known/oauth-authorization-server') {
-      return Response.json({
-        issuer: ORIGIN,
-        authorization_endpoint: `${ORIGIN}/authorize`,
-        token_endpoint: `${ORIGIN}/token`,
-        response_types_supported: ['code'],
-        code_challenge_methods_supported: ['S256'],
-      });
-    }
+    const metadata = oauthMetadata(ORIGIN, path, ['profile', ...TOOL_SCOPES]);
+    if (metadata) return metadata;
     if (path === '/token') {
       const params = new URLSearchParams(await req.text());
       tokenRequests.push(params);
@@ -95,23 +79,13 @@ function startServer() {
 // A client that is already authorized with `token`. A step-up ends at the authorization redirect, which it records.
 async function connect(token: string, refreshToken?: string) {
   const { fetchImpl, toolCalls, tokenRequests } = startServer();
-  const redirects: URL[] = [];
-  const authProvider: OAuthClientProvider = {
-    redirectUrl: 'http://localhost/callback',
-    clientMetadata: { redirect_uris: ['http://localhost/callback'], client_name: 'e2e' },
-    clientInformation: () => ({ client_id: 'client_1' }),
-    tokens: () => ({ access_token: token, token_type: 'Bearer', refresh_token: refreshToken }),
-    saveTokens: () => {},
-    redirectToAuthorization: (url) => {
-      redirects.push(url);
-    },
-    saveCodeVerifier: () => {},
-    codeVerifier: () => 'verifier',
-  };
-  const client = new Client({ name: 'e2e', version: '0.0.0' });
-  await client.connect(
-    new StreamableHTTPClientTransport(MCP_URL, { authProvider, fetch: fetchImpl }),
+  const { client, connected, redirects } = connectOAuthClient(
+    MCP_URL,
+    fetchImpl,
+    token,
+    refreshToken,
   );
+  await connected;
   return { client, redirects, toolCalls, tokenRequests };
 }
 
@@ -191,22 +165,8 @@ describe('a requireAdditionalScopes tool behind mcpAuth that lists its scopes in
     const fetchImpl = async (input: string | URL, init?: RequestInit) => {
       const req = new Request(input, init);
       const path = new URL(req.url).pathname;
-      if (path === '/.well-known/oauth-protected-resource/mcp') {
-        return Response.json({
-          resource: MCP_URL.href,
-          authorization_servers: [ORIGIN],
-          scopes_supported: ['profile', 'email', ...TOOL_SCOPES],
-        });
-      }
-      if (path === '/.well-known/oauth-authorization-server') {
-        return Response.json({
-          issuer: ORIGIN,
-          authorization_endpoint: `${ORIGIN}/authorize`,
-          token_endpoint: `${ORIGIN}/token`,
-          response_types_supported: ['code'],
-          code_challenge_methods_supported: ['S256'],
-        });
-      }
+      const metadata = oauthMetadata(ORIGIN, path, ['profile', 'email', ...TOOL_SCOPES]);
+      if (metadata) return metadata;
       if (path !== '/mcp') return new Response('Not Found', { status: 404 });
       return app.request(req);
     };
@@ -215,30 +175,13 @@ describe('a requireAdditionalScopes tool behind mcpAuth that lists its scopes in
   }
 
   async function connectTo(server: ReturnType<typeof startMiddlewareServer>, token: string) {
-    const redirects: URL[] = [];
     const statuses: number[] = [];
-    const authProvider: OAuthClientProvider = {
-      redirectUrl: 'http://localhost/callback',
-      clientMetadata: { redirect_uris: ['http://localhost/callback'], client_name: 'e2e' },
-      clientInformation: () => ({ client_id: 'client_1' }),
-      tokens: () => ({ access_token: token, token_type: 'Bearer' }),
-      saveTokens: () => {},
-      redirectToAuthorization: (url) => {
-        redirects.push(url);
-      },
-      saveCodeVerifier: () => {},
-      codeVerifier: () => 'verifier',
-    };
     const fetch = async (input: string | URL, init?: RequestInit) => {
       const res = await server.fetchImpl(input, init);
       if (new URL(input).pathname === '/mcp') statuses.push(res.status);
       return res;
     };
-    const client = new Client({ name: 'e2e', version: '0.0.0' });
-    const connected = client.connect(
-      new StreamableHTTPClientTransport(MCP_URL, { authProvider, fetch }),
-    );
-    return { client, connected, redirects, statuses };
+    return { ...connectOAuthClient(MCP_URL, fetch, token), statuses };
   }
 
   test('runs the tool after one reauthorization with the 403 scope', async () => {

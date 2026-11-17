@@ -8,19 +8,19 @@ import { describe, expect, test, vi } from 'vitest';
 // import it finds, including lazy `import()` calls and imports in code the app never runs, so a reference to the SDK
 // anywhere in a server entry point fails the app's build. Type-only imports would also leave the published
 // declarations pointing at a package the app may not have. These entry points must not reach the SDK at all.
-const SERVER_ENTRIES = [
-  'server.ts',
-  'tools.ts',
-  'next/index.ts',
-  'express/index.ts',
-  'hono/index.ts',
-  'stores/fs.ts',
-  'stores/redis.ts',
-  'stores/postgres.ts',
-  'stores/sqlite.ts',
-];
-
 const root = dirname(fileURLToPath(import.meta.url));
+
+// Every built entry in the `exports` map but the two client ones, which are built on the SDK
+const SERVER_ENTRIES = Object.values(
+  (
+    JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+      exports: Record<string, unknown>;
+    }
+  ).exports,
+)
+  .flatMap((target) => (typeof target === 'object' ? [(target as { import: string }).import] : []))
+  .map((built) => built.replace(/^\.\/dist\/(.+)\.mjs$/, '$1.ts'))
+  .filter((entry) => !entry.endsWith('client.ts'));
 
 // TypeScript's own scan: static, type-only, and dynamic imports and re-exports, but not import examples in comments or
 // strings
@@ -35,41 +35,39 @@ function resolveLocal(from: string, specifier: string) {
   return [`${base}.ts`, join(base, 'index.ts')].find((candidate) => existsSync(candidate));
 }
 
-// Every module specifier reachable from `entry` through the package's own files, mapped to the file that imports it
-function reachableSpecifiers(entry: string) {
-  const specifiers = new Map<string, string>();
+// Every package file reachable from `entry` through relative imports
+function reachableFiles(entry: string) {
   const seen = new Set<string>();
   const pending = [join(root, entry)];
-
   for (let file = pending.pop(); file; file = pending.pop()) {
     if (seen.has(file)) continue;
     seen.add(file);
-
     for (const specifier of importedSpecifiers(file)) {
-      if (!specifier.startsWith('.')) {
-        specifiers.set(specifier, file.slice(root.length + 1));
-        continue;
-      }
-      const local = resolveLocal(file, specifier);
+      const local = specifier.startsWith('.') ? resolveLocal(file, specifier) : undefined;
       if (local) pending.push(local);
     }
   }
+  return [...seen];
+}
 
-  return specifiers;
+const relative = (file: string) => file.slice(root.length + 1);
+
+function sdkImports(entry: string) {
+  return reachableFiles(entry).flatMap((file) =>
+    importedSpecifiers(file)
+      .filter((specifier) => specifier.startsWith('@modelcontextprotocol/sdk'))
+      .map((specifier) => `${relative(file)} imports ${specifier}`),
+  );
 }
 
 describe('server entry points', () => {
   test.each(SERVER_ENTRIES)('%s does not import @modelcontextprotocol/sdk', (entry) => {
-    const sdkImports = [...reachableSpecifiers(entry)]
-      .filter(([specifier]) => specifier.startsWith('@modelcontextprotocol/sdk'))
-      .map(([specifier, file]) => `${file} imports ${specifier}`);
-
-    expect(sdkImports).toEqual([]);
+    expect(sdkImports(entry)).toEqual([]);
   });
 
   test('the import scan finds the SDK where it is used', () => {
-    expect([...reachableSpecifiers('client.ts').keys()]).toContain(
-      '@modelcontextprotocol/sdk/client/index.js',
+    expect(sdkImports('client.ts')).toContain(
+      'client.ts imports @modelcontextprotocol/sdk/client/index.js',
     );
   });
 });
@@ -80,40 +78,26 @@ describe('server entry points', () => {
 // which webpack, Turbopack, and esbuild leave to fail at run time with at most a warning, where a bare reference would
 // fail the build.
 function runtimeClerkImports(entry: string) {
-  const found: string[] = [];
-  const seen = new Set<string>();
-  const pending = [join(root, entry)];
-
-  for (let file = pending.pop(); file; file = pending.pop()) {
-    if (seen.has(file)) continue;
-    seen.add(file);
-    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest);
-
-    for (const statement of source.statements) {
-      const isImport = ts.isImportDeclaration(statement);
-      if (!isImport && !ts.isExportDeclaration(statement)) continue;
-      const specifier = statement.moduleSpecifier;
-      if (!specifier || !ts.isStringLiteral(specifier)) continue;
-
-      if (specifier.text.startsWith('.')) {
-        const local = resolveLocal(file, specifier.text);
-        if (local) pending.push(local);
-        continue;
-      }
-      const typeOnly = isImport
-        ? statement.importClause?.isTypeOnly ||
-          (statement.importClause?.namedBindings &&
-            !statement.importClause.name &&
-            ts.isNamedImports(statement.importClause.namedBindings) &&
-            statement.importClause.namedBindings.elements.every((element) => element.isTypeOnly))
-        : statement.isTypeOnly;
-      if (specifier.text.startsWith('@clerk/') && !typeOnly) {
-        found.push(`${file.slice(root.length + 1)} imports ${specifier.text}`);
-      }
-    }
-  }
-
-  return found;
+  return reachableFiles(entry).flatMap((file) =>
+    ts
+      .createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest)
+      .statements.flatMap((statement) => {
+        const isImport = ts.isImportDeclaration(statement);
+        if (!isImport && !ts.isExportDeclaration(statement)) return [];
+        const specifier = statement.moduleSpecifier;
+        if (!specifier || !ts.isStringLiteral(specifier)) return [];
+        if (!specifier.text.startsWith('@clerk/')) return [];
+        const clause = isImport ? statement.importClause : undefined;
+        const typeOnly = isImport
+          ? clause?.isTypeOnly ||
+            (clause?.namedBindings &&
+              !clause.name &&
+              ts.isNamedImports(clause.namedBindings) &&
+              clause.namedBindings.elements.every((element) => element.isTypeOnly))
+          : statement.isTypeOnly;
+        return typeOnly ? [] : [`${relative(file)} imports ${specifier.text}`];
+      }),
+  );
 }
 
 const clerkLoads = vi.hoisted(() => [] as string[]);
@@ -122,18 +106,13 @@ vi.mock('@clerk/backend', () => {
   throw new Error('Cannot find package @clerk/backend');
 });
 
-describe('hono/index.ts without Clerk packages', () => {
-  test('has no top-level runtime import from a Clerk package', () => {
-    expect(runtimeClerkImports('hono/index.ts')).toEqual([]);
-  });
-
-  test('next/index.ts has no top-level runtime import from a Clerk package', () => {
-    expect(runtimeClerkImports('next/index.ts')).toEqual([]);
-  });
-
-  test('express/index.ts has no top-level runtime import from a Clerk package', () => {
-    expect(runtimeClerkImports('express/index.ts')).toEqual([]);
-  });
+describe('the adapter entry points without Clerk packages', () => {
+  test.each(['hono/index.ts', 'next/index.ts', 'express/index.ts'])(
+    '%s has no top-level runtime import from a Clerk package',
+    (entry) => {
+      expect(runtimeClerkImports(entry)).toEqual([]);
+    },
+  );
 
   test('the runtime import scan finds a Clerk import where there is one', () => {
     expect(runtimeClerkImports('clerk-verification.test.ts')).toContain(

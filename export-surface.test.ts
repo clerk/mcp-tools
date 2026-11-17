@@ -9,6 +9,46 @@ import { describe, expect, test } from 'vitest';
 // change this list in the same commit, so the surface only ever changes on purpose.
 type Surface = { values: string[]; types: string[] };
 
+// An adapter user imports from exactly one subpath, so every adapter pin carries all of `./server`.
+const SERVER: Surface = {
+  values: [
+    'McpAuthError',
+    'McpTokenVerificationError',
+    'fetchAuthorizationServerMetadata',
+    'generateProtectedResourceMetadata',
+    'isClerkAuthInfo',
+    'matchResourceUrl',
+    'metadataCorsHeaders',
+    'requireAdditionalScopes',
+    'toClerkAuthInfo',
+  ],
+  types: [
+    'ClerkAuthInfo',
+    'ClerkOAuthAuth',
+    'ClerkOAuthClient',
+    'McpAuthFailure',
+    'McpPublicMethod',
+    'McpResourceUrl',
+    'PublicAccess',
+  ],
+};
+
+const withServer = (values: string[], types: string[]): Surface => ({
+  values: [...SERVER.values, ...values].sort(),
+  types: [...SERVER.types, ...types].sort(),
+});
+
+// The Express and Hono adapters export the same names on top of `./server`
+const ADAPTER: Surface = {
+  values: [
+    'authorizationServerMetadataHandler',
+    'mcpAuth',
+    'protectedResourceMetadataHandler',
+    'streamableHttpHandler',
+  ],
+  types: ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
+};
+
 const PINNED: Record<string, Surface> = {
   './client': {
     values: [
@@ -56,116 +96,22 @@ const PINNED: Record<string, Surface> = {
       'SubmittedFeedback',
     ],
   },
-  './server': {
-    values: [
-      'McpAuthError',
-      'McpTokenVerificationError',
-      'fetchAuthorizationServerMetadata',
-      'generateProtectedResourceMetadata',
-      'isClerkAuthInfo',
-      'matchResourceUrl',
-      'metadataCorsHeaders',
-      'requireAdditionalScopes',
-      'toClerkAuthInfo',
-    ],
-    types: [
-      'ClerkAuthInfo',
-      'ClerkOAuthAuth',
-      'ClerkOAuthClient',
-      'McpAuthFailure',
-      'McpPublicMethod',
-      'McpResourceUrl',
-      'PublicAccess',
-    ],
-  },
-  './next': {
-    values: [
-      'McpAuthError',
-      'McpTokenVerificationError',
+  './server': SERVER,
+  './next': withServer(
+    [
       'authorizationServerMetadataHandler',
-      'fetchAuthorizationServerMetadata',
-      'generateProtectedResourceMetadata',
-      'isClerkAuthInfo',
-      'matchResourceUrl',
       'metadataCorsHandler',
-      'metadataCorsHeaders',
       'protectedResourceMetadataHandler',
-      'requireAdditionalScopes',
-      'toClerkAuthInfo',
       'withMcpAuth',
     ],
-    types: [
-      'ClerkAuthInfo',
-      'ClerkOAuthAuth',
-      'ClerkOAuthClient',
-      'McpAuthFailure',
-      'McpAuthOptions',
-      'McpPublicMethod',
-      'McpResourceUrl',
-      'ProtectedResourceMetadataOptions',
-      'PublicAccess',
-    ],
-  },
+    ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
+  ),
   './next/client': {
     values: ['completeOAuthHandler'],
     types: [],
   },
-  './express': {
-    values: [
-      'McpAuthError',
-      'McpTokenVerificationError',
-      'authorizationServerMetadataHandler',
-      'fetchAuthorizationServerMetadata',
-      'generateProtectedResourceMetadata',
-      'isClerkAuthInfo',
-      'matchResourceUrl',
-      'mcpAuth',
-      'metadataCorsHeaders',
-      'protectedResourceMetadataHandler',
-      'requireAdditionalScopes',
-      'streamableHttpHandler',
-      'toClerkAuthInfo',
-    ],
-    types: [
-      'ClerkAuthInfo',
-      'ClerkOAuthAuth',
-      'ClerkOAuthClient',
-      'McpAuthFailure',
-      'McpAuthOptions',
-      'McpPublicMethod',
-      'McpResourceUrl',
-      'ProtectedResourceMetadataOptions',
-      'PublicAccess',
-    ],
-  },
-  './hono': {
-    values: [
-      'McpAuthError',
-      'McpTokenVerificationError',
-      'authorizationServerMetadataHandler',
-      'fetchAuthorizationServerMetadata',
-      'generateProtectedResourceMetadata',
-      'isClerkAuthInfo',
-      'matchResourceUrl',
-      'mcpAuth',
-      'metadataCorsHeaders',
-      'protectedResourceMetadataHandler',
-      'requireAdditionalScopes',
-      'streamableHttpHandler',
-      'toClerkAuthInfo',
-    ],
-    types: [
-      'ClerkAuthInfo',
-      'ClerkOAuthAuth',
-      'ClerkOAuthClient',
-      'McpAuthFailure',
-      'McpAuthOptions',
-      'McpPublicMethod',
-      'McpResourceUrl',
-      'ProtectedResourceMetadataOptions',
-      'PublicAccess',
-    ],
-  },
+  './express': withServer(ADAPTER.values, ADAPTER.types),
+  './hono': withServer(ADAPTER.values, ADAPTER.types),
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
   './stores/redis': { values: ['createRedisStore'], types: ['RedisStoreConfig'] },
   './stores/postgres': { values: ['createPostgresStore'], types: ['PostgresStoreConfig'] },
@@ -253,29 +199,6 @@ describe('export surface', () => {
     expect(subpath in PINNED, `${subpath} has no pinned export list`).toBe(true);
     expect(surfaceOf(source), `${subpath} export surface`).toEqual(PINNED[subpath]);
   });
-
-  // An adapter user imports from exactly one subpath, so every adapter carries all of the core subpath. Read from the
-  // entry modules, not the pins, so the rule holds whatever the pins say.
-  test.each(['./next', './express', './hono'])(
-    '%s exports every name ./server exports',
-    (adapter) => {
-      const surfaceAt = (subpath: string) => {
-        const target = exportsMap[subpath];
-        if (!target) throw new Error(`${subpath} is not in the exports map`);
-        return surfaceOf(entrySource(subpath, target));
-      };
-      const core = surfaceAt('./server');
-      const surface = surfaceAt(adapter);
-      expect(
-        core.values.filter((name) => !surface.values.includes(name)),
-        'missing values',
-      ).toEqual([]);
-      expect(
-        core.types.filter((name) => !surface.types.includes(name)),
-        'missing types',
-      ).toEqual([]);
-    },
-  );
 
   test('every pinned subpath is in the exports map', () => {
     expect(Object.keys(PINNED).filter((subpath) => !(subpath in exportsMap))).toEqual([]);
