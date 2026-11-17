@@ -9,7 +9,8 @@ import {
   submitFeedbackTool,
   type SubmitFeedbackToolOptions,
 } from './tools';
-import { connectTool, sentBody } from './test/mcp-harness';
+import { clerkAuthenticated, connectTool, sentBody } from './test/mcp-harness';
+import { toClerkAuthInfo } from './server';
 
 const input = {
   kind: 'broken' as const,
@@ -343,12 +344,14 @@ describe('submitFeedbackTool', () => {
   test('attaches the Clerk user and OAuth client from toClerkAuthInfo auth info', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
     const client = await connect(fetchImpl, {
-      authInfo: {
-        token: 'oat_test',
-        clientId: 'client_123',
-        scopes: ['profile'],
-        extra: { userId: 'user_123', verifiedBy: 'clerk' },
-      },
+      authInfo: toClerkAuthInfo(
+        {
+          ...clerkAuthenticated(['profile']).toAuth(),
+          userId: 'user_123',
+          clientId: 'client_123',
+        },
+        'oat_test',
+      ),
     });
 
     await client.callTool({ name: 'submit_feedback', arguments: input });
@@ -366,7 +369,7 @@ describe('submitFeedbackTool', () => {
         token: 'external',
         clientId: 'external-client',
         scopes: [],
-        extra: { userId: 'user_01HEXTERNALPROVIDER' },
+        extra: { userId: 'user_01HEXTERNALPROVIDER', verifiedBy: 'clerk' },
       },
     });
 
@@ -480,12 +483,14 @@ describe('submitFeedbackTool', () => {
 });
 
 describe('submitFeedbackTool on MCP SDK v2', () => {
-  const clerkAuthInfo: AuthInfo = {
-    token: 'oat_test',
-    clientId: 'client_123',
-    scopes: ['profile'],
-    extra: { userId: 'user_123', verifiedBy: 'clerk' },
-  };
+  const clerkAuthInfo = toClerkAuthInfo(
+    {
+      ...clerkAuthenticated(['profile']).toAuth(),
+      userId: 'user_123',
+      clientId: 'client_123',
+    },
+    'oat_test',
+  )!;
 
   function callTool(
     fetchImpl: typeof fetch,

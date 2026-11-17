@@ -2,10 +2,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   fetchAuthorizationServerMetadata,
   generateProtectedResourceMetadata,
+  isClerkAuthInfo,
   matchResourceUrl,
   toClerkAuthInfo,
 } from './server';
-import { FAKE_PK } from './test/mcp-harness';
+import { clerkAuthenticated, FAKE_PK } from './test/mcp-harness';
 
 // RFC 9728 section 2 parameters only: `jwks_uri` would name the protected resource's own keys, not the
 // authorization server's, and `resource_documentation` must describe the app's own server, which only it can name.
@@ -177,6 +178,22 @@ describe('fetchAuthorizationServerMetadata', () => {
 });
 
 describe('toClerkAuthInfo', () => {
+  test('trusts its own result, but not a forged marker or an external copy', () => {
+    const authInfo = toClerkAuthInfo(clerkAuthenticated().toAuth(), 'token');
+
+    expect(isClerkAuthInfo(authInfo)).toBe(true);
+    expect(isClerkAuthInfo({ ...authInfo! })).toBe(false);
+    expect(
+      isClerkAuthInfo({
+        token: 'token',
+        clientId: '',
+        scopes: [],
+        extra: { userId: 'user-1', verifiedBy: 'clerk' },
+      }),
+    ).toBe(false);
+    expect(isClerkAuthInfo(undefined)).toBe(false);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

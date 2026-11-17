@@ -7,7 +7,7 @@ import { createClerkClient } from '@clerk/backend';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
 import { serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
-import { McpAuthError, McpTokenVerificationError } from './server';
+import { isClerkAuthInfo, McpAuthError, McpTokenVerificationError } from './server';
 import { FAKE_PK } from './test/mcp-harness';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
@@ -69,6 +69,7 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
         }),
       },
     });
+    expect(isClerkAuthInfo(authInfo)).toBe(true);
     await expect(authInfo.extra.auth?.getToken()).resolves.toBe(token);
   });
 
@@ -121,9 +122,14 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
 // A stub Backend API, so the status Clerk's verifier reports for an answer it got is the one it really derives
 describe('verifyClerkOAuthToken when the Backend API fails', () => {
   let status = 503;
+  let resetConnection = false;
   const requests: string[] = [];
   const backendApi = createServer((req, res) => {
     requests.push(`${req.method} ${req.url}`);
+    if (resetConnection) {
+      req.socket.destroy();
+      return;
+    }
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ errors: [{ code: 'unexpected_error', message: 'down' }] }));
   });
@@ -136,6 +142,7 @@ describe('verifyClerkOAuthToken when the Backend API fails', () => {
   afterAll(() => new Promise<void>((resolve) => backendApi.close(() => resolve())));
   beforeEach(() => {
     requests.length = 0;
+    resetConnection = false;
   });
 
   // No `jwtKey`, so a JWT access token makes Clerk fetch the JWKS from the stub
@@ -183,6 +190,26 @@ describe('verifyClerkOAuthToken when the Backend API fails', () => {
       expect(error).toMatchObject({ code: 'unexpected-error', status: answered });
     },
   );
+
+  // Released backend versions erase the JWKS-load context when fetch throws. Only clerk/javascript#10826 adds
+  // `jwk-remote-failed-to-load` here, so mcp-tools cannot distinguish this from a rejected token yet.
+  test('reports a JWKS connection failure as token-verification-failed until javascript#10826', async () => {
+    resetConnection = true;
+
+    const error = await verifyClerkOAuthToken(
+      remoteClient(),
+      accessToken({ aud: resourceUrl }),
+      resourceUrl,
+    ).catch((thrown: unknown) => thrown);
+
+    expect(requests).toContain('GET /v1/jwks');
+    expect(error).toBeInstanceOf(McpTokenVerificationError);
+    expect(error).not.toBeInstanceOf(McpAuthError);
+    expect(error).toMatchObject({
+      code: 'token-verification-failed',
+      message: expect.stringMatching(/^fetch failed/),
+    });
+  });
 
   test('throws an McpAuthError answered with a 500 when the JWKS for a JWT access token cannot be loaded', async () => {
     status = 503;

@@ -13,14 +13,23 @@ import {
   type CreateBrowserSessionOptions,
   type CreateBrowserSessionToolOptions,
 } from './tools';
-import { connectTool, sentBody, textOf } from './test/mcp-harness';
+import { clerkAuthenticated, connectTool, sentBody, textOf } from './test/mcp-harness';
+import { toClerkAuthInfo } from './server';
 
-const authInfo: AuthInfo = {
-  token: 't',
-  clientId: 'client_1',
-  scopes: [],
-  extra: { userId: 'user_1', verifiedBy: 'clerk' },
-};
+// Positive fixtures must use the real converter; copied or hand-built markers are deliberately untrusted.
+function authInfoFor(fields: Partial<AuthInfo> = {}, convert = toClerkAuthInfo): AuthInfo {
+  const info = convert(
+    {
+      ...clerkAuthenticated(fields.scopes).toAuth(),
+      clientId: fields.clientId ?? 'client_1',
+      userId: typeof fields.extra?.userId === 'string' ? fields.extra.userId : 'user_1',
+    },
+    fields.token ?? 't',
+  )!;
+  return Object.assign(info, fields);
+}
+
+const authInfo = authInfoFor();
 
 const SECRET = 'sk_test_123';
 const LINK = 'https://accounts.example.com/v1/tickets/accept?ticket=SECRET_TICKET';
@@ -364,9 +373,12 @@ describe('createBrowserSession', () => {
     );
   });
 
-  test('names the agent "mcp" without a client id', async () => {
+  test('names the agent "mcp" if application code clears the verified client id', async () => {
     const fetchImpl = okFetch();
-    await createBrowserSession({ authInfo: { ...authInfo, clientId: '' } }, options(fetchImpl));
+    // The converter requires a client ID; only caller mutation can reach this defensive fallback.
+    const mutated = authInfoFor();
+    mutated.clientId = '';
+    await createBrowserSession({ authInfo: mutated }, options(fetchImpl));
     expect(sentBody(fetchImpl).agent_name).toBe('mcp');
   });
 
@@ -382,6 +394,7 @@ describe('createBrowserSession', () => {
 
   test.each([
     ['no auth info', undefined],
+    ['forged Clerk marker', { ...authInfo }],
     ['no user id', { ...authInfo, extra: { verifiedBy: 'clerk' } }],
     ['empty user id', { ...authInfo, extra: { userId: '', verifiedBy: 'clerk' } }],
     ['not Clerk-verified', { ...authInfo, extra: { userId: 'user_1' } }],
@@ -455,7 +468,7 @@ describe('createBrowserSession', () => {
     const fetchImpl = okFetch();
     await expect(
       createBrowserSession(
-        { authInfo: { ...authInfo, scopes: ['a'] }, path: 'bad' },
+        { authInfo: authInfoFor({ scopes: ['a'] }), path: 'bad' },
         options(fetchImpl, { requiredScopes: ['a', 'b'] }),
       ),
     ).rejects.toMatchObject(browserSessionError('insufficient_scope', { missingScopes: ['b'] }));
@@ -465,7 +478,7 @@ describe('createBrowserSession', () => {
   test('proceeds when all required scopes are present', async () => {
     const fetchImpl = okFetch();
     await createBrowserSession(
-      { authInfo: { ...authInfo, scopes: ['a', 'c'] } },
+      { authInfo: authInfoFor({ scopes: ['a', 'c'] }) },
       options(fetchImpl, { requiredScopes: ['a'] }),
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -654,7 +667,7 @@ describe('createBrowserSessionTool', () => {
       const fetchImpl = okFetch();
       const create = createBrowserSessionTool(options(fetchImpl, { requiredScopes: scopes }));
       scopes.length = 0;
-      const result = await create[2]({}, { authInfo: { ...authInfo, scopes: ['a'] } });
+      const result = await create[2]({}, { authInfo: authInfoFor({ scopes: ['a'] }) });
       expect(result.isError).toBe(true);
       expect(fetchImpl).not.toHaveBeenCalled();
     });
@@ -678,11 +691,18 @@ describe('createBrowserSessionTool', () => {
   describe('step-up warning', () => {
     // The callback only sees missing scopes on MCP SDK 2.0: 2.1+ answers with the step-up challenge before it runs.
     const v2Extra = (auth: AuthInfo) => ({ http: { authInfo: auth } });
-    const missing = {
-      ...authInfo,
-      scopes: ['profile'],
-      extra: { ...authInfo.extra, userId: 'user_SECRET' },
-    };
+    // `resetModules` also resets private provenance. Build fixtures with the freshly loaded converter.
+    async function freshInfo(fields: Partial<AuthInfo> = {}) {
+      const { toClerkAuthInfo: convert } = await import('./server');
+      return authInfoFor(
+        {
+          scopes: ['profile'],
+          extra: { userId: 'user_SECRET', verifiedBy: 'clerk' },
+          ...fields,
+        },
+        convert,
+      );
+    }
 
     function warned() {
       vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -699,8 +719,8 @@ describe('createBrowserSessionTool', () => {
     test('warns once, with a message that carries no request data', async () => {
       const consoleWarn = warned();
       const tool = await freshTool({ requiredScopes: ['email'] });
-      const first = await tool[2]({}, v2Extra({ ...missing, token: 'TOKEN_SECRET' }));
-      await tool[2]({}, v2Extra(missing));
+      const first = await tool[2]({}, v2Extra(await freshInfo({ token: 'TOKEN_SECRET' })));
+      await tool[2]({}, v2Extra(await freshInfo()));
       // The tool error still goes to the agent.
       expect(first.isError).toBe(true);
       expect(consoleWarn).toHaveBeenCalledTimes(1);
@@ -712,17 +732,17 @@ describe('createBrowserSessionTool', () => {
     test('warns once when the tool is built for each request', async () => {
       const consoleWarn = warned();
       const first = await freshTool({ requiredScopes: ['email'] });
-      await first[2]({}, v2Extra(missing));
+      await first[2]({}, v2Extra(await freshInfo()));
       const { createBrowserSessionTool: create } = await import('./tools');
       const second = create(options(okFetch(), { requiredScopes: ['email'] }));
-      await second[2]({}, v2Extra(missing));
+      await second[2]({}, v2Extra(await freshInfo()));
       expect(consoleWarn).toHaveBeenCalledTimes(1);
     });
 
     test('does not warn on the SDK 1.x shape, where the tool error is expected', async () => {
       const consoleWarn = warned();
       const tool = await freshTool({ requiredScopes: ['email'] });
-      const result = await tool[2]({}, { authInfo: missing });
+      const result = await tool[2]({}, { authInfo: await freshInfo() });
       expect(result.isError).toBe(true);
       expect(consoleWarn).not.toHaveBeenCalled();
     });
@@ -730,7 +750,7 @@ describe('createBrowserSessionTool', () => {
     test('does not warn when an SDK 2.x request ends in another error', async () => {
       const consoleWarn = warned();
       const tool = await freshTool();
-      const result = await tool[2]({ path: '//evil.example' }, v2Extra(authInfo));
+      const result = await tool[2]({ path: '//evil.example' }, v2Extra(await freshInfo()));
       expect(result.isError).toBe(true);
       expect(consoleWarn).not.toHaveBeenCalled();
     });
@@ -738,7 +758,7 @@ describe('createBrowserSessionTool', () => {
     test('does not warn when every scope is present', async () => {
       const consoleWarn = warned();
       const tool = await freshTool({ requiredScopes: ['email'] });
-      const result = await tool[2]({}, v2Extra({ ...authInfo, scopes: ['email'] }));
+      const result = await tool[2]({}, v2Extra(await freshInfo({ scopes: ['email'] })));
       expect(result.isError).toBeUndefined();
       expect(consoleWarn).not.toHaveBeenCalled();
     });
@@ -777,7 +797,7 @@ describe('createBrowserSessionTool', () => {
       expect(
         await callLogged(okFetch(), {
           requiredScopes: ['email', 'user:org:read'],
-          auth: { ...authInfo, scopes: [] },
+          auth: authInfoFor(),
         }),
       ).toBe('Clerk error: createBrowserSession failed (insufficient_scope: email user:org:read)');
     });
@@ -814,7 +834,7 @@ describe('createBrowserSessionTool', () => {
     });
 
     test.each([
-      ['insufficient_scope: b', { auth: { ...authInfo, scopes: ['a'] } }, ['a', 'b']],
+      ['insufficient_scope: b', { auth: authInfoFor({ scopes: ['a'] }) }, ['a', 'b']],
       ['not_authenticated', { auth: { ...authInfo, extra: {} } }, []],
       ['invalid_path', { path: `https://evil.example/${SECRET}` }, []],
     ])('logs a refused request as %s', async (reason, request, requiredScopes) => {
@@ -1169,7 +1189,7 @@ describe('createBrowserSessionTool on MCP SDK v2', () => {
     const fetchImpl = okFetch();
     const response = await callTool(
       fetchImpl,
-      { ...authInfo, scopes: ['profile'], resource: new URL('https://mcp.example.com/mcp') },
+      authInfoFor({ scopes: ['profile'], resource: new URL('https://mcp.example.com/mcp') }),
       { requiredScopes: ['email', 'user:org:read'] },
     );
     expect(response.status).toBe(403);
@@ -1180,11 +1200,9 @@ describe('createBrowserSessionTool on MCP SDK v2', () => {
   });
 
   test('leaves resource_metadata out of the challenge when auth info has no resource', async () => {
-    const response = await callTool(
-      okFetch(),
-      { ...authInfo, scopes: ['email'] },
-      { requiredScopes: ['user:org:read'] },
-    );
+    const response = await callTool(okFetch(), authInfoFor({ scopes: ['email'] }), {
+      requiredScopes: ['user:org:read'],
+    });
     expect(response.status).toBe(403);
     const header = response.headers.get('www-authenticate');
     expect(header).toContain('error="insufficient_scope"');
@@ -1192,22 +1210,18 @@ describe('createBrowserSessionTool on MCP SDK v2', () => {
   });
 
   test('leaves a granted scope that is not a scope-token out of the challenge', async () => {
-    const response = await callTool(
-      okFetch(),
-      { ...authInfo, scopes: ['bad"scope', 'email'] },
-      { requiredScopes: ['user:org:read'] },
-    );
+    const response = await callTool(okFetch(), authInfoFor({ scopes: ['bad"scope', 'email'] }), {
+      requiredScopes: ['user:org:read'],
+    });
     expect(response.status).toBe(403);
     expect(response.headers.get('www-authenticate')).toContain('scope="email user:org:read"');
   });
 
   test('runs the tool when the token has the required scopes', async () => {
     const fetchImpl = okFetch();
-    const response = await callTool(
-      fetchImpl,
-      { ...authInfo, scopes: ['user:org:read'] },
-      { requiredScopes: ['user:org:read'] },
-    );
+    const response = await callTool(fetchImpl, authInfoFor({ scopes: ['user:org:read'] }), {
+      requiredScopes: ['user:org:read'],
+    });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('agttsk_1');
   });

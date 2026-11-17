@@ -1,4 +1,5 @@
 import type { AuthInfo } from './mcp-types';
+import { hasClerkVerification, markClerkVerified } from './clerk-auth-info';
 import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
 
@@ -319,14 +320,14 @@ export function toClerkAuthInfo(
     return undefined;
   }
 
-  return {
+  return markClerkVerified<ClerkAuthInfo>({
     token,
     scopes: auth.scopes,
     clientId: auth.clientId,
     // The checks above guarantee every `ClerkOAuthAuth` field; `getToken` is `() => Promise<string>` for an
     // authenticated `oauth_token` auth object.
     extra: { userId: auth.userId, verifiedBy: 'clerk', auth: auth as ClerkOAuthAuth },
-  };
+  });
 }
 
 /**
@@ -363,11 +364,15 @@ export type ClerkAuthInfo = AuthInfo & {
 };
 
 /**
- * Whether `authInfo` came from `toClerkAuthInfo`, so its `clientId` and `extra.userId` are Clerk ids.
+ * Whether `authInfo` came from `toClerkAuthInfo` or the bearer authenticator's metadata copy of it, so its `clientId`
+ * and `extra.userId` are Clerk ids. Private object provenance is required: a hand-built or externally copied object
+ * with `extra.verifiedBy: 'clerk'` is not trusted. This does not verify a token; `toClerkAuthInfo` takes an already
+ * verified Clerk auth object.
  */
 export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is ClerkAuthInfo {
-  const userId = authInfo?.extra?.userId;
-  return authInfo?.extra?.verifiedBy === 'clerk' && typeof userId === 'string' && userId !== '';
+  if (!authInfo || !hasClerkVerification(authInfo)) return false;
+  const userId = authInfo.extra?.userId;
+  return authInfo.extra?.verifiedBy === 'clerk' && typeof userId === 'string' && userId !== '';
 }
 
 export { requireAdditionalScopes } from './scope-challenge';

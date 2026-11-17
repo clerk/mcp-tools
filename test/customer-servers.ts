@@ -8,8 +8,8 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
 import { createBrowserSessionTool } from '../tools';
-import { requireAdditionalScopes } from '../server';
-import { oauthMetadata } from './mcp-harness';
+import { requireAdditionalScopes, toClerkAuthInfo } from '../server';
+import { clerkAuthenticated, oauthMetadata } from './mcp-harness';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
 
@@ -29,16 +29,18 @@ export type CustomerServerKind = 'v1-route' | 'v2-registration' | 'v2-own-tool';
 
 type Listener = (req: IncomingMessage, res: ServerResponse) => void;
 
-// Stands in for `toClerkAuthInfo` after the customer's token check.
+// The customer's already verified Clerk auth object, converted without forging or copying its provenance.
 function verify(token: string | undefined): AuthInfo | undefined {
   const match = Object.values(TOKENS).find((entry) => entry.token === token);
   if (!match) return undefined;
-  return {
-    token: match.token,
-    clientId: 'client_1',
-    scopes: match.scopes,
-    extra: { userId: 'user_1', verifiedBy: 'clerk' },
-  };
+  return toClerkAuthInfo(
+    {
+      ...clerkAuthenticated(match.scopes).toAuth(),
+      clientId: 'client_1',
+      userId: 'user_1',
+    },
+    match.token,
+  );
 }
 
 function bearer(req: Request) {
@@ -133,7 +135,7 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
       if (!authInfo) return unauthorized(origin);
       // The tool's registration option makes the SDK send the step-up challenge.
       return mcpHandler.fetch(req, {
-        authInfo: { ...authInfo, resourceMetadataUrl: resourceMetadataUrl(origin) },
+        authInfo: Object.assign(authInfo, { resourceMetadataUrl: resourceMetadataUrl(origin) }),
       });
     });
   },
@@ -156,7 +158,7 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
       const authInfo = verify(bearer(req));
       if (!authInfo) return unauthorized(origin);
       return mcpHandler.fetch(req, {
-        authInfo: { ...authInfo, resourceMetadataUrl: resourceMetadataUrl(origin) },
+        authInfo: Object.assign(authInfo, { resourceMetadataUrl: resourceMetadataUrl(origin) }),
       });
     });
   },

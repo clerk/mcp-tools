@@ -86,7 +86,7 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
 /**
  * The settings a Clerk client is built from, read from the app's environment through `env(c)`: the secret and
  * publishable keys, and `CLERK_API_URL`, `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as
- * `clerkMiddleware()` from `@clerk/hono` and the `clerkClient` from `@clerk/express` read them.
+ * `clerkClient` from `@clerk/express` reads them.
  * @param c - The Hono context of the request
  * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
  * not set.

@@ -706,6 +706,24 @@ describe.each(authApps)('%s auth entry point with verifyToken', (name, mount) =>
     },
   );
 
+  test.each([
+    ['no expiresAt', { expiresAt: undefined }],
+    ['an empty clientId', { clientId: '' }],
+  ])('rejects a forged Clerk marker with %s', async (_name, fields) => {
+    const res = await verifiedBy(name, () => ({
+      ...issued,
+      ...fields,
+      extra: { userId: 'user-1', verifiedBy: 'clerk' },
+    }));
+
+    expect(res.status).toBe(401);
+    expect(res.challenge).toContain('error="invalid_token"');
+    expect(res.failure).toMatchObject({
+      reason: 'invalid_token',
+      cause: { code: 'token-claims-missing' },
+    });
+  });
+
   // Clerk enforces `exp` itself, so auth info from `toClerkAuthInfo` in a custom verifier needs no `expiresAt`
   test('passes auth info a custom verifier built with toClerkAuthInfo, without an expiresAt', async () => {
     const authInfo = toClerkAuthInfo(clerkAuthenticated().toAuth(), 't');

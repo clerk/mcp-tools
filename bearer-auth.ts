@@ -1,6 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
+import { copyClerkVerification } from './clerk-auth-info';
 import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
 import { assertScopeTokens, challengeScopes } from './scope-challenge';
@@ -1020,7 +1021,10 @@ export function bearerAuthenticator({
     }
 
     // MCP SDK 2 reads `resourceMetadataUrl` from the auth info for the challenges its `scopeChallenge` tools send
-    return { ok: true, authInfo: { ...authInfo, resourceMetadataUrl } };
+    return {
+      ok: true,
+      authInfo: copyClerkVerification(authInfo, { ...authInfo, resourceMetadataUrl }),
+    };
   };
 }
 
@@ -1100,7 +1104,11 @@ function isVerificationUnavailable(reason: string, message: string, status: numb
  * challenge. When Clerk could not verify the token at all, it throws an `McpAuthError` around that error instead, and
  * the framework answers with a server error, since a challenge would make the client discard a valid token. That covers
  * a Backend API check that failed with a 429, a 5xx, or no response, which the answer keeps as its status (500
- * without one), an invalid secret key, and a JWKS that can't be loaded (see `isVerificationUnavailable`).
+ * without one), an invalid secret key, and a JWKS load reported as `jwk-remote-failed-to-load` or with the
+ * `Error loading Clerk JWKS` HTTP-error message (see `isVerificationUnavailable`). Released backend versions report
+ * a JWKS fetch that throws before a response, such as a DNS or connection failure, as `token-verification-failed`
+ * with only the fetch error's message. That case still gets an `invalid_token` challenge until clerk/javascript#10826
+ * reports it as `jwk-remote-failed-to-load`; it cannot safely be distinguished from a rejected token by its message.
  */
 export async function verifyClerkOAuthToken(
   client: ClerkOAuthClient,
