@@ -56,7 +56,8 @@ export type ServerCardRepository = {
    */
   source: string;
   /**
-   * The server's path in the repository, relative to its root.
+   * A clean relative path from the repository root, such as `packages/server`. Must be nonempty, with no
+   * URL scheme, absolute path, backslashes, leading or trailing `/`, empty segments, or `.` or `..` segments.
    */
   subfolder?: string | undefined;
   /**
@@ -76,7 +77,8 @@ export type ServerCardOptions = {
    */
   name: string;
   /**
-   * The server's version, such as `1.2.0`. Semantic versioning is recommended; a range such as `^1.2.0` is rejected.
+   * The server's version, in 1 to 255 Unicode code points, such as `1.2.0`. Semantic versioning is recommended;
+   * a range such as `^1.2.0` is rejected.
    */
   version: string;
   /**
@@ -223,7 +225,7 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
   if (
     typeof version !== 'string' ||
     version.length === 0 ||
-    version.length > 255 ||
+    [...version].length > 255 ||
     VERSION_RANGE.test(version)
   ) {
     fail("version must be 1 to 255 characters naming one version, such as '1.2.0', not a range");
@@ -245,7 +247,7 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
   }
   if (repository !== undefined && !isRepository(repository)) {
     fail(
-      'repository must be { url, source, subfolder?, id? } with an http or https url and string fields',
+      'repository must be { url, source, subfolder?, id? } with an http or https url, string fields, and a clean relative subfolder (no URL scheme, absolute path, backslashes, leading or trailing /, empty segments, or . or .. segments)',
     );
   }
   if (_meta !== undefined) assertMeta(fail, _meta);
@@ -323,9 +325,16 @@ function isRepository(repository: unknown): boolean {
     isHttpUrl(url) &&
     typeof source === 'string' &&
     source.length > 0 &&
-    (subfolder === undefined || typeof subfolder === 'string') &&
+    (subfolder === undefined || isCleanRelativePath(subfolder)) &&
     (id === undefined || typeof id === 'string')
   );
+}
+
+function isCleanRelativePath(path: unknown): boolean {
+  if (typeof path !== 'string' || path.includes('\\') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(path)) {
+    return false;
+  }
+  return path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 // Validate the emitted string, not WHATWG URL's repaired/escaped serialization. RFC 3986 Appendix A permits

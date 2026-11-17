@@ -11,6 +11,7 @@ vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient 
 
 import { FAKE_PK, clerkAuthenticated, expiresAt, sendRaw, withListening } from './test/mcp-harness';
 import { linkedCardCatalogErrors } from './test/ai-catalog-contract';
+import { validateServerCard } from './test/server-card-schema';
 import type { AuthInfo } from './mcp-types';
 import { type McpAuthFailure, McpTokenVerificationError, toClerkAuthInfo } from './server';
 import { resourceMetadataUrlFor } from './bearer-auth';
@@ -1716,6 +1717,62 @@ test.each(['GET', 'HEAD'])(
 
 describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
   const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
+
+  test.each([128, 255])('accepts a version with %i astral code points at setup', async (length) => {
+    const version = '🚀'.repeat(length);
+    const app = mount({ ...scalar, version });
+    const res = await serve(app, CARD_PATH);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ version });
+    expect(
+      validateServerCard(JSON.parse(JSON.stringify(res.body))),
+      JSON.stringify(validateServerCard.errors),
+    ).toBe(true);
+  });
+
+  test('rejects a version with 256 astral code points at setup', () => {
+    expect(() => mount({ ...scalar, version: '🚀'.repeat(256) })).toThrow(
+      'version must be 1 to 255 characters',
+    );
+  });
+
+  test.each(['packages/server', 'packages/@scope/server', 'packages/server.v2'])(
+    'preserves a clean repository-relative subfolder at setup: %s',
+    async (subfolder) => {
+      const repository = { url: 'https://github.com/example/weather', source: 'github', subfolder };
+      const res = await serve(mount({ ...scalar, repository }), CARD_PATH);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ repository });
+      expect(validateServerCard(JSON.parse(JSON.stringify(res.body)))).toBe(true);
+    },
+  );
+
+  test.each([
+    '',
+    '.',
+    '..',
+    './packages/server',
+    '../outside',
+    'packages/./server',
+    'packages/../server',
+    '/packages/server',
+    'packages/server/',
+    'packages//server',
+    '//other.example/server',
+    'https://other.example/server',
+    'mailto:server@example.com',
+    'C:/packages/server',
+    'C:packages/server',
+    'packages\\server',
+    '\\\\host\\server',
+  ])('rejects an unclean repository subfolder at setup: %j', (subfolder) => {
+    expect(() =>
+      mount({
+        ...scalar,
+        repository: { url: 'https://github.com/example/weather', source: 'github', subfolder },
+      }),
+    ).toThrow('serverCardHandler repository');
+  });
 
   test.each(['description', 'title'])('counts %s by Unicode code points at setup', (key) => {
     expect(() => mount({ ...scalar, [key]: '🌤'.repeat(100) })).not.toThrow();

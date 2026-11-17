@@ -1,21 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { Ajv2020 } from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
 import { describe, expect, test } from 'vitest';
 import { generateServerCard } from './server';
-
-// The Server Card JSON Schema, verbatim from
-// https://github.com/modelcontextprotocol/ext-server-card/blob/526201bbc80231daa40ffcdecfc9da4e54e5dc93/schema.json.
-// Its canonical $schema URL is not served, so validation never fetches it. The bundle root holds only $defs and so
-// accepts anything: a card is validated against #/$defs/ServerCard, as the upstream examples script does.
-const schema = JSON.parse(
-  readFileSync(join(import.meta.dirname, 'test/fixtures/server-card.schema.json'), 'utf8'),
-);
-const ajv = new Ajv2020({ allErrors: true, strict: false });
-addFormats.default(ajv);
-ajv.addSchema(schema, 'schema.json');
-const validateServerCard = ajv.getSchema('schema.json#/$defs/ServerCard')!;
+import { validateServerCard } from './test/server-card-schema';
 
 const SCHEMA_URL = 'https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json';
 const required = {
@@ -77,6 +62,67 @@ describe('generateServerCard', () => {
       JSON.stringify(validateServerCard.errors),
     ).toBe(true);
     expect(validateServerCard(JSON.parse(JSON.stringify(generateServerCard(required))))).toBe(true);
+  });
+
+  test.each([128, 255])('accepts a version with %i astral code points', (length) => {
+    const version = '🚀'.repeat(length);
+    const card = generateServerCard({ ...required, version });
+    expect(card.version).toBe(version);
+    expect(
+      validateServerCard(JSON.parse(JSON.stringify(card))),
+      JSON.stringify(validateServerCard.errors),
+    ).toBe(true);
+  });
+
+  test('rejects a version with 256 astral code points', () => {
+    const version = '🚀'.repeat(256);
+    expect(() => generateServerCard({ ...required, version })).toThrow(
+      'version must be 1 to 255 characters',
+    );
+    const candidate = { ...generateServerCard(required), version };
+    expect(validateServerCard(JSON.parse(JSON.stringify(candidate)))).toBe(false);
+    expect(validateServerCard.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ keyword: 'maxLength', instancePath: '/version' }),
+      ]),
+    );
+  });
+
+  test.each(['packages/server', 'packages/@scope/server', 'packages/server.v2'])(
+    'preserves a clean repository-relative subfolder: %s',
+    (subfolder) => {
+      const repository = { url: 'https://github.com/example/weather', source: 'github', subfolder };
+      const card = generateServerCard({ ...required, repository });
+      expect(card.repository).toEqual(repository);
+      expect(validateServerCard(JSON.parse(JSON.stringify(card)))).toBe(true);
+    },
+  );
+
+  test.each([
+    '',
+    '.',
+    '..',
+    './packages/server',
+    '../outside',
+    'packages/./server',
+    'packages/../server',
+    '/packages/server',
+    'packages/server/',
+    'packages//server',
+    '//other.example/server',
+    'https://other.example/server',
+    'mailto:server@example.com',
+    'C:/packages/server',
+    'C:packages/server',
+    'packages\\server',
+    '\\\\host\\server',
+  ])('rejects an unclean repository subfolder: %j', (subfolder) => {
+    expect(() =>
+      generateServerCard({
+        ...required,
+        repository: { url: 'https://github.com/example/weather', source: 'github', subfolder },
+      }),
+    ).toThrow('generateServerCard repository');
   });
 
   test.each(['description', 'title'] as const)('counts %s by Unicode code points', (key) => {
