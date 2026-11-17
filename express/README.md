@@ -115,7 +115,7 @@ async function verifyToken(token: string): Promise<AuthInfo | undefined> {
     }) as jwt.JwtPayload;
     return {
       token,
-      clientId: decoded.client_id,
+      clientId: decoded.client_id ?? decoded.azp,
       scopes: typeof decoded.scope === 'string' ? decoded.scope.split(' ') : [],
       expiresAt: decoded.exp,
       extra: { userId: decoded.sub },
@@ -376,7 +376,7 @@ async function verifyToken(token: string, req: express.Request): Promise<AuthInf
     }) as jwt.JwtPayload;
     return {
       token,
-      clientId: decoded.client_id,
+      clientId: decoded.client_id ?? decoded.azp,
       scopes: typeof decoded.scope === 'string' ? decoded.scope.split(' ') : [],
       expiresAt: decoded.exp,
       extra: { userId: decoded.sub, email: decoded.email },
