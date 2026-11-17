@@ -445,7 +445,7 @@ export function assertProtectedResourceMetadataOptions(
     );
   if (!isOptions) {
     throw new Error(
-      "Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties. Pass the options you give mcpAuth or withMcpAuth, and any other metadata in properties, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp', properties: { resource_name: 'Example' } })",
+      "Clerk error: protectedResourceMetadataHandler takes an options object with resourceUrl and properties. Pass the options you give mcpAuth or withClerkMcpAuth, and any other metadata in properties, as protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp', properties: { resource_name: 'Example' } })",
     );
   }
   const { properties, ...authOptions } = options as ProtectedResourceMetadataOptions;

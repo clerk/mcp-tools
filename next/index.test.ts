@@ -9,7 +9,7 @@ const defaultAuthenticateRequest = vi.fn();
 // The shape of `clerkClient` from `@clerk/nextjs/server`: an async function that returns the client
 const clerkClient = async () => ({ authenticateRequest: defaultAuthenticateRequest });
 
-// The default client, which `withMcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
+// The default client, which `withClerkMcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
 // `clerkNextjsLoad.error` to make that load fail. Every registration of the mock uses this one factory: Vitest
 // registers the `vi.doMock` calls queued for one path in parallel, so with different factories a later call would
 // not reliably replace an earlier one.
@@ -30,7 +30,7 @@ import {
   McpAuthError,
   type McpAuthFailure,
   protectedResourceMetadataHandler,
-  withMcpAuth,
+  withClerkMcpAuth,
 } from './index';
 import { clerkAuthenticated, expiresAt, FAKE_PK } from '../test/mcp-harness';
 
@@ -112,7 +112,7 @@ const authInfo = (scopes: string[]): AuthInfo => ({
   expiresAt,
 });
 
-describe('withMcpAuth with verifyToken', () => {
+describe('withClerkMcpAuth with verifyToken', () => {
   test.each([
     ['without a resourceUrl', {}],
     ['with a resourceUrl', { resourceUrl }],
@@ -120,29 +120,29 @@ describe('withMcpAuth with verifyToken', () => {
     const verifyToken = vi.fn(async () => authInfo([]));
     const req = request('bearer token-1');
 
-    const res = await withMcpAuth(echoAuth, { ...options, verifyToken })(req);
+    const res = await withClerkMcpAuth(echoAuth, { ...options, verifyToken })(req);
 
     expect(res.status).toBe(200);
     expect(verifyToken).toHaveBeenCalledWith('token-1', req);
   });
 
   test('throws at setup without a route handler', () => {
-    expect(() => withMcpAuth(undefined as never, { verifyToken: vi.fn() })).toThrow(
+    expect(() => withClerkMcpAuth(undefined as never, { verifyToken: vi.fn() })).toThrow(
       'takes the route handler first',
     );
   });
 
-  test('throws at setup for an invalid resourceUrl, naming withMcpAuth', () => {
-    expect(() => withMcpAuth(echoAuth, { verifyToken: vi.fn(), resourceUrl: 'not a url' })).toThrow(
-      'Clerk error: withMcpAuth resourceUrl must be an absolute http or https URL',
-    );
+  test('throws at setup for an invalid resourceUrl, naming withClerkMcpAuth', () => {
+    expect(() =>
+      withClerkMcpAuth(echoAuth, { verifyToken: vi.fn(), resourceUrl: 'not a url' }),
+    ).toThrow('Clerk error: withClerkMcpAuth resourceUrl must be an absolute http or https URL');
   });
 
   test('answers a verifier that throws with a JSON 500 and logs the McpAuthError with its cause', async () => {
     const cause = new Error('network down');
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const res = await withMcpAuth(echoAuth, { verifyToken: () => Promise.reject(cause) })(
+    const res = await withClerkMcpAuth(echoAuth, { verifyToken: () => Promise.reject(cause) })(
       request('Bearer token-1'),
     );
     const [error] = log.mock.calls[0] ?? [];
@@ -158,7 +158,7 @@ describe('withMcpAuth with verifyToken', () => {
   test('lets an error the route handler throws reach Next.js', async () => {
     const thrown = new Error('route bug');
 
-    const error = await withMcpAuth(
+    const error = await withClerkMcpAuth(
       () => {
         throw thrown;
       },
@@ -170,7 +170,7 @@ describe('withMcpAuth with verifyToken', () => {
 
   test('passes each failure and its request to onAuthFailure, and nothing for a verified token', async () => {
     const calls: [McpAuthFailure, Request][] = [];
-    const wrapped = withMcpAuth(echoAuth, {
+    const wrapped = withClerkMcpAuth(echoAuth, {
       verifyToken: async (token) => (token === 'good' ? authInfo([]) : undefined),
       resourceUrl: [resourceUrl],
       onAuthFailure: (failure, req) => calls.push([failure, req]),
@@ -196,7 +196,7 @@ describe('withMcpAuth with verifyToken', () => {
     const onAuthFailure = vi.fn(() => notification);
 
     try {
-      const res = await withMcpAuth(echoAuth, {
+      const res = await withClerkMcpAuth(echoAuth, {
         verifyToken: async () => undefined,
         resourceUrl,
         onAuthFailure,
@@ -229,7 +229,7 @@ describe('withMcpAuth with verifyToken', () => {
       const unhandled = vi.fn();
       process.on('unhandledRejection', unhandled);
       try {
-        const res = await withMcpAuth(echoAuth, {
+        const res = await withClerkMcpAuth(echoAuth, {
           verifyToken: async () => undefined,
           resourceUrl,
           onAuthFailure,
@@ -246,7 +246,7 @@ describe('withMcpAuth with verifyToken', () => {
   );
 });
 
-describe('withMcpAuth with Clerk', () => {
+describe('withClerkMcpAuth with Clerk', () => {
   beforeEach(() => {
     defaultAuthenticateRequest.mockReset();
     // The keys `clerkClient` from `@clerk/nextjs/server` reads, which the default client needs
@@ -272,13 +272,13 @@ describe('withMcpAuth with Clerk', () => {
       const authenticateRequest = vi.fn().mockResolvedValue(clerkAuthenticated([]));
       nextClerkClient.mockResolvedValue({ authenticateRequest });
 
-      const error = await withMcpAuth(echoAuth, { resourceUrl })(request(authorization)).catch(
+      const error = await withClerkMcpAuth(echoAuth, { resourceUrl })(request(authorization)).catch(
         (thrown: unknown) => thrown,
       );
 
       expect(error).not.toBeInstanceOf(McpAuthError);
       expect((error as Error).message).toBe(
-        `Clerk error: withMcpAuth needs the ${name} environment variable or a clerkClient option`,
+        `Clerk error: withClerkMcpAuth needs the ${name} environment variable or a clerkClient option`,
       );
       expect(authenticateRequest).not.toHaveBeenCalled();
     },
@@ -323,7 +323,7 @@ describe('withMcpAuth with Clerk', () => {
     vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', '');
     defaultAuthenticateRequest.mockResolvedValue(clerkAuthenticated([]));
 
-    const res = await withMcpAuth(echoAuth, { resourceUrl, clerkClient })(
+    const res = await withClerkMcpAuth(echoAuth, { resourceUrl, clerkClient })(
       request('Bearer token-1'),
     );
 
@@ -331,17 +331,17 @@ describe('withMcpAuth with Clerk', () => {
   });
 
   test('throws a Clerk error without a resourceUrl, naming the verifyToken alternative', () => {
-    const noResourceUrl = () => withMcpAuth(echoAuth, {} as never);
+    const noResourceUrl = () => withClerkMcpAuth(echoAuth, {} as never);
     expect(noResourceUrl).toThrow(
-      'Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a resourceUrl',
+      'Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl',
     );
-    expect(noResourceUrl).toThrow('withMcpAuth(handler, { verifyToken })');
+    expect(noResourceUrl).toThrow('withClerkMcpAuth(handler, { verifyToken })');
   });
 
   test("throws a Clerk error for mcp-handler's call form, with a verifier function", () => {
-    const callForm = () => withMcpAuth(echoAuth, (async () => undefined) as never);
-    expect(callForm).toThrow('withMcpAuth(handler, { resourceUrl })');
-    expect(callForm).toThrow('withMcpAuth(handler, { verifyToken })');
+    const callForm = () => withClerkMcpAuth(echoAuth, (async () => undefined) as never);
+    expect(callForm).toThrow('withClerkMcpAuth(handler, { resourceUrl })');
+    expect(callForm).toThrow('withClerkMcpAuth(handler, { verifyToken })');
   });
 
   test.each([
@@ -352,7 +352,7 @@ describe('withMcpAuth with Clerk', () => {
     nextClerkClient.mockReset();
     nextClerkClient.mockResolvedValue({ authenticateRequest });
 
-    const res = await withMcpAuth(echoAuth, { resourceUrl })(request(authorization));
+    const res = await withClerkMcpAuth(echoAuth, { resourceUrl })(request(authorization));
 
     expect(res.status).toBe(authorization ? 200 : 401);
     expect(nextClerkClient).toHaveBeenCalledOnce();
@@ -373,7 +373,7 @@ describe('withMcpAuth with Clerk', () => {
       vi.doMock('@clerk/nextjs/server', clerkNextjsLoad.factory);
       vi.resetModules();
       try {
-        const { withMcpAuth: freshWithMcpAuth, McpAuthError: FreshMcpAuthError } =
+        const { withClerkMcpAuth: freshWithMcpAuth, McpAuthError: FreshMcpAuthError } =
           await import('./index');
 
         const error = await freshWithMcpAuth(echoAuth, { resourceUrl })(
@@ -382,7 +382,7 @@ describe('withMcpAuth with Clerk', () => {
 
         expect(error).not.toBeInstanceOf(FreshMcpAuthError);
         expect((error as Error).message).toBe(
-          'Clerk error: install @clerk/nextjs, or pass clerkClient to withMcpAuth',
+          'Clerk error: install @clerk/nextjs, or pass clerkClient to withClerkMcpAuth',
         );
         // Vitest wraps an error thrown by a mock factory in its own, with the original as that error's cause
         const { cause } = error as Error;
@@ -405,7 +405,7 @@ describe('withMcpAuth with Clerk', () => {
       }));
     });
 
-    const res = await withMcpAuth(handler, { clerkClient, resourceUrl })(
+    const res = await withClerkMcpAuth(handler, { clerkClient, resourceUrl })(
       new Request(resourceUrl, {
         method: 'POST',
         headers: {

@@ -20,7 +20,7 @@ type ClerkOAuthAuthObject = {
 };
 
 /**
- * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuth` and `withMcpAuth` use to verify OAuth access
+ * The part of a Clerk client, such as one from `createClerkClient`, that `mcpAuth` and `withClerkMcpAuth` use to verify OAuth access
  * tokens. Declared here so that this package's types do not need `@clerk/backend`. Create the client with both
  * `secretKey` and `publishableKey`, from `@clerk/backend` 3.19.0 or later, the first with a reliable audience check.
  */
@@ -139,7 +139,7 @@ export type McpPublicMethod =
 
 /**
  * What a request without an `Authorization` header may do, as the `publicAccess` option of `mcpAuth` and
- * `withMcpAuth`. Nothing is open unless it is listed here, and a request for anything else gets the 401 challenge that
+ * `withClerkMcpAuth`. Nothing is open unless it is listed here, and a request for anything else gets the 401 challenge that
  * starts authorization, so an MCP client signs in only when it reaches something protected. A request that carries a
  * token is verified as usual, whatever it asks for.
  */
@@ -375,7 +375,7 @@ export { requireAdditionalScopes } from './scope-challenge';
 /**
  * The URL from `resourceUrl` that a request to `requestUrl` is for: `resourceUrl` itself when it is one URL, or the
  * listed URL with the request's origin. `undefined` when no listed URL has that origin. This is the rule `mcpAuth`,
- * `withMcpAuth`, and `protectedResourceMetadataHandler` apply to their `resourceUrl`, so use it in a protected resource
+ * `withClerkMcpAuth`, and `protectedResourceMetadataHandler` apply to their `resourceUrl`, so use it in a protected resource
  * metadata route of your own, such as one for another authorization server, to keep its `resource` identical to the
  * URL they check, and answer `421` when it returns `undefined`.
  * @example

@@ -856,9 +856,9 @@ describe('assertPublicAccess', () => {
   });
 
   test('every entry point checks it, and the metadata handler accepts it', () => {
-    expect(() => assertMcpAuthOptions('withMcpAuth', { publicAccess: { tools: [''] } })).toThrow(
-      'Clerk error: withMcpAuth publicAccess.tools must be a list of tool names',
-    );
+    expect(() =>
+      assertMcpAuthOptions('withClerkMcpAuth', { publicAccess: { tools: [''] } }),
+    ).toThrow('Clerk error: withClerkMcpAuth publicAccess.tools must be a list of tool names');
     expect(() =>
       assertProtectedResourceMetadataOptions({
         resourceUrl: 'https://mcp.example.com/mcp',

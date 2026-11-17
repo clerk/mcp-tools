@@ -160,7 +160,7 @@ const authApps: [Adapter, (options: Options) => App][] = [
   [
     'next',
     (options) =>
-      nextAdapter.withMcpAuth(
+      nextAdapter.withClerkMcpAuth(
         async (req) =>
           Response.json({
             reached: true,
@@ -370,7 +370,7 @@ describe('protectedResourceMetadataHandler onAuthFailure', () => {
     );
   });
 
-  test('next accepts it, as withMcpAuth does', () => {
+  test('next accepts it, as withClerkMcpAuth does', () => {
     expect(() =>
       nextAdapter.protectedResourceMetadataHandler({
         resourceUrl: origin,
@@ -562,7 +562,7 @@ const failureApps: Record<
     return app.fetch;
   },
   next: (options, record) =>
-    nextAdapter.withMcpAuth(async () => Response.json({ reached: true }), {
+    nextAdapter.withClerkMcpAuth(async () => Response.json({ reached: true }), {
       ...options,
       onAuthFailure: record,
     }),
@@ -972,7 +972,7 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
         };
         const handler =
           name === 'next'
-            ? nextAdapter.withMcpAuth(
+            ? nextAdapter.withClerkMcpAuth(
                 async () => Response.json({ reached: true }),
                 options as nextAdapter.McpAuthOptions,
               )

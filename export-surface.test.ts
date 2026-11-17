@@ -102,7 +102,7 @@ const PINNED: Record<string, Surface> = {
       'authorizationServerMetadataHandler',
       'metadataCorsHandler',
       'protectedResourceMetadataHandler',
-      'withMcpAuth',
+      'withClerkMcpAuth',
     ],
     ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
   ),

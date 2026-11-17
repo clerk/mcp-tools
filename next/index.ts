@@ -16,7 +16,7 @@ import {
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 /**
- * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withMcpAuth`, all optional, plus
+ * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withClerkMcpAuth`, all optional, plus
  * `properties`, so one object, such as one exported from `lib/mcp.ts`, can be passed to both. The handler reads
  * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and ignores the other `McpAuthOptions` keys:
  * `clerkClient`, `verifyToken`, and `onAuthFailure`.
@@ -29,7 +29,7 @@ export * from '../server';
 
 /**
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
- * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withMcpAuth`'s challenge points to.
+ * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withClerkMcpAuth`'s challenge points to.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
  * @param options - See `ProtectedResourceMetadataOptions`
  * @returns The handler. A request to an origin no listed `resourceUrl` has gets a 421. It throws when
@@ -51,7 +51,7 @@ export function protectedResourceMetadataHandler(
       'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route, instead of passing protectedResourceMetadataHandler itself',
     );
   }
-  // `onAuthFailure` is the one key of `withMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
+  // `onAuthFailure` is the one key of `withClerkMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
   assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure']));
 
   return (req: Request): Response => {
@@ -105,7 +105,7 @@ type McpAuthFailureOption = {
 };
 
 /**
- * Options for `withMcpAuth`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as its
+ * Options for `withClerkMcpAuth`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as its
  * audience, and `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first request,
  * which needs `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` set. An app that passes its keys to
  * `clerkMiddleware()` instead, or runs in keyless mode, passes `clerkClient: () => clerkClient()` from
@@ -115,8 +115,8 @@ type McpAuthFailureOption = {
  */
 export type McpAuthOptions = McpAuthFailureOption & MiddlewareAuthOptions<Request>;
 
-const withMcpAuthCallForm =
-  'withMcpAuth(handler, { resourceUrl }), or as withMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
+const withClerkMcpAuthCallForm =
+  'withClerkMcpAuth(handler, { resourceUrl }), or as withClerkMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
 
 /**
  * Wraps a Next.js MCP route handler so that every request needs a valid bearer token. By default Clerk verifies the
@@ -134,9 +134,9 @@ const withMcpAuthCallForm =
  * asking to install `@clerk/nextjs` when it can't be loaded.
  * @example
  * ```ts
- * import { withMcpAuth } from "@clerk/mcp-tools/next";
+ * import { withClerkMcpAuth } from "@clerk/mcp-tools/next";
  *
- * const authHandler = withMcpAuth(handler, {
+ * const authHandler = withClerkMcpAuth(handler, {
  *   resourceUrl: "https://mcp.example.com/mcp",
  *   requiredScopes: ["profile", "email"],
  * });
@@ -146,30 +146,30 @@ const withMcpAuthCallForm =
  * @example
  * ```ts
  * // Verify tokens with your own function instead of Clerk
- * const authHandler = withMcpAuth(handler, {
+ * const authHandler = withClerkMcpAuth(handler, {
  *   verifyToken: async (token, req) => verifyMyToken(token),
  *   resourceUrl: "https://mcp.example.com/mcp",
  * });
  * ```
  */
-export function withMcpAuth(
+export function withClerkMcpAuth(
   handler: McpRouteHandler,
   options: McpAuthOptions,
 ): (req: Request) => Promise<Response> {
   if (typeof handler !== 'function') {
     throw new Error(
-      `Clerk error: withMcpAuth from @clerk/mcp-tools/next takes the route handler first. Call it as ${withMcpAuthCallForm}`,
+      `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next takes the route handler first. Call it as ${withClerkMcpAuthCallForm}`,
     );
   }
   // `mcp-handler`'s `withMcpAuth` takes a verifier function here, so code moved from it fails at startup
   assertVerifierOrResourceUrl(
     options,
-    `Clerk error: withMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withMcpAuthCallForm}`,
+    `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
-  assertMcpAuthOptions('withMcpAuth', options);
+  assertMcpAuthOptions('withClerkMcpAuth', options);
 
   const authenticate = createBearerAuth(
-    'withMcpAuth from @clerk/mcp-tools/next',
+    'withClerkMcpAuth from @clerk/mcp-tools/next',
     options,
     nextClerkClient,
     "clerkClient from '@clerk/nextjs/server'",
@@ -220,7 +220,7 @@ async function nextClerkClient(): Promise<ClerkOAuthClient> {
   try {
     nextjs = await import('@clerk/nextjs/server');
   } catch (error) {
-    throw new Error('Clerk error: install @clerk/nextjs, or pass clerkClient to withMcpAuth', {
+    throw new Error('Clerk error: install @clerk/nextjs, or pass clerkClient to withClerkMcpAuth', {
       cause: error,
     });
   }
@@ -228,7 +228,7 @@ async function nextClerkClient(): Promise<ClerkOAuthClient> {
   // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs.
   // Each is written out, not looked up by name: Next.js inlines `process.env.NEXT_PUBLIC_*` only where it is written
   // out, so a publishable key set only at build time is missing from `process.env[name]` at run time.
-  requireClerkEnvKeys('withMcpAuth', {
+  requireClerkEnvKeys('withClerkMcpAuth', {
     CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
   });

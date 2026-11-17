@@ -14,7 +14,7 @@ import {
 } from './hono';
 import {
   type McpAuthOptions as NextMcpAuthOptions,
-  withMcpAuth as nextWithMcpAuth,
+  withClerkMcpAuth as nextWithMcpAuth,
   protectedResourceMetadataHandler as nextMetadataHandler,
 } from './next';
 import { type ClerkOAuthAuth, type ClerkOAuthClient, toClerkAuthInfo } from './server';
