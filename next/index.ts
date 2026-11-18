@@ -17,8 +17,9 @@ import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from 
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withClerkMcpAuth`, all optional, plus
- * `properties`, so one object, such as one exported from `lib/mcp.ts`, can be passed to both. The handler reads
- * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and ignores the other `McpAuthOptions` keys:
+ * `properties`. Reuse the auth options, such as those exported from `lib/mcp.ts`, adding `properties` only for the
+ * metadata handler, not `withClerkMcpAuth`. The handler reads `resourceUrl`, `requiredScopes`, `challengeScopes`, and
+ * `properties`, and ignores the other `McpAuthOptions` keys:
  * `clerkClient`, `verifyToken`, and `onAuthFailure`.
  */
 export type ProtectedResourceMetadataOptions =
@@ -166,7 +167,7 @@ export function withClerkMcpAuth(
     options,
     `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
-  assertMcpAuthOptions('withClerkMcpAuth', options);
+  assertMcpAuthOptions('withClerkMcpAuth', options, new Set(['onAuthFailure']));
 
   const authenticate = createBearerAuth(
     'withClerkMcpAuth from @clerk/mcp-tools/next',

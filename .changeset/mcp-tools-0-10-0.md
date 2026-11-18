@@ -44,6 +44,8 @@
 
 Other breaking changes:
 
+- `mcpAuth` and `withClerkMcpAuth` reject unknown option keys at setup with a `Clerk error:`, including typos such as `requiredScope` instead of `requiredScopes`. `onAuthFailure` is accepted only by the Next.js auth and metadata handlers; `properties` belongs only to the metadata handlers. Passing both `clerkClient` and `verifyToken` also throws instead of silently using the custom verifier and skipping Clerk's audience check. Choose `clerkClient` with `resourceUrl`, or `verifyToken`.
+
 - `isClerkAuthInfo` now requires private object provenance, so a custom verifier cannot forge Clerk identity with `extra.verifiedBy: 'clerk'`. `toClerkAuthInfo` still sets that public field, and the adapters preserve provenance when attaching `resourceMetadataUrl`. Hand-built objects and copies made outside the library fail the guard.
 
 - Clerk-verified tokens must have `resourceUrl` as their audience (`aud`), or they get a `401`. Your instance must issue `aud`: Clerk enables it when you add the first MCP server in the Clerk Dashboard. The client must send `resource` matching `resourceUrl` when requesting a token. The first audience rejection logs a `Clerk warning:` once per auth middleware instance, with these prerequisites and the backend minimum, without logging the token or its claims. The check accepts the forms Clerk issues for it, including the one that keeps a default port with a lowercased scheme and host, so `https://MCP.example.com:443/mcp` matches an `aud` of `https://mcp.example.com:443/mcp`. Peer minimums are now `@clerk/express` 2.1.70, `@clerk/nextjs` 7.9.5, and `@clerk/backend` 3.19.0.

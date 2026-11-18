@@ -40,8 +40,9 @@ export * from '../server';
 export type McpAuthOptions = MiddlewareAuthOptions<express.Request>;
 
 /**
- * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`, so one object
- * can be passed to both. The handler reads `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and
+ * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`. Reuse the
+ * auth options here, adding `properties` only for the metadata handler, not `mcpAuth`. The handler reads
+ * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and
  * ignores the other `McpAuthOptions` keys: `clerkClient` and `verifyToken`.
  */
 export type ProtectedResourceMetadataOptions =

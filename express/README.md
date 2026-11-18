@@ -226,6 +226,8 @@ app.all(
 
 Version 0.9.0 took the verifier alone, as `await mcpAuth(verifyToken)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
+Unknown option keys, such as `requiredScope` instead of `requiredScopes`, throw a `Clerk error:` at setup rather than being ignored. Setting both `clerkClient` and `verifyToken` also throws: choose Clerk verification with `clerkClient` and `resourceUrl`, or your own `verifyToken`. `properties` belongs only to `protectedResourceMetadataHandler`. `onAuthFailure` is a Next.js-only option and is rejected here.
+
 The middleware will:
 
 - Check for the `Authorization` header
@@ -267,7 +269,7 @@ app.all(
 
 Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express` in your own route.
 
-**Options:** the options you pass to `mcpAuth`, all optional, plus `properties`, so one object can be passed to both. The handler ignores `clerkClient` and `verifyToken`.
+**Options:** the options you pass to `mcpAuth`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient` and `verifyToken`.
 
 - `resourceUrl` (optional) - The same value you pass to `mcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
 - `requiredScopes` and `challengeScopes` (optional) - The same values you pass to `mcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.

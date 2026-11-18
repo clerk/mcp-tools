@@ -122,18 +122,19 @@ export type ProtectedResourceMetadataOptions<
   properties?: Record<string, unknown> | undefined;
 };
 
-// The keys of the `McpAuthOptions` every adapter shares, and `properties`, which the metadata handler accepts so one
-// object can be passed to both. An adapter whose options declare more passes those keys to the check itself.
-const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set<
-  keyof ProtectedResourceMetadataOptions<MiddlewareAuthOptions<unknown>>
->([
+// The keys of the `McpAuthOptions` every adapter shares. An adapter whose options declare more passes those keys
+// to the check itself. Metadata additionally accepts `properties`.
+const mcpAuthOptionKeys: ReadonlySet<string> = new Set<keyof MiddlewareAuthOptions<unknown>>([
   'resourceUrl',
   'requiredScopes',
   'challengeScopes',
   'publicAccess',
-  'properties',
   'clerkClient',
   'verifyToken',
+]);
+const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set([
+  ...mcpAuthOptionKeys,
+  'properties',
 ]);
 
 // What `bearerAuthenticator` decides for a request: let it through, with `authInfo` `undefined` for a request without
@@ -385,13 +386,41 @@ export async function readJsonBody(request: Request): Promise<unknown> {
 }
 
 /**
- * Throws a `Clerk error:` message when the options cannot produce a valid challenge: a `requiredScopes` or
- * `challengeScopes` entry that is not an RFC 6749 section 3.3 scope-token, or a `resourceUrl` that is not one absolute http or https
- * URL per origin, without credentials or a fragment.
+ * Throws a `Clerk error:` message for unknown option keys, both `clerkClient` and `verifyToken`, or options that
+ * cannot produce a valid challenge: a `requiredScopes` or `challengeScopes` entry that is not an RFC 6749 section
+ * 3.3 scope-token, or a `resourceUrl` that is not one absolute http or https URL per origin, without credentials
+ * or a fragment.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param options - The entry point's options
+ * @param adapterOptionKeys - Keys only this adapter declares, such as Next.js's `onAuthFailure`
  */
-export function assertMcpAuthOptions(caller: string, options: BaseAuthOptions | undefined) {
+export function assertMcpAuthOptions(
+  caller: string,
+  options: BaseAuthOptions | undefined,
+  adapterOptionKeys: ReadonlySet<string> = new Set(),
+) {
+  if (options !== undefined) {
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+      throw new Error(`Clerk error: ${caller} takes an options object`);
+    }
+    const unknownKey = Object.keys(options).find(
+      (key) => !mcpAuthOptionKeys.has(key) && !adapterOptionKeys.has(key),
+    );
+    if (unknownKey !== undefined) {
+      throw new Error(
+        `Clerk error: ${caller} has no ${unknownKey} option. It takes any of ${[...mcpAuthOptionKeys, ...adapterOptionKeys].join(', ')}`,
+      );
+    }
+    const { clerkClient, verifyToken } = options as {
+      clerkClient?: unknown;
+      verifyToken?: unknown;
+    };
+    if (clerkClient !== undefined && verifyToken !== undefined) {
+      throw new Error(
+        `Clerk error: ${caller} cannot set both clerkClient and verifyToken. Choose Clerk verification with clerkClient and resourceUrl, or your own verifyToken`,
+      );
+    }
+  }
   assertScopeTokens(caller, 'requiredScopes', options?.requiredScopes ?? []);
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
   if (options?.resourceUrl !== undefined) assertResourceUrls(caller, options.resourceUrl);
@@ -451,7 +480,7 @@ export function assertProtectedResourceMetadataOptions(
     );
   }
   const { properties, ...authOptions } = options as ProtectedResourceMetadataOptions;
-  assertMcpAuthOptions('protectedResourceMetadataHandler', authOptions);
+  assertMcpAuthOptions('protectedResourceMetadataHandler', authOptions, adapterOptionKeys);
   assertPropertiesOmitResource('protectedResourceMetadataHandler', properties);
 
   const listed = properties?.scopes_supported;

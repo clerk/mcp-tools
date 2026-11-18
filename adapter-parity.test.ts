@@ -172,6 +172,49 @@ const authApps: [Adapter, (options: Options) => App][] = [
   ],
 ];
 
+describe.each(authApps)('%s auth option validation', (name, mount) => {
+  const caller = name === 'next' ? 'withClerkMcpAuth' : 'mcpAuth';
+
+  test.each(['requiredScope', 'unknownOption', 'properties'])(
+    'rejects the unknown option %s at setup',
+    (key) => {
+      expect(() => mount({ resourceUrl: origin, [key]: [] })).toThrow(
+        `Clerk error: ${caller} has no ${key} option`,
+      );
+    },
+  );
+
+  test('rejects clerkClient together with verifyToken at setup', () => {
+    expect(() =>
+      mount({ resourceUrl: origin, clerkClient: defaultClient, verifyToken: vi.fn() }),
+    ).toThrow(`Clerk error: ${caller} cannot set both clerkClient and verifyToken`);
+  });
+
+  test.each([
+    ['Clerk', { clerkClient: defaultClient }],
+    ['custom', { verifyToken: vi.fn() }],
+  ])('accepts every shared option with the %s verifier', (_branch, verifier) => {
+    expect(() =>
+      mount({
+        resourceUrl: origin,
+        requiredScopes: ['profile'],
+        challengeScopes: ['email'],
+        publicAccess: { methods: ['initialize'] },
+        ...verifier,
+      }),
+    ).not.toThrow();
+  });
+
+  test('accepts onAuthFailure only in Next.js', () => {
+    const setup = () => mount({ resourceUrl: origin, onAuthFailure: vi.fn() });
+    if (name === 'next') {
+      expect(setup).not.toThrow();
+      return;
+    }
+    expect(setup).toThrow(`Clerk error: ${caller} has no onAuthFailure option`);
+  });
+});
+
 /** POSTs `init` to /mcp on the app `mount` makes, so a setup error rejects. */
 const post = async (mount: (options: Options) => App, options: Options, init: Init = {}) =>
   serve(mount(options), '/mcp', { method: 'POST', ...init });
