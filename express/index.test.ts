@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport as Transport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
 import { request as httpRequest } from 'node:http';
+import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // The default client, which `mcpAuth` loads with `import()` when there is no `clerkClient` option. A test sets
@@ -98,6 +99,93 @@ const metadataUrl = 'https://mcp.example.com/.well-known/oauth-protected-resourc
 const resourceUrl = 'https://mcp.example.com/mcp';
 
 describe('mcpAuth', () => {
+  test.each([
+    ['oversized chunked gzip', 'gzip', true, false, 401],
+    ['small gzip', 'gzip', false, false, 401],
+    ['mixed-case gzip', 'GZip', false, false, 401],
+    ['deflate', 'deflate', false, false, 401],
+    ['brotli', 'br', false, false, 401],
+    ['ordinary JSON', undefined, false, false, 200],
+    ['identity JSON', 'identity', false, false, 200],
+    ['mixed-case identity JSON', 'Identity', false, false, 200],
+    ['authenticated gzip', 'gzip', false, true, 200],
+    ['authenticated oversized chunked gzip', 'gzip', true, true, 200],
+  ] as const)(
+    'answers a public ping in a %s body before handoff',
+    async (_case, encoding, oversized, authenticated, expectedStatus) => {
+      const ping = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
+      let body: Buffer;
+      switch (encoding?.toLowerCase()) {
+        case 'gzip':
+          body = gzipSync(ping);
+          break;
+        case 'deflate':
+          body = deflateSync(ping);
+          break;
+        case 'br':
+          body = brotliCompressSync(ping);
+          break;
+        default:
+          body = Buffer.from(ping);
+      }
+      if (oversized) {
+        // FCOMMENT can make the encoded body exceed 1 MiB without increasing the decoded JSON size.
+        const header = Buffer.from(body.subarray(0, 10));
+        header[3] = header[3]! | 0x10;
+        body = Buffer.concat([
+          header,
+          Buffer.alloc(1024 * 1024 + 1, 'a'),
+          Buffer.from([0]),
+          body.subarray(10),
+        ]);
+        expect(body.byteLength).toBeGreaterThan(1024 * 1024);
+      }
+      const authInfo = { token: 't', scopes: [], clientId: 'caller', expiresAt };
+      const verifyToken = vi.fn(async () => authInfo);
+      const downstream = vi.fn((_req: express.Request, res: express.Response) => {
+        res.json({});
+      });
+      const app = express();
+      app.use(express.json());
+      app.post('/mcp', mcpAuth({ verifyToken, publicAccess: { methods: true } }), downstream);
+
+      const status = await withListening(
+        app,
+        (baseUrl) =>
+          new Promise<number>((resolve, reject) => {
+            const req = httpRequest(
+              `${baseUrl}/mcp`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(encoding === undefined ? {} : { 'Content-Encoding': encoding }),
+                  ...(authenticated ? { Authorization: 'Bearer t' } : {}),
+                  'Transfer-Encoding': 'chunked',
+                },
+                signal: AbortSignal.timeout(2000),
+              },
+              (res) => {
+                res.resume();
+                res.on('end', () => resolve(res.statusCode!));
+                res.on('error', reject);
+              },
+            );
+            req.on('error', reject);
+            req.end(body);
+          }),
+      );
+
+      expect(status).toBe(expectedStatus);
+      expect(downstream).toHaveBeenCalledTimes(expectedStatus === 200 ? 1 : 0);
+      expect(verifyToken).toHaveBeenCalledTimes(authenticated ? 1 : 0);
+      if (expectedStatus === 200) {
+        const req = downstream.mock.calls[0]![0] as express.Request & { auth: unknown };
+        expect(req.auth).toEqual(authenticated ? expect.objectContaining(authInfo) : undefined);
+      }
+    },
+  );
+
   test.each([
     ['mcpAuth({ verifyToken })', () => (mcpAuth as (...args: unknown[]) => unknown)(reject)],
     [
