@@ -479,19 +479,19 @@ describe('mcpAuth', () => {
     );
   });
 
-  test.each([
-    ['http:/target.example/mcp', 400],
-    ['http:///target.example/mcp', 400],
-    // Express cannot route this target, so it answers before calling the middleware.
-    ['http://target.example:bad/mcp', 404],
-    ['http://target.example/mcp#fragment', 400],
-    ['http://user:pass@target.example/mcp', 400],
-    ['http://target.example\\other/mcp', 400],
-    ['ftp://target.example/mcp', 400],
-    ['*', 400],
+  test.each<[string, number[]]>([
+    ['http:/target.example/mcp', [400]],
+    ['http:///target.example/mcp', [400]],
+    // Node may reject the bad port with 400 before Express can reject it with 404.
+    ['http://target.example:bad/mcp', [400, 404]],
+    ['http://target.example/mcp#fragment', [400]],
+    ['http://user:pass@target.example/mcp', [400]],
+    ['http://target.example\\other/mcp', [400]],
+    ['ftp://target.example/mcp', [400]],
+    ['*', [400]],
   ])(
     'rejects a malformed or unsupported request-target %s before verification',
-    async (target, status) => {
+    async (target, statuses) => {
       const verifyToken = vi.fn();
       const downstream = vi.fn((_req: express.Request, res: express.Response) => {
         res.json({});
@@ -502,7 +502,7 @@ describe('mcpAuth', () => {
         (app, handler) => app.use(handler, downstream),
       );
 
-      expect(response.split('\r\n')[0]).toContain(` ${status} `);
+      expect(statuses).toContain(Number(response.split(' ')[1]));
       expect(verifyToken).not.toHaveBeenCalled();
       expect(downstream).not.toHaveBeenCalled();
     },
