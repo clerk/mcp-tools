@@ -5,7 +5,8 @@ import { assertPropertiesOmitResource } from './resource-metadata-properties';
 
 /**
  * The fields `toClerkAuthInfo` reads from Clerk's auth object for an OAuth access token, the result of
- * `auth({ acceptsToken: 'oauth_token' })` or of a request state's `toAuth()`. Declared here so that this package's
+ * a request state's `toAuth()` after `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`.
+ * Declared here so that this package's
  * types do not need `@clerk/backend`, which an app using `@clerk/express`, `@clerk/hono`, or `@clerk/nextjs` may not
  * list itself. Not exported: Clerk's own auth object satisfies it structurally.
  */
@@ -275,9 +276,11 @@ export async function fetchAuthorizationServerMetadata({
 
 /**
  * Converts Clerk's auth object for an already-verified OAuth access token into the `AuthInfo` the MCP SDK expects.
- * It verifies nothing itself: pass the result of `auth({ acceptsToken: 'oauth_token' })` or of a request state's
- * `toAuth()`, which Clerk has already checked.
- * @param auth - The auth object returned from the Clerk auth() function called with acceptsToken: 'oauth_token'
+ * It verifies nothing itself: pass `requestState.toAuth()` only from
+ * `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`, which checks this resource's
+ * audience (RFC 9068 section 4; RFC 7519 section 4.1.3). `auth({ acceptsToken: 'oauth_token' })` alone is not sufficient.
+ * Prefer `mcpAuth({ clerkClient, resourceUrl })` or `withClerkMcpAuth(handler, { clerkClient, resourceUrl })` instead.
+ * @param auth - The auth object from the audience-checked request state's `toAuth()`
  * @param token - The access token the auth object was produced from
  * @returns A `ClerkAuthInfo`, which is an `AuthInfo` (the MCP SDK auth info type), or `undefined`
  */
@@ -367,7 +370,7 @@ export type ClerkAuthInfo = AuthInfo & {
  * Whether `authInfo` came from `toClerkAuthInfo` or the bearer authenticator's metadata copy of it, so its `clientId`
  * and `extra.userId` are Clerk ids. Private object provenance is required: a hand-built or externally copied object
  * with `extra.verifiedBy: 'clerk'` is not trusted. This does not verify a token; `toClerkAuthInfo` takes an already
- * verified Clerk auth object.
+ * verified and audience-checked Clerk auth object.
  */
 export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is ClerkAuthInfo {
   if (!authInfo || !hasClerkVerification(authInfo)) return false;
