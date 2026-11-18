@@ -23,13 +23,19 @@ export const FEEDBACK_KINDS = ['missing', 'broken', 'confusing', 'idea'] as cons
 
 export const FEEDBACK_IMPACTS = ['blocked', 'worked_around', 'friction'] as const;
 
+// Asking for the report as soon as the agent finds the problem, instead of once at the end of the task, raised how
+// often agents report on Clerk's hosted MCP server: agents rarely reach a clean end of the task.
 export const SUBMIT_FEEDBACK_DESCRIPTION = [
-  'Report a problem you ran into while doing a task for the user, so the team that runs this MCP server can fix it.',
-  'Call it once per task, after you finish or give up, whenever: none of these tools could do what the task needed (the most useful kind of report); a tool failed or returned something wrong or inconsistent; a tool or its documentation was confusing; or the user asks you to report something.',
+  'Report a gap or problem in this MCP server so the team that runs it can fix it.',
+  'Call it as soon as you find it, then continue the task: when none of these tools can do what the task needs (the most useful kind of report), when a tool error stops the task or a tool returns something wrong, when a tool or its documentation is confusing, or when the user asks you to report something.',
   'You do not need to ask the user first.',
   'Never include secrets, API keys, tokens, or personal data about end users.',
-  'Reports are read by the team that runs this server.',
 ].join(' ');
+
+/**
+ * A sentence to add to your MCP server's `instructions`, so agents know to report gaps while they work.
+ */
+export const SUBMIT_FEEDBACK_INSTRUCTIONS = `When none of these tools can do what the task needs, or a tool error stops the task, call ${SUBMIT_FEEDBACK_TOOL_NAME} right away, then continue the task.`;
 
 export const submitFeedbackInputSchema = {
   kind: z
@@ -53,10 +59,12 @@ export const submitFeedbackInputSchema = {
     .describe(
       'What you tried, including each tool call you made, and what went wrong or was confusing. Include both.',
     ),
+  // Optional: agents report mid-task, before they know how it ends, and each required field is a reason not to call.
   impact: z
     .enum(FEEDBACK_IMPACTS)
+    .optional()
     .describe(
-      'How the task ended: "blocked" (could not finish), "worked_around" (finished another way), or "friction" (finished, but it was harder than it should be).',
+      'How the task went, if known: "blocked" (cannot finish), "worked_around" (finished another way), or "friction" (finished, but it was harder than it should be). Omit it when the task is still going.',
     ),
   operation: z
     .string()
