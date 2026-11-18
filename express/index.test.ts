@@ -1030,8 +1030,54 @@ describe.each([
   });
 });
 
-// A list of resourceUrls selects the card by the request's origin, which a request without a Host that parses lacks
+// A list of resourceUrls selects by the target's origin, or by a Host that parses for origin-form targets.
 describe('serverCardHandler with a list of resourceUrls', () => {
+  test.each([
+    ['https://mcp.example.com', 200],
+    ['http://header.example', 421],
+    ['http://forwarded.example', 421],
+  ])('selects the absolute-form origin with only %s listed', async (origin, status) => {
+    const app = express();
+    app.set('trust proxy', true);
+    app.all('/mcp/server-card', serverCardHandler({ ...card, resourceUrl: [`${origin}/mcp`] }));
+
+    const response = await withListening(app, (baseUrl) =>
+      sendRaw(
+        baseUrl,
+        'GET https://mcp.example.com/mcp/server-card HTTP/1.1\r\nHost: header.example\r\nX-Forwarded-Host: forwarded.example\r\nX-Forwarded-Proto: http\r\nConnection: close\r\n\r\n',
+      ),
+    );
+    const [head, body] = response.split('\r\n\r\n');
+
+    expect(head).toContain(` ${status} `);
+    if (status === 200) {
+      expect(JSON.parse(body).remotes).toEqual([
+        { type: 'streamable-http', url: 'https://mcp.example.com/mcp' },
+      ]);
+    } else {
+      expect(head).toMatch(/^cache-control: no-store$/im);
+      expect(JSON.parse(body)).toEqual({ error: 'misdirected_request' });
+    }
+  });
+
+  test('accepts an HTTP/1.0 absolute-form target without Host', async () => {
+    const app = express();
+    app.all(
+      '/mcp/server-card',
+      serverCardHandler({ ...card, resourceUrl: ['https://mcp.example.com/mcp'] }),
+    );
+
+    const response = await withListening(app, (baseUrl) =>
+      sendRaw(baseUrl, 'GET https://mcp.example.com/mcp/server-card HTTP/1.0\r\n\r\n'),
+    );
+    const [head, body] = response.split('\r\n\r\n');
+
+    expect(head).toMatch(/^HTTP\/1\.[01] 200 OK/);
+    expect(JSON.parse(body).remotes).toEqual([
+      { type: 'streamable-http', url: 'https://mcp.example.com/mcp' },
+    ]);
+  });
+
   test.each([
     [
       'a Host header that does not parse',
@@ -1056,7 +1102,7 @@ describe('serverCardHandler with a list of resourceUrls', () => {
   });
 });
 
-// The origin a listed resourceUrl is selected by is Express's: `X-Forwarded-*` headers count only under `trust proxy`
+// For origin-form targets, `X-Forwarded-*` headers count only under Express's `trust proxy`.
 describe('serverCardHandler behind a proxy', () => {
   const listed = { ...card, resourceUrl: ['https://mcp.example.com/mcp'] };
 

@@ -267,9 +267,10 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
  * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
  * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS
  * gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has a 421, each
- * error with `Cache-Control: no-store`. The origin is `req.protocol` and `req.host`, which come from `X-Forwarded-*`
- * headers only when the app sets `trust proxy`. With a list of `resourceUrl`s, a request without a `Host` header that
- * parses gets a 400; a single `resourceUrl` never reads the request's URL.
+ * error with `Cache-Control: no-store`. An absolute-form request target supplies its own origin. For origin-form,
+ * the origin is `req.protocol` and `req.host`, which come from `X-Forwarded-*` headers only when the app sets
+ * `trust proxy`. With a list of `resourceUrl`s, a request without a valid absolute-form target or a `Host` header
+ * that parses gets a 400; a single `resourceUrl` never reads the request's URL.
  * @see https://github.com/modelcontextprotocol/ext-server-card
  * @param options - See `ServerCardHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the card cannot have.
