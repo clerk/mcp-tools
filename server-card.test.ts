@@ -278,13 +278,22 @@ describe('generateServerCard options', () => {
       { ...required, version: '1'.repeat(256) },
       'generateServerCard version',
     ],
-    ...['^1.2.3', '~1.2.3', '>=1.2.3', '1.x', '1.*', 'x', '1.2.3 - 2.0.0', '1 || 2'].map(
-      (version): [string, unknown, string] => [
-        `the version range ${version}`,
-        { ...required, version },
-        'generateServerCard version',
-      ],
-    ),
+    ...[
+      '^1.2.3',
+      '~1.2.3',
+      '>=1.2.3',
+      '1.x',
+      '1.*',
+      'x',
+      '1.2.3 - 2.0.0',
+      '1.2.3  -   2.0.0',
+      '1.2.3\t-\t2.0.0',
+      '1 || 2',
+    ].map((version): [string, unknown, string] => [
+      `the version range ${version}`,
+      { ...required, version },
+      'generateServerCard version',
+    ]),
     ['no description', { ...required, description: undefined }, 'generateServerCard description'],
     ['an empty description', { ...required, description: '' }, 'generateServerCard description'],
     [

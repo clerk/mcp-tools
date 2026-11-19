@@ -179,7 +179,7 @@ const repositoryKeys = new Set(['url', 'source', 'subfolder', 'id']);
 const NAME_PATTERN = /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/;
 // What makes a version a range, which the extension rejects: an operator or wildcard. A `x` wildcard is only
 // meaningful in the core version, before any prerelease or build metadata.
-const VERSION_RANGE = /[\^~<>=*|]|\s+-\s+/;
+const VERSION_RANGE_OPERATORS = new Set(['^', '~', '<', '>', '=', '*', '|']);
 const VERSION_X_WILDCARD = /(^|\.)[xX](\.|$)/;
 // A `_meta` key: a prefix of dot-separated labels and a slash, then a name. A prefix whose second-to-last label is
 // `modelcontextprotocol` or `mcp` is reserved for MCP.
@@ -228,7 +228,7 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
     typeof version !== 'string' ||
     version.length === 0 ||
     [...version].length > 255 ||
-    VERSION_RANGE.test(version) ||
+    isVersionRange(version) ||
     VERSION_X_WILDCARD.test(version.split(/[-+]/, 1)[0] ?? '')
   ) {
     fail("version must be 1 to 255 characters naming one version, such as '1.2.0', not a range");
@@ -271,6 +271,23 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
       }),
     ),
   );
+}
+
+function isVersionRange(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character !== undefined && VERSION_RANGE_OPERATORS.has(character)) return true;
+    if (
+      character === '-' &&
+      index > 0 &&
+      index + 1 < value.length &&
+      value[index - 1]?.trim() === '' &&
+      value[index + 1]?.trim() === ''
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function assertText(fail: Fail, key: string, value: unknown, optional: boolean) {
