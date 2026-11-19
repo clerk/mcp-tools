@@ -139,7 +139,7 @@
     "@clerk/express": "^2.1.70",
     "@clerk/nextjs": "^7.9.5",
     "@modelcontextprotocol/sdk": "^1.32.0",
-    "@modelcontextprotocol/server": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.3.0",
     "better-sqlite3": "^8.7.0",
     "express": "^5.0.0",
     "hono": "^4.0.0",
