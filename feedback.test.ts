@@ -151,7 +151,7 @@ describe('submitFeedbackTool', () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name)).toEqual(['submit_feedback']);
-    expect(tools[0]!.inputSchema.required).toEqual(['kind', 'task', 'description', 'impact']);
+    expect(tools[0]!.inputSchema.required).toEqual(['kind', 'task', 'description']);
   });
 
   test('returns the stored feedback id', async () => {
@@ -444,6 +444,17 @@ describe('submitFeedbackTool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback may not have been received.');
     expect(JSON.stringify(result.content)).toContain('Do not retry');
+  });
+
+  test('sends a report without an impact', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
+    const client = await connect(fetchImpl);
+    const { impact: _impact, ...withoutImpact } = input;
+
+    const result = await client.callTool({ name: 'submit_feedback', arguments: withoutImpact });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentBody(fetchImpl)).not.toHaveProperty('impact');
   });
 
   test('rejects invalid input before calling the API', async () => {
