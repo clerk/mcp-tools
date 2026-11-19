@@ -248,7 +248,13 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
-    if (Array.isArray(options.resourceUrl)) varyOnForwardedOrigin(res);
+    if (
+      Array.isArray(options.resourceUrl) &&
+      req.app.get('trust proxy') &&
+      req.originalUrl.startsWith('/')
+    ) {
+      varyOnForwardedOrigin(res);
+    }
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
@@ -341,7 +347,9 @@ function discoveryHandler(
     });
     // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,
     // which add an ETag of their own and answer a 304 by Express's own freshness rules
-    if (varyForForwardedOrigin) varyOnForwardedOrigin(res);
+    if (varyForForwardedOrigin && req.app.get('trust proxy') && req.originalUrl.startsWith('/')) {
+      varyOnForwardedOrigin(res);
+    }
     const exposeHeaders = res.getHeader('access-control-expose-headers');
     const mergedExposeHeaders =
       typeof exposeHeaders === 'string' || Array.isArray(exposeHeaders)

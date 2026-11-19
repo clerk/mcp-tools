@@ -667,6 +667,10 @@ describe('protectedResourceMetadataHandler', () => {
   test('varies shared caches by the forwarded origin for a list of resourceUrls', async () => {
     const app = express();
     app.set('trust proxy', true);
+    app.use((_req, res, next) => {
+      res.setHeader('Vary', 'Origin');
+      next();
+    });
     app.all(
       '/.well-known/oauth-protected-resource/mcp',
       protectedResourceMetadataHandler({
@@ -680,8 +684,26 @@ describe('protectedResourceMetadataHandler', () => {
       }),
     );
 
-    expect(res.headers.get('vary')).toBe('X-Forwarded-Host, X-Forwarded-Proto');
+    expect(res.headers.get('vary')).toBe('Origin, X-Forwarded-Host, X-Forwarded-Proto');
     expect((await res.json()).resource).toBe('https://other.example.com/mcp');
+  });
+
+  test('does not vary a fixed resource URL on ignored forwarded headers', async () => {
+    const app = express();
+    app.set('trust proxy', true);
+    app.all(
+      '/.well-known/oauth-protected-resource/mcp',
+      protectedResourceMetadataHandler({ resourceUrl: 'https://mcp.example.com/mcp' }),
+    );
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`, {
+        headers: { 'X-Forwarded-Host': 'other.example.com', 'X-Forwarded-Proto': 'http' },
+      }),
+    );
+
+    expect(res.headers.get('vary')).toBeNull();
+    expect((await res.json()).resource).toBe('https://mcp.example.com/mcp');
   });
 
   test('derives the resource of an absolute-form request-target from its path alone', async () => {
@@ -1202,10 +1224,7 @@ describe('serverCardHandler behind a proxy', () => {
   ])('answers %s with a 421', async (_case, trustProxy, headers) => {
     const res = await fetchCard(trustProxy, headers);
 
-    expect(res).toEqual({
-      status: 421,
-      vary: 'X-Forwarded-Host, X-Forwarded-Proto',
-      body: { error: 'misdirected_request' },
-    });
+    const vary = trustProxy ? 'X-Forwarded-Host, X-Forwarded-Proto' : null;
+    expect(res).toEqual({ status: 421, vary, body: { error: 'misdirected_request' } });
   });
 });
