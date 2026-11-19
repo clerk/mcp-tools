@@ -2,4 +2,4 @@
 '@clerk/mcp-tools': patch
 ---
 
-Raise the optional `@modelcontextprotocol/sdk` peer and development dependency floors to `^1.32.0` for upstream security fixes. Preserve the SDK's issuer-bound OAuth client information and tokens across stored sessions. HTTP clients use the SDK's safer redirect policy; configure the final MCP endpoint URL when a deployment redirects across origins (or redirects in a browser).
+Raise the optional `@modelcontextprotocol/sdk` peer and development dependency floors to `^1.32.0`, and the optional `@modelcontextprotocol/server` peer floor to `^2.3.0`, for upstream security fixes (GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453 and GHSA-rvq5-wwqv-78pq affect `@modelcontextprotocol/server` >=2.0.0 <2.3.0). SDK 2.x users now need `@modelcontextprotocol/server` 2.3.0 or later. Preserve the SDK's issuer-bound OAuth client information and tokens across stored sessions. HTTP clients use the SDK's safer redirect policy; configure the final MCP endpoint URL when a deployment redirects across origins (or redirects in a browser).
