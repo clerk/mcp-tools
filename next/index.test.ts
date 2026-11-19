@@ -138,6 +138,12 @@ describe('withClerkMcpAuth with verifyToken', () => {
     ).toThrow('Clerk error: withClerkMcpAuth resourceUrl must be an absolute http or https URL');
   });
 
+  test('rejects a non-function verifyToken at setup', () => {
+    expect(() => withClerkMcpAuth(echoAuth, { verifyToken: null } as never)).toThrow(
+      'Clerk error: withClerkMcpAuth verifyToken must be a function',
+    );
+  });
+
   test('answers a verifier that throws with a JSON 500 and logs the McpAuthError with its cause', async () => {
     const cause = new Error('network down');
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});

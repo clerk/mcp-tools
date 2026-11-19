@@ -44,7 +44,7 @@
 
 Other breaking changes:
 
-- `mcpAuth` and `withClerkMcpAuth` reject unknown option keys at setup with a `Clerk error:`, including typos such as `requiredScope` instead of `requiredScopes`. `onAuthFailure` is accepted only by the Next.js auth and metadata handlers; `properties` belongs only to the metadata handlers. Passing both `clerkClient` and `verifyToken` also throws instead of silently using the custom verifier and skipping Clerk's audience check. Choose `clerkClient` with `resourceUrl`, or `verifyToken`.
+- `mcpAuth` and `withClerkMcpAuth` reject unknown option keys at setup with a `Clerk error:`, including typos such as `requiredScope` instead of `requiredScopes`. A defined, non-function `verifyToken` is also rejected at setup instead of falling through to Clerk verification at request time. `onAuthFailure` is accepted only by the Next.js auth and metadata handlers; `properties` belongs only to the metadata handlers. Passing both `clerkClient` and `verifyToken` also throws instead of silently using the custom verifier and skipping Clerk's audience check. Choose `clerkClient` with `resourceUrl`, or `verifyToken`.
 
 - `isClerkAuthInfo` now requires private object provenance, so a custom verifier cannot forge Clerk identity with `extra.verifiedBy: 'clerk'`. `toClerkAuthInfo` still sets that public field, and the adapters preserve provenance when attaching `resourceMetadataUrl`. Hand-built objects and copies made outside the library fail the guard.
 

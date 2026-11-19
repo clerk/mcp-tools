@@ -386,8 +386,9 @@ export async function readJsonBody(request: Request): Promise<unknown> {
 }
 
 /**
- * Throws a `Clerk error:` message for unknown option keys, both `clerkClient` and `verifyToken`, or options that
- * cannot produce a valid challenge: a `requiredScopes` or `challengeScopes` entry that is not an RFC 6749 section
+ * Throws a `Clerk error:` message for unknown option keys, a non-function `verifyToken`, both `clerkClient` and
+ * `verifyToken`, or options that cannot produce a valid challenge: a `requiredScopes` or `challengeScopes` entry that
+ * is not an RFC 6749 section
  * 3.3 scope-token, or a `resourceUrl` that is not one absolute http or https URL per origin, without credentials
  * or a fragment.
  * @param caller - The entry point named in the message, such as `mcpAuth`
@@ -415,6 +416,9 @@ export function assertMcpAuthOptions(
       clerkClient?: unknown;
       verifyToken?: unknown;
     };
+    if (verifyToken !== undefined && typeof verifyToken !== 'function') {
+      throw new Error(`Clerk error: ${caller} verifyToken must be a function`);
+    }
     if (clerkClient !== undefined && verifyToken !== undefined) {
       throw new Error(
         `Clerk error: ${caller} cannot set both clerkClient and verifyToken. Choose Clerk verification with clerkClient and resourceUrl, or your own verifyToken`,

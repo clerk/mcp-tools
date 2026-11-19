@@ -223,6 +223,12 @@ describe('authorizationServerMetadataHandler', () => {
 describe('mcpAuth', () => {
   const reject = async () => undefined;
 
+  test('rejects a non-function verifyToken at setup', () => {
+    expect(() => mcpAuth({ verifyToken: null } as never)).toThrow(
+      'Clerk error: mcpAuth verifyToken must be a function',
+    );
+  });
+
   test.each([
     ['mcpAuth(verifyToken)', () => (mcpAuth as (...args: unknown[]) => unknown)(reject)],
     [

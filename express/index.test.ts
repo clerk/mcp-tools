@@ -252,6 +252,12 @@ describe('mcpAuth', () => {
     );
   });
 
+  test('rejects a non-function verifyToken at setup', () => {
+    expect(() => mcpAuth({ verifyToken: null } as never)).toThrow(
+      'Clerk error: mcpAuth verifyToken must be a function',
+    );
+  });
+
   test.each([
     ['missing_token', undefined, undefined],
     ['malformed_token', 'Basic abc', undefined],
