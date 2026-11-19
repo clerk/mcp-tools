@@ -1080,17 +1080,13 @@ function fail(
   };
 }
 
-// Whether a verifier's reported `resource` is the expected resource URL. It mirrors `sameResource` in MCP SDK 2's
-// `verifyBearerToken`, which ignores a fragment and a trailing slash, so `https://mcp.example.com/` matches the bare
-// origin as `verifyClerkOAuthToken` accepts it. Both sides are normalized as URLs first, so a configured
-// `resourceUrl` that differs from the reported `URL` only in letter case or a default port still matches.
+// Whether a verifier's reported `resource` is the expected resource URL. Normalize host case, default ports and
+// empty root paths (RFC 3986 section 6.2.3), but keep non-root trailing slashes and fragments distinct, as Clerk's
+// audience check does. RFC 8707 section 2 forbids fragments in resource identifiers. Unlike MCP SDK 2's independent
+// `verifyBearerToken` middleware, accepting its AuthInfo shape does not require its looser `sameResource` rule.
 function isSameResource(reported: URL | string, expected: string): boolean {
-  const comparable = (value: URL | string) => {
-    const text = URL.canParse(value) ? new URL(value).href : String(value);
-    const hash = text.indexOf('#');
-    return (hash === -1 ? text : text.slice(0, hash)).replace(/\/$/, '');
-  };
-  return comparable(reported) === comparable(expected);
+  if (!URL.canParse(reported) || !URL.canParse(expected)) return false;
+  return new URL(reported).href === new URL(expected).href;
 }
 
 // The reasons Clerk gives when it could not verify a token at all, such as during an outage or with an invalid secret
