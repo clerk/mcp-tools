@@ -123,8 +123,9 @@ export function mcpAuth(options: McpAuthOptions) {
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const result = await authenticate(req, {
-      // Every `Authorization` value, joined as fetch `Headers` join them for the other adapters, so two headers are
-      // challenged as malformed. `req.headers.authorization` keeps only the first, and would verify that one.
+      // Join every `Authorization` value as fetch `Headers` do for the other adapters. Non-empty duplicates are
+      // challenged as malformed; an empty duplicate can leave a comma in the token for the verifier to reject.
+      // `req.headers.authorization` keeps only the first value, and would verify that one.
       authorization: req.headersDistinct.authorization?.join(', '),
       requestUrl: getRequestUrl(req),
       method: req.method,
