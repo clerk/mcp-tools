@@ -44,7 +44,7 @@ describe('serverCardHandler types', () => {
 
 describe('aiCatalogHandler types', () => {
   const entries = [
-    { identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' },
+    { identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' },
   ];
 
   test('takes linked entries and a maxAge, and returns a Hono handler', () => {
@@ -56,7 +56,7 @@ describe('aiCatalogHandler types', () => {
 
   test('rejects generated fields, a resourceUrl to select by, and request-time callbacks', () => {
     // @ts-expect-error specVersion is generated
-    aiCatalogHandler({ entries, specVersion: '1.0' });
+    aiCatalogHandler({ entries, specVersion: '0.9' });
     // @ts-expect-error the catalog is fixed: one handler for each origin, not a list to select from
     aiCatalogHandler({ entries, resourceUrl: ['https://mcp.example.com/mcp'] });
     // @ts-expect-error the catalog is fixed: no callback per request
@@ -69,7 +69,7 @@ describe('aiCatalogHandler types', () => {
 describe('Next.js discovery route handler types', () => {
   const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
   const entries = [
-    { identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' },
+    { identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' },
   ];
 
   test('take the shared options and return a route handler of a Request', () => {
@@ -94,7 +94,7 @@ describe('Next.js discovery route handler types', () => {
     // @ts-expect-error resourceUrl is required
     next.serverCardHandler(card);
     // @ts-expect-error specVersion is generated
-    next.aiCatalogHandler({ entries, specVersion: '1.0' });
+    next.aiCatalogHandler({ entries, specVersion: '0.9' });
     // @ts-expect-error the catalog is fixed: one handler for each origin, not a list to select from
     next.aiCatalogHandler({ entries, resourceUrl: [resourceUrl] });
     // @ts-expect-error entries are required
@@ -105,7 +105,7 @@ describe('Next.js discovery route handler types', () => {
 describe('Express discovery handler types', () => {
   const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
   const entries = [
-    { identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' },
+    { identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' },
   ];
 
   test('take the same options as the Hono handlers and return Express handlers', () => {
@@ -137,7 +137,7 @@ describe('Express discovery handler types', () => {
     // @ts-expect-error resourceUrl is required
     expressAdapter.serverCardHandler(card);
     // @ts-expect-error specVersion is generated
-    expressAdapter.aiCatalogHandler({ entries, specVersion: '1.0' });
+    expressAdapter.aiCatalogHandler({ entries, specVersion: '0.9' });
     // @ts-expect-error the catalog is fixed: one handler for each origin
     expressAdapter.aiCatalogHandler({ entries, resourceUrl });
     // @ts-expect-error entries are required

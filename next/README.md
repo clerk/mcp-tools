@@ -295,7 +295,7 @@ import { aiCatalogHandler } from '@clerk/mcp-tools/next';
 const handler = aiCatalogHandler({
   entries: [
     {
-      identifier: 'urn:air:example.com:mcp:weather',
+      identifier: 'urn:air:example.com:weather:mcp',
       url: 'https://mcp.example.com/mcp/server-card',
     },
   ],

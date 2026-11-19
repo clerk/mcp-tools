@@ -4,13 +4,13 @@ import { describe, expect, test } from 'vitest';
 import { generateAICatalog } from './server';
 import { aiCatalogErrors, linkedCardCatalogErrors } from './test/ai-catalog-contract';
 
-// The example catalog, as in (the repo's formatter only rewraps it)
-// https://github.com/Agent-Card/ai-catalog/blob/4d522ea41c025118e55c7e689b72cc15bf332937/specification/examples/ai-catalog.json
+// The AI Catalog v0.9 RC example at Agent-Card/ai-catalog@19208af (#141; the repo's formatter only rewraps it).
+// https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/examples/ai-catalog.json
 const upstreamExample = JSON.parse(
   readFileSync(join(import.meta.dirname, 'test/fixtures/ai-catalog.example.json'), 'utf8'),
 );
 const weather = {
-  identifier: 'urn:air:example.com:mcp:weather',
+  identifier: 'urn:air:example.com:weather:mcp',
   url: 'https://example.com/mcp/server-card',
 };
 
@@ -23,16 +23,16 @@ describe('generateAICatalog', () => {
       generateAICatalog({
         entries: [
           {
-            identifier: 'urn:air:example.com:mcp:weather',
+            identifier: 'urn:air:example.com:weather:mcp',
             url: 'https://example.com/mcp/server-card',
           },
         ],
       }),
     ).toEqual({
-      specVersion: '1.0',
+      specVersion: '0.9',
       entries: [
         {
-          identifier: 'urn:air:example.com:mcp:weather',
+          identifier: 'urn:air:example.com:weather:mcp',
           type: CARD_TYPE,
           url: 'https://example.com/mcp/server-card',
         },
@@ -47,25 +47,25 @@ describe('generateAICatalog', () => {
     expect(
       generateAICatalog({
         entries: names.map((name) => ({
-          identifier: `urn:air:acme.com:mcp:${name}`,
+          identifier: `urn:air:acme.com:${name}:mcp`,
           url: `https://acme.com/${name}/server-card`,
         })),
       }),
     ).toEqual({
-      specVersion: '1.0',
+      specVersion: '0.9',
       entries: [
         {
-          identifier: 'urn:air:acme.com:mcp:code-review',
+          identifier: 'urn:air:acme.com:code-review:mcp',
           type: CARD_TYPE,
           url: 'https://acme.com/code-review/server-card',
         },
         {
-          identifier: 'urn:air:acme.com:mcp:docs-search',
+          identifier: 'urn:air:acme.com:docs-search:mcp',
           type: CARD_TYPE,
           url: 'https://acme.com/docs-search/server-card',
         },
         {
-          identifier: 'urn:air:acme.com:mcp:ci-cd',
+          identifier: 'urn:air:acme.com:ci-cd:mcp',
           type: CARD_TYPE,
           url: 'https://acme.com/ci-cd/server-card',
         },
@@ -88,7 +88,7 @@ describe('generateAICatalog contract', () => {
     const catalog = generateAICatalog({
       entries: [
         weather,
-        { identifier: 'urn:air:example.com:mcp:search', url: 'https://cards.saas.example/search' },
+        { identifier: 'urn:air:example.com:search:mcp', url: 'https://cards.saas.example/search' },
         { identifier: 'local-dev', url: 'http://localhost:3000/mcp/server-card' },
       ],
     });
@@ -102,7 +102,7 @@ describe('generateAICatalog contract', () => {
   test('generates an empty catalog the pinned contract accepts', () => {
     const catalog = generateAICatalog({ entries: [] });
 
-    expect(catalog).toEqual({ specVersion: '1.0', entries: [] });
+    expect(catalog).toEqual({ specVersion: '0.9', entries: [] });
     const serialized = JSON.parse(JSON.stringify(catalog));
     expect(aiCatalogErrors(serialized)).toEqual([]);
     expect(linkedCardCatalogErrors(serialized)).toEqual([]);
@@ -116,7 +116,7 @@ describe('generateAICatalog contract', () => {
       'generateAICatalog entries must be a list',
     );
     const sparse = {
-      specVersion: '1.0',
+      specVersion: '0.9',
       entries: entries.map((entry) => ({ ...entry, type: CARD_TYPE })),
     };
     expect(linkedCardCatalogErrors(sparse)).not.toEqual([]);
@@ -131,14 +131,14 @@ describe('generateAICatalog contract', () => {
 
   // Controls on rules the pinned CDDL itself sets, so a check that accepted everything would fail them
   const valid = {
-    specVersion: '1.0',
+    specVersion: '0.9',
     entries: [{ ...weather, type: 'application/mcp-server-card+json' }],
   };
   const entry = valid.entries[0]!;
   test.each([
     ['a missing specVersion', { entries: valid.entries }],
     ['a specVersion that is not Major.Minor', { ...valid, specVersion: 'v1' }],
-    ['missing entries', { specVersion: '1.0' }],
+    ['missing entries', { specVersion: '0.9' }],
     [
       'an entry without a type',
       { ...valid, entries: [{ identifier: entry.identifier, url: entry.url }] },
@@ -195,7 +195,7 @@ describe('generateAICatalog options', () => {
     const catalog = generateAICatalog(options);
     entry.url = 'https://evil.example/card';
     options.entries.push({
-      identifier: 'urn:air:evil.example:mcp:x',
+      identifier: 'urn:air:evil.example:x:mcp',
       url: 'https://evil.example/x',
     });
 
@@ -209,8 +209,12 @@ describe('generateAICatalog options', () => {
     ['no options', undefined, 'takes an options object with entries'],
     ['a list for options', [weather], 'takes an options object with entries'],
     ['no entries', {}, 'entries must be a list of { identifier, url }'],
-    ['an entry that is not an object', { entries: ['urn:air:x'] }, 'entries must be a list of'],
-    ['a specVersion of its own', { entries, specVersion: '1.0' }, 'cannot set specVersion'],
+    [
+      'an entry that is not an object',
+      { entries: ['urn:air:example.com:x:mcp'] },
+      'entries must be a list of',
+    ],
+    ['a specVersion of its own', { entries, specVersion: '0.9' }, 'cannot set specVersion'],
     ['a host', { entries, host: { displayName: 'Example' } }, 'does not take host'],
     ['extensions', { entries, extensions: {} }, 'does not take extensions'],
     ['a signature', { entries, signature: 'x' }, 'does not take signature'],
@@ -247,7 +251,7 @@ describe('generateAICatalog options', () => {
     ],
     [
       'an identifier with a space',
-      { entries: [{ ...weather, identifier: 'urn:air:x y' }] },
+      { entries: [{ ...weather, identifier: 'urn:air:example.com:x y:mcp' }] },
       'entries[0].identifier must be',
     ],
     [
@@ -263,7 +267,7 @@ describe('generateAICatalog options', () => {
     [
       'a repeated identifier',
       { entries: [weather, { ...weather, url: 'https://example.com/b' }] },
-      'entries lists the identifier urn:air:example.com:mcp:weather more than once',
+      'entries lists the identifier urn:air:example.com:weather:mcp more than once',
     ],
     ['a missing url', { entries: [{ identifier: weather.identifier }] }, 'entries[0].url must be'],
     [
@@ -308,7 +312,7 @@ describe('generateAICatalog options', () => {
     ],
     [
       'a second entry that is wrong',
-      { entries: [weather, { identifier: 'urn:air:b', url: 7 }] },
+      { entries: [weather, { identifier: 'urn:air:example.com:b:mcp', url: 7 }] },
       'entries[1].url must be',
     ],
   ])('rejects %s', (_case, options, message) => {

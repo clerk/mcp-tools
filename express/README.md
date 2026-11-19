@@ -349,7 +349,7 @@ app.all(
   aiCatalogHandler({
     entries: [
       {
-        identifier: 'urn:air:example.com:mcp:weather',
+        identifier: 'urn:air:example.com:weather:mcp',
         url: 'https://mcp.example.com/mcp/server-card',
       },
     ],

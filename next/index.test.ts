@@ -465,7 +465,7 @@ describe('discovery route handlers', () => {
   test('serve a Server Card the pinned schema accepts, and an AI Catalog of linked cards, to a NextRequest', async () => {
     const GET = serverCardHandler({ ...card, resourceUrl: 'https://mcp.example.com/mcp' });
     const catalogGET = aiCatalogHandler({
-      entries: [{ identifier: 'urn:air:example.com:mcp:weather', url: CARD_URL }],
+      entries: [{ identifier: 'urn:air:example.com:weather:mcp', url: CARD_URL }],
     });
 
     const res = await (GET as (req: Request, ctx: unknown) => Response)(

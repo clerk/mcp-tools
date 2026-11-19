@@ -323,7 +323,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  *   "/.well-known/ai-catalog.json",
  *   aiCatalogHandler({
  *     entries: [
- *       { identifier: "urn:air:example.com:mcp:weather", url: "https://mcp.example.com/mcp/server-card" },
+ *       { identifier: "urn:air:example.com:weather:mcp", url: "https://mcp.example.com/mcp/server-card" },
  *     ],
  *   }),
  * );

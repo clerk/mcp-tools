@@ -83,14 +83,14 @@ describe('generateServerCard types', () => {
 
 describe('generateAICatalog types', () => {
   const entry = {
-    identifier: 'urn:air:example.com:mcp:weather',
+    identifier: 'urn:air:example.com:weather:mcp',
     url: 'https://example.com/mcp/server-card',
   };
 
   test('takes linked entries and returns a read-only catalog of Server Cards', () => {
     const catalog = generateAICatalog({ entries: [entry] });
     expectTypeOf(catalog).toEqualTypeOf<AICatalog>();
-    expectTypeOf(catalog.specVersion).toEqualTypeOf<'1.0'>();
+    expectTypeOf(catalog.specVersion).toEqualTypeOf<'0.9'>();
     expectTypeOf(catalog.entries[0]!.type).toEqualTypeOf<'application/mcp-server-card+json'>();
     // @ts-expect-error the catalog is read-only
     catalog.entries[0]!.url = 'https://evil.example/card';
@@ -98,7 +98,7 @@ describe('generateAICatalog types', () => {
 
   test('rejects generated fields and members outside the linked-card subset', () => {
     // @ts-expect-error specVersion is generated
-    generateAICatalog({ entries: [entry], specVersion: '1.0' });
+    generateAICatalog({ entries: [entry], specVersion: '0.9' });
     // @ts-expect-error no host information
     generateAICatalog({ entries: [entry], host: { displayName: 'Example' } });
     // @ts-expect-error each entry's type is generated

@@ -198,7 +198,7 @@ describe('the adapter entry points without Clerk packages', () => {
       aiCatalogHandler({
         entries: [
           {
-            identifier: 'urn:air:example.com:mcp:weather',
+            identifier: 'urn:air:example.com:weather:mcp',
             url: 'https://mcp.example.com/mcp/server-card',
           },
         ],
@@ -210,7 +210,7 @@ describe('the adapter entry points without Clerk packages', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ specVersion: '1.0' });
+    expect(await res.json()).toMatchObject({ specVersion: '0.9' });
     expect(clerkLoads).toEqual([]);
   });
 
@@ -227,7 +227,7 @@ describe('the adapter entry points without Clerk packages', () => {
     const catalogRoute = aiCatalogHandler({
       entries: [
         {
-          identifier: 'urn:air:example.com:mcp:weather',
+          identifier: 'urn:air:example.com:weather:mcp',
           url: 'https://mcp.example.com/mcp/server-card',
         },
       ],
@@ -242,7 +242,7 @@ describe('the adapter entry points without Clerk packages', () => {
     expect(card.status).toBe(200);
     expect(await card.json()).toMatchObject({ name: 'com.example/weather' });
     expect(catalog.status).toBe(200);
-    expect(await catalog.json()).toMatchObject({ specVersion: '1.0' });
+    expect(await catalog.json()).toMatchObject({ specVersion: '0.9' });
     expect(clerkLoads).toEqual([]);
     vi.unstubAllEnvs();
   });
@@ -288,7 +288,7 @@ describe('the adapter entry points without Clerk packages', () => {
       aiCatalogHandler({
         entries: [
           {
-            identifier: 'urn:air:example.com:mcp:weather',
+            identifier: 'urn:air:example.com:weather:mcp',
             url: 'https://mcp.example.com/mcp/server-card',
           },
         ],
@@ -308,7 +308,7 @@ describe('the adapter entry points without Clerk packages', () => {
     );
 
     expect(cardBody).toMatchObject({ name: 'com.example/weather' });
-    expect(catalogBody).toMatchObject({ specVersion: '1.0' });
+    expect(catalogBody).toMatchObject({ specVersion: '0.9' });
     expect(clerkLoads).toEqual([]);
   });
 });

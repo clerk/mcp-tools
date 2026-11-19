@@ -1,5 +1,6 @@
-// An offline check of an AI Catalog against the CDDL schema and prose of the AI Catalog specification, pinned at
-// https://github.com/Agent-Card/ai-catalog/blob/4d522ea41c025118e55c7e689b72cc15bf332937/specification/ai-catalog.md.
+// An offline check of an AI Catalog against the CDDL schema and prose of the AI Catalog v0.9 release candidate,
+// pinned at Agent-Card/ai-catalog@19208af (#141):
+// https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md.
 // That repository publishes no JSON Schema, so this is written from its "CDDL Schema" section, and it has nothing to do
 // with the Server Card schema.
 
@@ -68,13 +69,13 @@ export function aiCatalogErrors(document: unknown): string[] {
 
 /**
  * Where `document` falls outside the linked-Server-Card subset `generateAICatalog` produces, on top of
- * `aiCatalogErrors`: version 1.0, and entries that only link a Server Card by a logical identifier and its URL.
+ * `aiCatalogErrors`: v0.9 of the AI Catalog specification, and entries that only link a Server Card by a logical identifier and its URL.
  */
 export function linkedCardCatalogErrors(document: unknown): string[] {
   const errors = aiCatalogErrors(document);
   if (errors.length > 0) return errors;
   const catalog = document as { specVersion: string; entries: Record<string, unknown>[] };
-  if (catalog.specVersion !== '1.0') errors.push('specVersion is not 1.0');
+  if (catalog.specVersion !== '0.9') errors.push('specVersion is not 0.9');
   if (Object.keys(catalog).join() !== 'specVersion,entries') {
     errors.push(`the catalog has ${Object.keys(catalog).join()}, not just specVersion and entries`);
   }

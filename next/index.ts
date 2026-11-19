@@ -161,7 +161,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  * // app/.well-known/ai-catalog.json/route.ts
  * const handler = aiCatalogHandler({
  *   entries: [
- *     { identifier: 'urn:air:example.com:mcp:weather', url: 'https://mcp.example.com/mcp/server-card' },
+ *     { identifier: 'urn:air:example.com:weather:mcp', url: 'https://mcp.example.com/mcp/server-card' },
  *   ],
  * });
  *

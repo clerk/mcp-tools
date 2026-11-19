@@ -1400,11 +1400,11 @@ const card = {
 // One card on this host and one on another, which the catalog links to without fetching it
 const catalogEntries = [
   {
-    identifier: 'urn:air:example.com:mcp:weather',
+    identifier: 'urn:air:example.com:weather:mcp',
     url: 'https://public.example.com/mcp/server-card',
   },
   {
-    identifier: 'urn:air:saas.example:mcp:search',
+    identifier: 'urn:air:saas.example:search:mcp',
     url: 'https://cards.saas.example/search/server-card',
   },
 ];
@@ -1475,7 +1475,7 @@ const discoveryApps = discoveryAdapters.flatMap(([name, mount]) => [
       path: CATALOG_PATH,
       type: CATALOG_TYPE,
       options: { entries: catalogEntries },
-      served: { specVersion: '1.0' },
+      served: { specVersion: '0.9' },
     },
   ] as const,
 ]);
@@ -1983,15 +1983,15 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      specVersion: '1.0',
+      specVersion: '0.9',
       entries: [
         {
-          identifier: 'urn:air:example.com:mcp:weather',
+          identifier: 'urn:air:example.com:weather:mcp',
           type: CARD_TYPE,
           url: 'https://public.example.com/mcp/server-card',
         },
         {
-          identifier: 'urn:air:saas.example:mcp:search',
+          identifier: 'urn:air:saas.example:search:mcp',
           type: CARD_TYPE,
           url: 'https://cards.saas.example/search/server-card',
         },
@@ -2048,14 +2048,14 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     const app = mount(changing);
     entry.url = 'https://evil.example/card';
     changing.entries.push({
-      identifier: 'urn:air:evil.example:mcp:x',
+      identifier: 'urn:air:evil.example:x:mcp',
       url: 'https://evil.example/x',
     });
 
     const res = await serve(app, CATALOG_PATH);
 
     expect(res.body).toEqual({
-      specVersion: '1.0',
+      specVersion: '0.9',
       entries: [{ ...catalogEntries[0], type: CARD_TYPE }],
     });
   });
@@ -2065,7 +2065,7 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     ['no entries', {}, 'aiCatalogHandler entries must be a list of { identifier, url }'],
     [
       'a specVersion',
-      { ...options, specVersion: '1.0' },
+      { ...options, specVersion: '0.9' },
       'aiCatalogHandler cannot set specVersion',
     ],
     [
@@ -2080,12 +2080,12 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     ],
     [
       'an inline document',
-      { entries: [{ identifier: 'urn:air:x', data: {} }] },
+      { entries: [{ identifier: 'urn:air:example.com:x:mcp', data: {} }] },
       'aiCatalogHandler entries[0] does not take data',
     ],
     [
       'a relative card url',
-      { entries: [{ identifier: 'urn:air:x', url: '/mcp/server-card' }] },
+      { entries: [{ identifier: 'urn:air:example.com:x:mcp', url: '/mcp/server-card' }] },
       'aiCatalogHandler entries[0].url must be',
     ],
   ])('throws at setup for %s', (_case, invalid, message) => {

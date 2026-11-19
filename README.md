@@ -140,14 +140,14 @@ For framework-specific implementations, see:
 
 #### Discovery: AI Catalogs (beta)
 
-An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, usually at `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the catalog specification as pinned at commit `4d522ea`, and publishing a catalog does not mean every MCP host will find or use it.
+An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, usually at `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
 
 `generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
 - **Required:** `entries`, a list of `{ identifier, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
-- **Generated:** `specVersion: "1.0"`, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, trust manifests, signatures, and extensions are not supported.
+- **Generated:** `specVersion: "0.9"`, the v0.9 release candidate version, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, trust manifests, signatures, and extensions are not supported.
 
-An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:mcp:weather`; the specification asks open systems to use this `urn:air:{publisher}:{namespace}:{name}` form. It is not a URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
+An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:weather:mcp`. The v0.9 RC recommends `urn:air:{publisher}:{name}[:{kind}]`: the publisher's domain, a stable name, and an optional single-segment kind suffix. This naming structure is a recommendation, not a required scheme; the builder preserves logical identifiers and does not validate the `urn:air` grammar. An identifier is not a retrieval URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
 
 ```ts
 import { generateAICatalog } from '@clerk/mcp-tools/server';
@@ -155,11 +155,11 @@ import { generateAICatalog } from '@clerk/mcp-tools/server';
 const catalog = generateAICatalog({
   entries: [
     {
-      identifier: 'urn:air:example.com:mcp:weather',
+      identifier: 'urn:air:example.com:weather:mcp',
       url: 'https://mcp.example.com/mcp/server-card',
     },
     {
-      identifier: 'urn:air:example.com:mcp:search',
+      identifier: 'urn:air:example.com:search:mcp',
       url: 'https://cards.saas.example/search/server-card',
     },
   ],
@@ -922,7 +922,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Returns:** `ServerCard`
 
 - `generateAICatalog`
-  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) (beta) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs-beta): `specVersion` `1.0` and one entry for each `{ identifier, url }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, or a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`). It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
+  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) (beta) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs-beta): `specVersion` `0.9` and one entry for each `{ identifier, url }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, or a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`). It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
   - **Params:** `AICatalogOptions`
   - **Returns:** `AICatalog`
 

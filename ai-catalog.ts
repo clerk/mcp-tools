@@ -1,5 +1,5 @@
 // The AI Catalog builder: a catalog of linked MCP Server Cards, the supported subset of the AI Catalog specification
-// pinned at Agent-Card/ai-catalog@4d522ea41c025118e55c7e689b72cc15bf332937. `./server` re-exports its public names, so
+// pinned at Agent-Card/ai-catalog@19208af (#141, the v0.9 release candidate). `./server` re-exports its public names, so
 // it must not import `./server`. This module is not a package entry point.
 import { assertKnownKeys, deepFreeze, failFor, isPlainObject } from './discovery-options';
 import { isStaticHttpUrl } from './server-card';
@@ -15,7 +15,8 @@ const SERVER_CARD_TYPE = 'application/mcp-server-card+json' as const;
 export type AICatalogEntryOptions = {
   /**
    * The server's logical identifier, which stays the same wherever the card is hosted, such as
-   * `urn:air:example.com:mcp:weather`. It is not a URL.
+   * `urn:air:example.com:weather:mcp`. The v0.9 release candidate recommends `urn:air:{publisher}:{name}[:{kind}]`;
+   * this is a logical identifier, not a URL.
    */
   identifier: string;
   /**
@@ -43,7 +44,7 @@ export type AICatalogOptions = {
    */
   entries: readonly AICatalogEntryOptions[];
   /**
-   * Generated: always `1.0`, the version of the AI Catalog specification the catalog follows.
+   * Generated: always `0.9`, the v0.9 release candidate of the AI Catalog specification.
    */
   specVersion?: never;
 };
@@ -61,7 +62,7 @@ export type AICatalogEntry = {
  * An AI Catalog, as `generateAICatalog` generates it. It is frozen, all the way down.
  */
 export type AICatalog = {
-  readonly specVersion: '1.0';
+  readonly specVersion: '0.9';
   readonly entries: readonly AICatalogEntry[];
 };
 
@@ -71,7 +72,7 @@ export type AICatalog = {
  * specification: a minimal (Level 1) catalog whose entries each link one Server Card by a logical identifier and the
  * card's URL. Inline documents, other artifact types, host information, trust manifests, signatures, and extensions
  * are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
- * @see https://github.com/Agent-Card/ai-catalog
+ * @see https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md
  * @param options - See `AICatalogOptions`
  * @returns The catalog, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the catalog
  * cannot have, such as an unknown key, a `specVersion` of its own, or an identifier listed twice.
@@ -79,7 +80,7 @@ export type AICatalog = {
  * ```ts
  * const catalog = generateAICatalog({
  *   entries: [
- *     { identifier: 'urn:air:example.com:mcp:weather', url: 'https://mcp.example.com/mcp/server-card' },
+ *     { identifier: 'urn:air:example.com:weather:mcp', url: 'https://mcp.example.com/mcp/server-card' },
  *   ],
  * });
  * ```
@@ -104,7 +105,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   const fail = failFor(caller);
   if (!isPlainObject(options)) {
     return fail(
-      "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' }] })",
+      "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' }] })",
     );
   }
   assertKnownKeys(fail, options, {
@@ -119,7 +120,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   // The pinned specification: "This array MAY be empty."
   if (!Array.isArray(entries) || !Array.from(entries).every(isPlainObject)) {
     return fail(
-      "entries must be a list of { identifier, url }, such as [{ identifier: 'urn:air:example.com:mcp:weather', url: 'https://example.com/mcp/server-card' }]",
+      "entries must be a list of { identifier, url }, such as [{ identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' }]",
     );
   }
 
@@ -137,7 +138,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     const { identifier, url } = entry;
     if (!isIdentifier(identifier)) {
       fail(
-        `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:mcp:weather'. It names the server and is not the URL of its card`,
+        `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:weather:mcp'. It names the server and is not the URL of its card`,
       );
     }
     if (identifiers.has(identifier as string)) {
@@ -154,7 +155,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     return { identifier: identifier as string, type: SERVER_CARD_TYPE, url: url as string };
   });
 
-  return deepFreeze({ specVersion: '1.0', entries: linked });
+  return deepFreeze({ specVersion: '0.9', entries: linked });
 }
 
 // The hosts a card URL may use plain http on, for local development. `URL` keeps an IPv6 hostname's brackets.
