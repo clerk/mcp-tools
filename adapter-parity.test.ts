@@ -503,22 +503,18 @@ const metadataHeaders = { ...corsHeaders, 'cache-control': 'max-age=3600' };
 
 type HeaderCase = [Adapter, string, () => App, string];
 const metadataHeaderCases: HeaderCase[] = [
-  ...protectedResourceApps.map(
-    ([adapter, mount]): HeaderCase => [
-      adapter,
-      'protectedResourceMetadataHandler',
-      () => mount(),
-      `${WELL_KNOWN}/mcp`,
-    ],
-  ),
-  ...authorizationServerApps.map(
-    ([adapter, mount]): HeaderCase => [
-      adapter,
-      'authorizationServerMetadataHandler',
-      mount,
-      AUTH_SERVER_PATH,
-    ],
-  ),
+  ...protectedResourceApps.map(([adapter, mount]): HeaderCase => [
+    adapter,
+    'protectedResourceMetadataHandler',
+    () => mount(),
+    `${WELL_KNOWN}/mcp`,
+  ]),
+  ...authorizationServerApps.map(([adapter, mount]): HeaderCase => [
+    adapter,
+    'authorizationServerMetadataHandler',
+    mount,
+    AUTH_SERVER_PATH,
+  ]),
 ];
 
 describe('metadata handler headers', () => {

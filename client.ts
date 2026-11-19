@@ -2,8 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { JsonSerializable, McpClientStore } from './client-store';
+import type {
+  OAuthClientInformationMixed,
+  OAuthTokens,
+} from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { McpClientStore } from './client-store';
 
 export type { JsonSerializable, McpClientStore } from './client-store';
 
@@ -86,7 +89,7 @@ export async function getMcpClientBySessionId({
    */
   state?: string;
 }) {
-  const client = await getClientData(sessionId, store);
+  let client = await getClientData(sessionId, store);
 
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
@@ -95,30 +98,21 @@ export async function getMcpClientBySessionId({
       logo_uri: undefined,
       tos_uri: undefined,
     },
-    clientInformation: () => ({
-      client_id: client.clientId!,
-      client_secret: client.clientSecret!,
-    }),
-    saveClientInformation: async (newInfo: OAuthClientInformationFull) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        ...newInfo,
-      });
+    clientInformation: () => getStoredClientInformation(client),
+    saveClientInformation: async (newInfo) => {
+      client = await saveClientInformation(sessionId, store, newInfo);
     },
     tokens: () => {
+      if (client.oauthTokens) return client.oauthTokens;
       if (!client.accessToken) return undefined;
-      return { access_token: client.accessToken, token_type: 'Bearer' };
+      return {
+        access_token: client.accessToken,
+        refresh_token: client.refreshToken,
+        token_type: 'Bearer',
+      };
     },
-    saveTokens: async ({ access_token, refresh_token }) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        accessToken: access_token,
-        refreshToken: refresh_token,
-      });
-
-      await store.read(`${SESSION_PREFIX}${sessionId}`);
-
-      return void 0;
+    saveTokens: async (tokens) => {
+      client = await saveClientTokens(sessionId, store, tokens);
     },
     redirectToAuthorization: unexpectedFunctionCall(
       'redirectToAuthorization',
@@ -227,8 +221,9 @@ export interface CreateKnownCredentialsMcpClientOptions {
 export async function createKnownCredentialsMcpClient({
   redirect,
   store,
-  ...client
+  ...clientParams
 }: CreateKnownCredentialsMcpClientOptions): Promise<McpClientConnection> {
+  let client: McpClientData = clientParams;
   const state = randomUUID();
   const sessionId = randomUUID();
 
@@ -239,7 +234,7 @@ export async function createKnownCredentialsMcpClient({
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client as JsonSerializable);
+  await store.write(`${SESSION_PREFIX}${sessionId}`, { ...client });
 
   // there's some non-dry code between this and the dynamically registered
   // client, but this is on purpose for flexibility and clarity.
@@ -252,15 +247,11 @@ export async function createKnownCredentialsMcpClient({
       tos_uri: undefined,
     },
     state: () => state,
-    clientInformation: () => ({
-      client_id: client.clientId,
-      client_secret: client.clientSecret,
-    }),
-    // only should be used for dynamic client registration
-    saveClientInformation: unexpectedFunctionCall(
-      'saveClientInformation',
-      'initializing a known credentials client',
-    ),
+    clientInformation: () => getStoredClientInformation(client),
+    // The SDK also saves known credentials after binding them to their issuer.
+    saveClientInformation: async (newInfo) => {
+      client = await saveClientInformation(sessionId, store, newInfo);
+    },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
     tokens: () => undefined,
@@ -344,11 +335,7 @@ export async function createDynamicallyRegisteredMcpClient({
 
   // this is our in-memory client object, we will update it with the client id
   // and secret after dynamic registration is complete
-  let client = {
-    ...clientParams,
-    clientId: undefined as string | undefined,
-    clientSecret: undefined as string | undefined,
-  };
+  let client: McpClientData = { ...clientParams };
 
   // associate state with session id
   // in the oauth callback, we only have the state, and will need to get the
@@ -357,7 +344,7 @@ export async function createDynamicallyRegisteredMcpClient({
 
   // persist all the client details to the store, we will need them to
   // re-create the client later in the oauth callback and any mcp call endpoints
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+  await store.write(`${SESSION_PREFIX}${sessionId}`, { ...client });
 
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
@@ -378,40 +365,18 @@ export async function createDynamicallyRegisteredMcpClient({
     // needed. If dynamic registration is complete, we will have stored the
     // oauth client credentials and will return them here, which the MCP SDK
     // uses to construct the authorization url with the client id.
-    clientInformation: () => {
-      if (!client.clientId) {
-        return undefined;
-      }
-
-      return {
-        client_id: client.clientId,
-        client_secret: client.clientSecret,
-      };
-    },
+    clientInformation: () => getStoredClientInformation(client),
     // this is called after a new oauth client is created, so we now have a
     // client id and secret
-    saveClientInformation: async (newInfo: OAuthClientInformationFull) => {
-      const newClientInfo = {
-        clientId: newInfo.client_id,
-        clientSecret: newInfo.client_secret,
-      };
-
-      // update the in-memory client object with the new client id and secret
-      client = { ...client, ...newClientInfo };
-
-      // persist the updated client object to the store
-      await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+    saveClientInformation: async (newInfo) => {
+      client = await saveClientInformation(sessionId, store, newInfo);
     },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
     tokens: () => undefined,
     // called in the oauth callback route
-    saveTokens: async ({ access_token, refresh_token }) => {
-      await store.write(`${SESSION_PREFIX}${sessionId}`, {
-        ...client,
-        accessToken: access_token,
-        refreshToken: refresh_token,
-      });
+    saveTokens: async (tokens) => {
+      client = await saveClientTokens(sessionId, store, tokens);
     },
     redirectToAuthorization: (url) => {
       redirect(url.toString());
@@ -491,11 +456,57 @@ export interface McpClientData {
   clientSecret?: string;
   accessToken?: string;
   refreshToken?: string;
+  /**
+   * Complete SDK client information, including its authorization server issuer.
+   */
+  oauthClientInformation?: OAuthClientInformationMixed;
+  /**
+   * Complete SDK tokens, including their authorization server issuer.
+   */
+  oauthTokens?: OAuthTokens;
   authComplete?: boolean;
   oauthClientName?: string;
   oauthClientUri?: string;
   oauthScopes?: string;
   oauthPublicClient?: boolean;
+}
+
+function getStoredClientInformation(
+  client: McpClientData,
+): OAuthClientInformationMixed | undefined {
+  if (client.oauthClientInformation) return client.oauthClientInformation;
+  if (!client.clientId) return undefined;
+  return { client_id: client.clientId, client_secret: client.clientSecret };
+}
+
+async function saveClientInformation(
+  sessionId: string,
+  store: McpClientStore,
+  clientInformation: OAuthClientInformationMixed,
+): Promise<McpClientData> {
+  const client = {
+    ...(await getClientData(sessionId, store)),
+    clientId: clientInformation.client_id,
+    clientSecret: clientInformation.client_secret,
+    oauthClientInformation: clientInformation,
+  };
+  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+  return client;
+}
+
+async function saveClientTokens(
+  sessionId: string,
+  store: McpClientStore,
+  tokens: OAuthTokens,
+): Promise<McpClientData> {
+  const client = {
+    ...(await getClientData(sessionId, store)),
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    oauthTokens: tokens,
+  };
+  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+  return client;
 }
 
 /**

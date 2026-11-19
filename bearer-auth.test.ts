@@ -718,9 +718,10 @@ describe('publicAccess', () => {
     // The list is a protocol method, which only `methods` opens
     [{ resources: true }, rpc('resources/list')],
     // A resources list opens a URI it names, exactly
-    ...['docs://private', 'docs://index/', 'DOCS://index', ['docs://index']].map(
-      (uri): Case => [resources, read(uri)],
-    ),
+    ...['docs://private', 'docs://index/', 'DOCS://index', ['docs://index']].map((uri): Case => [
+      resources,
+      read(uri),
+    ]),
     [resources, rpc('resources/read', { name: 'docs://index' })],
     [resources, rpc('resources/read')],
     [{ resources: [] }, read('docs://index')],
@@ -745,9 +746,10 @@ describe('publicAccess', () => {
     [all, { jsonrpc: '2.0', id: 1, method: 'tasks/get' }],
     [all, { jsonrpc: '2.0', id: 1, method: ['initialize'] }],
     // Tasks, even when a public tool could have started the task
-    ...['tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list'].map(
-      (method): Case => [all, rpc(method, { taskId: 'task_1' })],
-    ),
+    ...['tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list'].map((method): Case => [
+      all,
+      rpc(method, { taskId: 'task_1' }),
+    ]),
     // A subscriptions/listen to a resource that is not open, or whose notifications are not an object
     [listed, listen({ resourceSubscriptions: ['docs://index', 'docs://private'] })],
     [listed, listen({ resourceSubscriptions: ['DOCS://index'] })],
@@ -1023,6 +1025,26 @@ describe('readJsonBody', () => {
     await expect(readJsonBody(request)).resolves.toBeUndefined();
     // An endless body: the read ended because of the limit, a little past it
     expect(sent).toBeLessThan(PUBLIC_BODY_LIMIT * 2);
+  });
+
+  test('reads a streamed byte view without including bytes outside the view', async () => {
+    const bytes = new TextEncoder().encode('ignore{"message":"café"}ignore');
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(6, -6));
+        controller.close();
+      },
+    });
+    const request = new Request('https://mcp.example.com/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: stream,
+      // @ts-expect-error - Node needs `duplex` for a stream body, and the DOM types do not have it
+      duplex: 'half',
+    });
+
+    await expect(readJsonBody(request)).resolves.toEqual({ message: 'café' });
+    await expect(request.json()).resolves.toEqual({ message: 'café' });
   });
 
   test('reads a body exactly at the limit', async () => {
