@@ -849,12 +849,13 @@ function bearerChallenge({
 
 type ParsedAuthorization = { token: string } | { reason: 'missing_token' | 'malformed_token' };
 
-// The token from a well-formed `Bearer <token>` header. The scheme is case-insensitive. A header with another scheme,
+// The token split from a `Bearer <token>` header. The scheme is case-insensitive. A header with another scheme,
 // such as `Basic`, gets the challenge without an error code, as RFC 6750 section 3.1 says for a request that "attempted
 // using an unsupported authentication method". Only malformed Bearer credentials, such as `Bearer a b` or two
-// `Authorization` headers joined into one, depart from that section: its `invalid_request` SHOULD get a 400 for a
-// request that is "otherwise malformed", and these get the same 401 challenge as a missing header instead, so that a
-// client sending an empty or broken token can still start authorization.
+// non-empty `Authorization` credentials joined into one, depart from that section: its `invalid_request` SHOULD get
+// a 400 for a request that is "otherwise malformed", and these get the same 401 challenge as a missing header
+// instead, so that a client sending an empty or broken token can still start authorization. An empty duplicate can
+// instead leave a comma in the token for the verifier to reject; this split does not validate the token's grammar.
 function parseAuthorization(header: string | undefined): ParsedAuthorization {
   if (!header?.trim()) return { reason: 'missing_token' };
   const [scheme, token, ...rest] = header.trim().split(/\s+/);
