@@ -85,6 +85,8 @@ describe('verifyClerkOAuthToken with real Clerk verification', () => {
     ['another resource', { aud: 'https://other.example.com/mcp' }, /audience/i],
     ['the bare origin', { aud: 'https://mcp.example.com' }, /audience/i],
     ['a trailing slash the resource URL does not have', { aud: `${resourceUrl}/` }, /audience/i],
+    ['a fragment', { aud: `${resourceUrl}#section` }, /audience/i],
+    ['an empty fragment', { aud: `${resourceUrl}#` }, /audience/i],
     ['no audience', {}, /audience/i],
     [
       'an expiry in the past',

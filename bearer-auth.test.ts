@@ -276,8 +276,8 @@ describe('bearerAuthenticator', () => {
 
   test.each([
     ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'],
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp/'],
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#section'],
+    ['https://mcp.example.com/mcp/', 'https://mcp.example.com/mcp/'],
+    ['https://mcp.example.com/mcp?tenant=1', 'https://mcp.example.com/mcp?tenant=1'],
     ['https://MCP.example.com:443/mcp', 'https://mcp.example.com/mcp'],
     ['https://mcp.example.com', 'https://mcp.example.com/'],
     ['https://mcp.example.com/', 'https://mcp.example.com'],
@@ -292,6 +292,13 @@ describe('bearerAuthenticator', () => {
   });
 
   test.each([
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp/'],
+    ['https://mcp.example.com/mcp/', 'https://mcp.example.com/mcp'],
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#section'],
+    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#'],
+    ['https://mcp.example.com', 'https://mcp.example.com/#section'],
+    ['https://mcp.example.com', 'https://mcp.example.com/#'],
+    ['https://mcp.example.com/mcp?tenant=1', 'https://mcp.example.com/mcp?tenant=1/'],
     ['https://mcp.example.com/mcp', 'https://mcp.example.com/'],
     ['https://mcp.example.com/mcp', 'http://mcp.example.com/mcp'],
     ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp?tenant=1'],
@@ -303,6 +310,7 @@ describe('bearerAuthenticator', () => {
 
     expect(result).toMatchObject({
       ok: false,
+      status: 401,
       failure: { reason: 'invalid_token', cause: { code: 'resource-mismatch' } },
     });
   });
