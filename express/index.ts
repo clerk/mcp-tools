@@ -248,6 +248,7 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
+    if (Array.isArray(options.resourceUrl)) varyOnForwardedOrigin(res);
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
@@ -288,7 +289,10 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
  * ```
  */
 export function serverCardHandler(options: ServerCardHandlerOptions) {
-  return discoveryHandler(serverCardResponder('serverCardHandler', options));
+  return discoveryHandler(
+    serverCardResponder('serverCardHandler', options),
+    Array.isArray((options as { resourceUrl?: unknown } | null)?.resourceUrl),
+  );
 }
 
 /**
@@ -323,7 +327,10 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions) {
   return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
 }
 
-function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
+function discoveryHandler(
+  respond: (request: DiscoveryRequest) => DiscoveryAnswer,
+  varyForForwardedOrigin = false,
+) {
   return (req: express.Request, res: express.Response): void => {
     const { status, headers, body } = respond({
       method: req.method,
@@ -334,6 +341,7 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
     });
     // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,
     // which add an ETag of their own and answer a 304 by Express's own freshness rules
+    if (varyForForwardedOrigin) varyOnForwardedOrigin(res);
     res.status(status);
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
     res.end(body ?? undefined);
@@ -358,6 +366,17 @@ function getRequestUrl(req: express.Request): string | undefined {
     ) {
       return undefined;
     }
+function varyOnForwardedOrigin(res: express.Response): void {
+  const vary = res.getHeader('vary');
+  const values = Array.isArray(vary) ? vary : typeof vary === 'string' ? vary.split(',') : [];
+  if (values.some((value) => typeof value === 'string' && value.trim() === '*')) return;
+  const fields = values.filter((value): value is string => typeof value === 'string');
+  for (const name of ['X-Forwarded-Host', 'X-Forwarded-Proto']) {
+    if (!fields.some((field) => field.trim().toLowerCase() === name.toLowerCase())) fields.push(name);
+  }
+  res.setHeader('Vary', fields.join(', '));
+}
+
     return new URL(target).href;
   }
 

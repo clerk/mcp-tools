@@ -664,6 +664,26 @@ describe('protectedResourceMetadataHandler', () => {
     expect(metadata.resource).toBe('http://target.example/mcp');
   });
 
+  test('varies shared caches by the forwarded origin for a list of resourceUrls', async () => {
+    const app = express();
+    app.set('trust proxy', true);
+    app.all(
+      '/.well-known/oauth-protected-resource/mcp',
+      protectedResourceMetadataHandler({
+        resourceUrl: ['https://mcp.example.com/mcp', 'https://other.example.com/mcp'],
+      }),
+    );
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`, {
+        headers: { 'X-Forwarded-Host': 'other.example.com', 'X-Forwarded-Proto': 'https' },
+      }),
+    );
+
+    expect(res.headers.get('vary')).toBe('X-Forwarded-Host, X-Forwarded-Proto');
+    expect((await res.json()).resource).toBe('https://other.example.com/mcp');
+  });
+
   test('derives the resource of an absolute-form request-target from its path alone', async () => {
     const response = await sendRawTo(
       protectedResourceMetadataHandler(),
@@ -1112,7 +1132,7 @@ describe('serverCardHandler behind a proxy', () => {
     app.all('/mcp/server-card', serverCardHandler(listed));
     return withListening(app, async (baseUrl) => {
       const res = await fetch(`${baseUrl}/mcp/server-card`, { headers: forwarded });
-      return { status: res.status, body: await res.json() };
+      return { status: res.status, vary: res.headers.get('vary'), body: await res.json() };
     });
   }
 
@@ -1143,6 +1163,11 @@ describe('serverCardHandler behind a proxy', () => {
   ])('answers %s with a 421', async (_case, trustProxy, headers) => {
     const res = await fetchCard(trustProxy, headers);
 
-    expect(res).toEqual({ status: 421, body: { error: 'misdirected_request' } });
+    expect(res).toEqual({
+      status: 421,
+      vary: 'X-Forwarded-Host, X-Forwarded-Proto',
+      body: { error: 'misdirected_request' },
+    });
+    expect(res.vary).toBe('X-Forwarded-Host, X-Forwarded-Proto');
   });
 });
