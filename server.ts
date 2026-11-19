@@ -149,6 +149,8 @@ export type PublicAccess = {
   methods?: boolean | readonly McpPublicMethod[] | undefined;
   /**
    * The tools a `tools/call` may name without a token. Each one is listed by name: no value opens every tool.
+   * Keep `create_browser_session` out: it requires a Clerk identity, and its `not_authenticated` error will not start
+   * sign-in. The auth entry points log a one-time `Clerk warning:` at startup when it is listed.
    */
   tools?: readonly string[] | undefined;
   /**

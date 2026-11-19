@@ -343,6 +343,84 @@ describe('McpAuthError', () => {
   );
 });
 
+describe('public identity tool warning', () => {
+  // Like the prebuilt tool's step-up warning, this is module-level, even when middleware is rebuilt per request.
+  async function freshAuth() {
+    vi.resetModules();
+    return (await import('./bearer-auth')).createBearerAuth;
+  }
+
+  test.each(['mcpAuth', 'withClerkMcpAuth'])(
+    '%s warns at startup once across middleware instances, without changing public access',
+    async (caller) => {
+      const create = await freshAuth();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const verifyToken = vi.fn(async () => authInfo);
+      const defaultClient = vi.fn();
+      const options = {
+        verifyToken,
+        publicAccess: {
+          tools: ['create_browser_session', 'create_browser_session', 'search_docs'],
+        },
+      };
+      try {
+        const first = create(caller, options, defaultClient, 'Clerk');
+        // It is a setup warning, not one deferred until a request arrives.
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          'Clerk warning: create_browser_session requires a Clerk identity but is listed in publicAccess.tools. Calls without a token will get not_authenticated instead of a 401 challenge, so the client will not start sign-in. Remove create_browser_session from publicAccess.tools.',
+        );
+        const second = create(caller, options, defaultClient, 'Clerk');
+        for (const authenticate of [first, second, second]) {
+          await expect(
+            authenticate(undefined, {
+              authorization: undefined,
+              requestUrl: 'https://mcp.example.com/mcp',
+              method: 'POST',
+              body: async () => ({
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'tools/call',
+                params: { name: 'create_browser_session' },
+              }),
+            }),
+          ).resolves.toEqual({ ok: true, authInfo: undefined });
+        }
+        expect(warn).toHaveBeenCalledOnce();
+        expect(verifyToken).not.toHaveBeenCalled();
+        expect(defaultClient).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  test.each([
+    undefined,
+    {},
+    { methods: true },
+    { tools: [] },
+    { tools: ['submit_feedback', 'search_docs', 'create_browser_session_custom'] },
+  ])('does not warn for publicAccess %j', async (publicAccess) => {
+    const create = await freshAuth();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const options = { verifyToken: async () => authInfo, publicAccess };
+      create('mcpAuth', options, vi.fn(), 'Clerk');
+      expect(warn).not.toHaveBeenCalled();
+      // A safe configuration must not consume the one-time warning for a later unsafe one.
+      create(
+        'mcpAuth',
+        { ...options, publicAccess: { tools: ['create_browser_session'] } },
+        vi.fn(),
+        'Clerk',
+      );
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe('Clerk audience rejection warning', () => {
   test.each([
     'OAuth audience mismatch. Verification expected audience ["expected"], but incoming token has aud "private-audience".',
