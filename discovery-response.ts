@@ -269,7 +269,7 @@ function weakEtag(body: string): string {
 
 // One list element: optional whitespace, then an optional entity-tag, then a comma or the end. Empty elements are
 // skipped (RFC 9110 section 5.6.1.2). An opaque-tag may itself contain a comma (section 8.8.3).
-const LIST_ELEMENT = /^[ \t]*(?:(?:W\/)?("[\x21\x23-\x7e\x80-\xff]*"))?[ \t]*(?:,|$)/;
+const LIST_ELEMENT = /^[ \t]*(?:(?:W\/)?("[\x21\x23-\x7e\x80-\xff]*")[ \t]*)?(?:,|$)/;
 
 /**
  * Whether an If-None-Match field value matches `etag` (RFC 9110 section 13.1.2): `*`, or a list with an entity-tag
