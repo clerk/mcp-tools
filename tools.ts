@@ -31,6 +31,7 @@ export {
   FEEDBACK_IMPACTS,
   FEEDBACK_KINDS,
   FeedbackSubmissionError,
+  SUBMIT_FEEDBACK_INSTRUCTIONS,
   SUBMIT_FEEDBACK_TOOL_NAME,
   submitFeedback,
   submitFeedbackTool,
