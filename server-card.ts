@@ -177,8 +177,10 @@ const repositoryKeys = new Set(['url', 'source', 'subfolder', 'id']);
 
 // The schema's `name` pattern: a reverse-DNS namespace, exactly one slash, then the server's name
 const NAME_PATTERN = /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/;
-// What makes a version a range, which the extension rejects: an operator, a wildcard, a space, or an `x` part
-const VERSION_RANGE = /[\s^~<>=*|]|(^|\.)[xX](\.|$)/;
+// What makes a version a range, which the extension rejects: an operator or wildcard. A `x` wildcard is only
+// meaningful in the core version, before any prerelease or build metadata.
+const VERSION_RANGE = /[\^~<>=*|]|\s+-\s+/;
+const VERSION_X_WILDCARD = /(^|\.)[xX](\.|$)/;
 // A `_meta` key: a prefix of dot-separated labels and a slash, then a name. A prefix whose second-to-last label is
 // `modelcontextprotocol` or `mcp` is reserved for MCP.
 const META_LABEL = '[a-zA-Z](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?';
@@ -226,7 +228,8 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
     typeof version !== 'string' ||
     version.length === 0 ||
     [...version].length > 255 ||
-    VERSION_RANGE.test(version)
+    VERSION_RANGE.test(version) ||
+    VERSION_X_WILDCARD.test(version.split(/[-+]/, 1)[0] ?? '')
   ) {
     fail("version must be 1 to 255 characters naming one version, such as '1.2.0', not a range");
   }
@@ -359,6 +362,6 @@ function isHttpUrl(value: unknown): value is string {
 
 // The remote is a URL the client connects to as it is, so it can't look like the extension's `{variable}` templates,
 // and the schema's remote pattern allows no whitespace
-function isStaticHttpUrl(value: unknown): value is string {
+export function isStaticHttpUrl(value: unknown): value is string {
   return isHttpUrl(value) && /^https?:\/\//.test(value) && isResourceUrl(value);
 }

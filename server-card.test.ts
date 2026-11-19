@@ -438,6 +438,13 @@ describe('generateServerCard options', () => {
     ).toThrow('Clerk error: generateServerCard _meta com.example/x');
   });
 
+  test.each(['1.0.0-beta.x', '1.0.0+build.x', 'release 2026'])(
+    'accepts a non-range version string: %s',
+    (version) => {
+      expect(generateServerCard({ ...required, version }).version).toBe(version);
+    },
+  );
+
   test('accepts an http resourceUrl for local development, a data: icon, an empty _meta name, and options left undefined', () => {
     const card = generateServerCard({
       ...required,
