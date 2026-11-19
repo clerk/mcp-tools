@@ -173,6 +173,17 @@ describe('generateAICatalog contract', () => {
   ])('the linked-card check rejects %s', (_case, document) => {
     expect(linkedCardCatalogErrors(document)).not.toEqual([]);
   });
+
+  test.each([
+    'https:example.com/card',
+    'https:/example.com/card',
+    'http:localhost/card',
+    'https://example.com/{tenant}/card',
+    'https://example.com/a%zz',
+    'https://example.com/café',
+  ])('the linked-card contract rejects a repaired or non-ASCII URL: %s', (url) => {
+    expect(linkedCardCatalogErrors({ ...valid, entries: [{ ...entry, url }] })).not.toEqual([]);
+  });
 });
 
 describe('generateAICatalog options', () => {
@@ -295,6 +306,18 @@ describe('generateAICatalog options', () => {
       { entries: [{ ...weather, url: 'https://example.com/a card' }] },
       'entries[0].url must be',
     ],
+    ...[
+      'https:example.com/card',
+      'https:/example.com/card',
+      'http:localhost/card',
+      'https://example.com/{tenant}/card',
+      'https://example.com/a%zz',
+      'https://example.com/café',
+    ].map((url) => [
+      `a non-exact URL ${url}`,
+      { entries: [{ ...weather, url }] },
+      'entries[0].url must be',
+    ] as const),
     [
       'a second entry that is wrong',
       { entries: [weather, { identifier: 'urn:air:b', url: 7 }] },

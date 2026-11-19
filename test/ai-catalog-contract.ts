@@ -6,6 +6,12 @@
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const isText = (value: unknown) => typeof value === 'string';
+const isExactHttpUrl = (value: string): boolean =>
+  /^https?:\/\/(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::\d+)?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/.test(
+    value,
+  ) &&
+  !/%(?![a-fA-F0-9]{2})/.test(value) &&
+  URL.canParse(value);
 
 /**
  * Where `document` breaks the `AICatalog` and `CatalogEntry` rules of the CDDL, with the Level 1 (Minimal Catalog)
@@ -80,7 +86,20 @@ export function linkedCardCatalogErrors(document: unknown): string[] {
     // ext-server-card discovery.md, Server Card Entries: type MUST be the Server Card media type
     if (entry.type !== 'application/mcp-server-card+json')
       errors.push(`${at}.type is not a Server Card`);
-    if (!URL.canParse(entry.url as string)) errors.push(`${at}.url is not a URL`);
+    const url = entry.url as string;
+    if (!isExactHttpUrl(url)) errors.push(`${at}.url is not an exact absolute HTTP URL`);
+    else {
+      const parsed = new URL(url);
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+      if (
+        (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) ||
+        parsed.username !== '' ||
+        parsed.password !== '' ||
+        parsed.hash !== ''
+      ) {
+        errors.push(`${at}.url is not an allowed Server Card URL`);
+      }
+    }
     if (entry.identifier === entry.url) errors.push(`${at}.identifier is its url`);
   });
   return errors;

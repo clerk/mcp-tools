@@ -2,7 +2,7 @@
 // pinned at Agent-Card/ai-catalog@4d522ea41c025118e55c7e689b72cc15bf332937. `./server` re-exports its public names, so
 // it must not import `./server`. This module is not a package entry point.
 import { assertKnownKeys, deepFreeze, failFor, isPlainObject } from './discovery-options';
-import { isResourceUrl } from './resource-url';
+import { isStaticHttpUrl } from './server-card';
 
 /**
  * The media type of the document an AI Catalog entry links to: an MCP Server Card.
@@ -163,7 +163,7 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 // A card URL is https, so a client reads the card it links over TLS, except on a loopback host, which a local
 // development server answers on
 function isCardUrl(value: unknown): value is string {
-  if (typeof value !== 'string' || !isResourceUrl(value) || /\s/.test(value)) return false;
+  if (!isStaticHttpUrl(value)) return false;
   const { protocol, hostname } = new URL(value);
   return protocol === 'https:' || LOOPBACK_HOSTS.has(hostname);
 }
