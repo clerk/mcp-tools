@@ -609,6 +609,10 @@ describe('createBrowserSessionTool', () => {
     expect(tools[0]?.description).toContain('Opens https://app.example.com in a browser');
     expect(tools[0]?.description).toContain('before you open any page on app.example.com');
     expect(tools[0]?.description).toContain('Never type credentials for app.example.com');
+    expect(tools[0]?.description).toContain(
+      'fresh, isolated browser profile or context with no existing app.example.com session',
+    );
+    expect(tools[0]?.description).toContain('agent_session_forbidden');
   });
 
   test('gives short server instructions that name the host and the tool', () => {

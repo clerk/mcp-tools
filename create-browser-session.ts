@@ -453,6 +453,8 @@ function toolText({ host, origin }: URL): { title: string; description: string }
       `Never type credentials for ${host}.`,
       'Call it with the path you want (for example /settings), then open the returned URL in the browser right away:',
       'it works once and expires in about 1 hour. Do not print or share the URL.',
+      `Open it in a fresh, isolated browser profile or context with no existing ${host} session:`,
+      'a browser that is already signed in is refused with agent_session_forbidden.',
     ].join(' '),
   };
 }
