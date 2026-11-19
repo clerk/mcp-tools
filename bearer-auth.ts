@@ -518,6 +518,9 @@ export function assertVerifierOrResourceUrl(options: unknown, message: string) {
   }
 }
 
+// Module-level, like the prebuilt tool's step-up warning, so middleware built per request still warns only once.
+let warnedPublicIdentityTool = false;
+
 /**
  * The auth check of an adapter's entry point. `clerkClient` is checked at startup. Each request resolves its token
  * verifier first, the Clerk client before any token is read, so a missing client throws as it is, then is checked.
@@ -549,6 +552,17 @@ export function createBearerAuth<Req>(
   } else if (clerkClient !== undefined) {
     assertClient(clerkClient);
     clientFor = async () => clerkClient;
+  }
+  // Keep the name here rather than importing the tool: auth-only entry points must not require its optional Zod peer.
+  // submit_feedback supports anonymous callers; create_browser_session is the only prebuilt identity-only tool.
+  if (
+    !warnedPublicIdentityTool &&
+    options.publicAccess?.tools?.includes('create_browser_session')
+  ) {
+    warnedPublicIdentityTool = true;
+    console.warn(
+      'Clerk warning: create_browser_session requires a Clerk identity but is listed in publicAccess.tools. Calls without a token will get not_authenticated instead of a 401 challenge, so the client will not start sign-in. Remove create_browser_session from publicAccess.tools.',
+    );
   }
   const authenticate = bearerAuthenticator(options);
   let warnedAudienceRejection = false;
