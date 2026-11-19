@@ -130,6 +130,8 @@ The extension recommends serving the card at your MCP endpoint's URL followed by
 - Any origin can read the card and revalidate it: `Access-Control-Allow-Origin: *`, with `If-Match` and `If-None-Match` allowed and `ETag` exposed. `OPTIONS` gets the CORS preflight, and other methods a JSON `405` with `Allow: GET, HEAD, OPTIONS`. Every error, such as that `405` or a `421`, is sent with `Cache-Control: no-store`, so no cache keeps it.
 - With a list of `resourceUrl`s, one for each origin, a request gets the card for the URL with its own origin, scheme and port included; the browser's `Origin` header plays no part. A request to any other origin gets a JSON `421`, never another origin's card. Errors are not cached.
 
+Earlier middleware response headers are preserved, except that discovery errors force `Cache-Control: no-store` and `ETag` is merged into an earlier `Access-Control-Expose-Headers` (unless `*` already exposes every header). `Access-Control-Allow-Origin` precedence is adapter-specific: Express's discovery handler uses its own `*`, while Hono keeps an earlier CORS middleware's allowed origin; see each adapter's guide. Next.js route handlers return their own response headers.
+
 For framework-specific implementations, see:
 
 - [Express.js implementation](./express/README.md#servercardhandler)

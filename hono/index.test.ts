@@ -238,9 +238,43 @@ describe.each([
     expect(res.headers.get('content-type')).toBe(mediaType);
   });
 
+  test('merges ETag into Quick Start CORS exposure and keeps no-store on error responses', async () => {
+    const app = new Hono();
+    app.use('*', cors({ origin: 'https://app.example', exposeHeaders: ['WWW-Authenticate'] }));
+    app.use('*', async (c, next) => {
+      c.header('Cache-Control', 'public, max-age=3600');
+      await next();
+    });
+    app.all(path, handler());
+
+    const res = await app.request(`http://myapp.com${path}`, {
+      method: 'POST',
+      headers: { origin: 'https://app.example' },
+    });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get('access-control-expose-headers')).toBe('WWW-Authenticate, ETag');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  test.each([
+    ['an existing case-insensitive ETag', ['etag', 'WWW-Authenticate'], 'etag, WWW-Authenticate'],
+    ['a wildcard', ['*'], '*'],
+  ])('does not duplicate or narrow %s in CORS exposure', async (_case, exposeHeaders, expected) => {
+    const app = new Hono();
+    app.use('*', cors({ origin: 'https://app.example', exposeHeaders }));
+    app.all(path, handler());
+
+    const res = await app.request(`http://myapp.com${path}`, {
+      headers: { origin: 'https://app.example' },
+    });
+
+    expect(res.headers.get('access-control-expose-headers')).toBe(expected);
+  });
+
   test('keeps the CORS headers a cors() middleware in front of it sets, as the metadata handlers do', async () => {
     const app = new Hono();
-    app.use('*', cors({ origin: 'https://app.example' }));
+    app.use('*', cors({ origin: 'https://app.example', exposeHeaders: ['WWW-Authenticate'] }));
     app.all(path, handler());
 
     const res = await app.request(`http://myapp.com${path}`, {
@@ -249,7 +283,7 @@ describe.each([
 
     expect(res.status).toBe(200);
     expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example');
-    expect(res.headers.get('access-control-expose-headers')).toBe('ETag');
+    expect(res.headers.get('access-control-expose-headers')).toBe('WWW-Authenticate, ETag');
     expect(res.headers.get('cache-control')).toBe('public, max-age=3600');
   });
 });

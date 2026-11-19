@@ -272,6 +272,14 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
       ifMatch: c.req.header('if-match'),
       ifNoneMatch: c.req.header('if-none-match'),
     });
+    const exposeHeaders = c.res.headers.get('access-control-expose-headers');
+    if (exposeHeaders !== null) {
+      const exposed = exposeHeaders.split(',').map((header) => header.trim());
+      if (!exposed.includes('*') && !exposed.some((header) => header.toLowerCase() === 'etag')) {
+        c.res.headers.set('access-control-expose-headers', [...exposed, 'ETag'].join(', '));
+      }
+    }
+    if (answer.headers['Cache-Control'] === 'no-store') c.res.headers.set('cache-control', 'no-store');
     // `c.body`, not `c.json` or a new Response, keeps the media type and the headers earlier middleware set
     if (answer.body === null) return c.body(null, answer.status, answer.headers);
     return c.body(answer.body, answer.status as 200 | 400 | 405 | 412 | 421, answer.headers);

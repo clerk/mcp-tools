@@ -978,6 +978,44 @@ describe.each([
     expect(notModified.headers.get('x-request-id')).toBe('r1');
   });
 
+  test('merges ETag into earlier CORS exposure and keeps no-store on error responses', async () => {
+    const app = express();
+    app.use((_req, res, next) => {
+      res.setHeader('access-control-allow-origin', 'https://app.example');
+      res.setHeader('access-control-expose-headers', 'WWW-Authenticate');
+      res.setHeader('cache-control', 'public, max-age=3600');
+      next();
+    });
+    app.all(path, handler());
+
+    const res = await withListening(app, (baseUrl) =>
+      fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { origin: 'https://app.example' },
+      }),
+    );
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get('access-control-expose-headers')).toBe('WWW-Authenticate, ETag');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  test.each([
+    ['an existing case-insensitive ETag', 'etag, WWW-Authenticate'],
+    ['a wildcard', '*'],
+  ])('does not duplicate or narrow %s in CORS exposure', async (_case, exposeHeaders) => {
+    const app = express();
+    app.use((_req, res, next) => {
+      res.setHeader('access-control-expose-headers', exposeHeaders);
+      next();
+    });
+    app.all(path, handler());
+
+    const res = await withListening(app, (baseUrl) => fetch(`${baseUrl}${path}`));
+
+    expect(res.headers.get('access-control-expose-headers')).toBe(exposeHeaders);
+  });
+
   // As protectedResourceMetadataHandler's own CORS headers do, unlike Hono, where a cors() middleware's are kept
   test('replaces an Access-Control-Allow-Origin earlier middleware set with its own', async () => {
     const app = express();
@@ -1142,6 +1180,7 @@ describe('serverCardHandler behind a proxy', () => {
     const res = await fetchCard(true, forwarded);
 
     expect(res.status).toBe(200);
+    expect(res.vary).toBe('X-Forwarded-Host, X-Forwarded-Proto');
     expect(res.body.remotes).toEqual([
       { type: 'streamable-http', url: 'https://mcp.example.com/mcp' },
     ]);
@@ -1168,6 +1207,5 @@ describe('serverCardHandler behind a proxy', () => {
       vary: 'X-Forwarded-Host, X-Forwarded-Proto',
       body: { error: 'misdirected_request' },
     });
-    expect(res.vary).toBe('X-Forwarded-Host, X-Forwarded-Proto');
   });
 });

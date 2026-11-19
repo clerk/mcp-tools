@@ -342,10 +342,39 @@ function discoveryHandler(
     // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,
     // which add an ETag of their own and answer a 304 by Express's own freshness rules
     if (varyForForwardedOrigin) varyOnForwardedOrigin(res);
+    const exposeHeaders = res.getHeader('access-control-expose-headers');
+    const mergedExposeHeaders =
+      typeof exposeHeaders === 'string' || Array.isArray(exposeHeaders)
+        ? [...(Array.isArray(exposeHeaders) ? exposeHeaders : [exposeHeaders])]
+            .flatMap((value) => value.split(','))
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : undefined;
+    if (
+      mergedExposeHeaders &&
+      !mergedExposeHeaders.includes('*') &&
+      !mergedExposeHeaders.some((header) => header.toLowerCase() === 'etag')
+    ) {
+      mergedExposeHeaders.push('ETag');
+    }
     res.status(status);
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+    if (mergedExposeHeaders) {
+      res.setHeader('access-control-expose-headers', mergedExposeHeaders.join(', '));
+    }
     res.end(body ?? undefined);
   };
+}
+
+function varyOnForwardedOrigin(res: express.Response): void {
+  const vary = res.getHeader('vary');
+  const values = Array.isArray(vary) ? vary : typeof vary === 'string' ? vary.split(',') : [];
+  if (values.some((value) => typeof value === 'string' && value.trim() === '*')) return;
+  const fields = values.filter((value): value is string => typeof value === 'string');
+  for (const name of ['X-Forwarded-Host', 'X-Forwarded-Proto']) {
+    if (!fields.some((field) => field.trim().toLowerCase() === name.toLowerCase())) fields.push(name);
+  }
+  res.setHeader('Vary', fields.join(', '));
 }
 
 function sendMetadata(res: express.Response, { status, headers, body }: MetadataAnswer) {
@@ -366,17 +395,6 @@ function getRequestUrl(req: express.Request): string | undefined {
     ) {
       return undefined;
     }
-function varyOnForwardedOrigin(res: express.Response): void {
-  const vary = res.getHeader('vary');
-  const values = Array.isArray(vary) ? vary : typeof vary === 'string' ? vary.split(',') : [];
-  if (values.some((value) => typeof value === 'string' && value.trim() === '*')) return;
-  const fields = values.filter((value): value is string => typeof value === 'string');
-  for (const name of ['X-Forwarded-Host', 'X-Forwarded-Proto']) {
-    if (!fields.some((field) => field.trim().toLowerCase() === name.toLowerCase())) fields.push(name);
-  }
-  res.setHeader('Vary', fields.join(', '));
-}
-
     return new URL(target).href;
   }
 
