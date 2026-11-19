@@ -362,7 +362,7 @@ export async function readJsonBody(request: Request): Promise<unknown> {
   const reader = request.clone().body?.getReader();
   if (!reader) return undefined;
 
-  const chunks: Uint8Array[] = [];
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();
@@ -374,7 +374,7 @@ export async function readJsonBody(request: Request): Promise<unknown> {
       void reader.cancel().catch(() => undefined);
       return undefined;
     }
-    chunks.push(value);
+    chunks.push(new Uint8Array(value));
   }
 
   try {

@@ -635,12 +635,7 @@ If you wish to use a different kind of store, you can implement your own by comp
 
 ```ts
 type JsonSerializable =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonSerializable[]
-  | { [key: string]: JsonSerializable };
+  null | boolean | number | string | JsonSerializable[] | { [key: string]: JsonSerializable };
 
 interface McpClientStore {
   write: (key: string, data: JsonSerializable) => Promise<void>;
