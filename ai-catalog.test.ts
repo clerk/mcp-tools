@@ -306,18 +306,6 @@ describe('generateAICatalog options', () => {
       { entries: [{ ...weather, url: 'https://example.com/a card' }] },
       'entries[0].url must be',
     ],
-    ...[
-      'https:example.com/card',
-      'https:/example.com/card',
-      'http:localhost/card',
-      'https://example.com/{tenant}/card',
-      'https://example.com/a%zz',
-      'https://example.com/café',
-    ].map((url) => [
-      `a non-exact URL ${url}`,
-      { entries: [{ ...weather, url }] },
-      'entries[0].url must be',
-    ] as const),
     [
       'a second entry that is wrong',
       { entries: [weather, { identifier: 'urn:air:b', url: 7 }] },
@@ -326,6 +314,19 @@ describe('generateAICatalog options', () => {
   ])('rejects %s', (_case, options, message) => {
     expect(() => generateAICatalog(options as never)).toThrow(
       `Clerk error: generateAICatalog ${message}`,
+    );
+  });
+
+  test.each([
+    'https:example.com/card',
+    'https:/example.com/card',
+    'http:localhost/card',
+    'https://example.com/{tenant}/card',
+    'https://example.com/a%zz',
+    'https://example.com/café',
+  ])('rejects a non-exact URL %s', (url) => {
+    expect(() => generateAICatalog({ entries: [{ ...weather, url }] })).toThrow(
+      'Clerk error: generateAICatalog entries[0].url must be',
     );
   });
 });

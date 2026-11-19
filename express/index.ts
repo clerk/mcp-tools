@@ -372,7 +372,8 @@ function varyOnForwardedOrigin(res: express.Response): void {
   if (values.some((value) => typeof value === 'string' && value.trim() === '*')) return;
   const fields = values.filter((value): value is string => typeof value === 'string');
   for (const name of ['X-Forwarded-Host', 'X-Forwarded-Proto']) {
-    if (!fields.some((field) => field.trim().toLowerCase() === name.toLowerCase())) fields.push(name);
+    if (!fields.some((field) => field.trim().toLowerCase() === name.toLowerCase()))
+      fields.push(name);
   }
   res.setHeader('Vary', fields.join(', '));
 }

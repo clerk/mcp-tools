@@ -258,7 +258,7 @@ describe.each([
   });
 
   test.each([
-    ['an existing case-insensitive ETag', ['etag', 'WWW-Authenticate'], 'etag, WWW-Authenticate'],
+    ['an existing case-insensitive ETag', ['etag', 'WWW-Authenticate'], 'etag,WWW-Authenticate'],
     ['a wildcard', ['*'], '*'],
   ])('does not duplicate or narrow %s in CORS exposure', async (_case, exposeHeaders, expected) => {
     const app = new Hono();
