@@ -107,6 +107,13 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
     VALUES (?, ?, CURRENT_TIMESTAMP)
   `);
 
+  // Matches the value written for `expected`: values are stored as written by
+  // JSON.stringify, which serializes their parsed copy the same way again.
+  const compareAndSetStmt = db.prepare(`
+    UPDATE ${tableName} SET value = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE key = ? AND value = ?
+  `);
+
   const selectStmt = db.prepare(`
     SELECT value FROM ${tableName} WHERE key = ?
   `);
@@ -131,6 +138,18 @@ export function createSqliteStore(config: SqliteStoreConfig = {}) {
   const store = {
     write: async (k: string, v: JsonSerializable): Promise<void> => {
       insertStmt.run(k, JSON.stringify(v));
+    },
+
+    /**
+     * Write a value only if the key still holds `expected`, as one statement
+     */
+    compareAndSet: async (
+      k: string,
+      expected: JsonSerializable,
+      v: JsonSerializable,
+    ): Promise<boolean> => {
+      const result = compareAndSetStmt.run(JSON.stringify(v), k, JSON.stringify(expected));
+      return result.changes > 0;
     },
 
     read: async (k: string): Promise<JsonSerializable> => {

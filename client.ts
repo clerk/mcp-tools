@@ -16,6 +16,9 @@ export type { JsonSerializable, McpClientStore } from './client-store';
 const CODE_VERIFIER_PREFIX = 'pkce_verifier_';
 const STATE_PREFIX = 'state_';
 const SESSION_PREFIX = 'session_';
+// Overlapping saves of one session are rare, so a save that keeps losing to
+// them gives up rather than retrying forever.
+const MAX_SESSION_UPDATE_ATTEMPTS = 10;
 
 /**
  * This function is used to complete the OAuth flow. It is used in the OAuth
@@ -56,14 +59,9 @@ export async function completeOAuth({
 
   await transport.finishAuth(code);
 
-  // Read the updated client data AFTER finishAuth (which saves tokens)
-  const updatedClientData = await getClientData(sessionId, store);
-
-  // write to the store that the auth is complete
-  await store.write(`${SESSION_PREFIX}${sessionId}`, {
-    ...updatedClientData,
-    authComplete: true,
-  });
+  // Update the client data AFTER finishAuth (which saves tokens) to record
+  // that the auth is complete
+  await updateSession(sessionId, store, (stored) => ({ ...stored, authComplete: true }));
 
   return { transport, sessionId };
 }
@@ -603,26 +601,54 @@ function assertSameIssuer(
   );
 }
 
+/**
+ * Reads the session, applies `update` to it, and writes the result. With the
+ * store's compareAndSet, the write is made only if the session is unchanged
+ * since the read; otherwise the session is read and `update` applied again, so
+ * its issuer checks see a binding an overlapping save made. Without it, the
+ * read and write are separate, as they were before compareAndSet.
+ */
+async function updateSession(
+  sessionId: string,
+  store: McpClientStore,
+  update: (stored: McpClientData) => McpClientData,
+): Promise<McpClientData> {
+  const key = `${SESSION_PREFIX}${sessionId}`;
+  for (let attempt = 0; attempt < MAX_SESSION_UPDATE_ATTEMPTS; attempt++) {
+    const stored = await store.read(key);
+    const client = update(toClientData(sessionId, stored));
+    // The session's SDK values are parsed JSON or JSON from the SDK.
+    const value = client as unknown as JsonSerializable;
+    if (!store.compareAndSet) {
+      await store.write(key, value);
+      return client;
+    }
+    if (await store.compareAndSet(key, stored, value)) return client;
+  }
+  throw new Error(
+    `Session "${sessionId}" was changed by other saves ${MAX_SESSION_UPDATE_ATTEMPTS} times while saving it, so it was not saved.`,
+  );
+}
+
 async function saveClientInformation(
   sessionId: string,
   store: McpClientStore,
   clientInformation: OAuthClientInformationMixed,
 ): Promise<McpClientData> {
-  const stored = await getClientData(sessionId, store);
-  assertSameIssuer(
-    sessionId,
-    stored.oauthClientInformation,
-    clientInformation,
-    'client information',
-  );
-  const client = {
-    ...stored,
-    clientId: clientInformation.client_id,
-    clientSecret: clientInformation.client_secret,
-    oauthClientInformation: clientInformation,
-  };
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
-  return client;
+  return updateSession(sessionId, store, (stored) => {
+    assertSameIssuer(
+      sessionId,
+      stored.oauthClientInformation,
+      clientInformation,
+      'client information',
+    );
+    return {
+      ...stored,
+      clientId: clientInformation.client_id,
+      clientSecret: clientInformation.client_secret,
+      oauthClientInformation: clientInformation,
+    };
+  });
 }
 
 async function saveDiscoveryState(
@@ -630,11 +656,11 @@ async function saveDiscoveryState(
   store: McpClientStore,
   discoveryState: OAuthDiscoveryState,
 ): Promise<McpClientData> {
-  const stored = await getClientData(sessionId, store);
   // The SDK's metadata types allow unknown members, which parsed JSON holds.
-  const client = { ...stored, oauthDiscoveryState: discoveryState as unknown as JsonSerializable };
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
-  return client;
+  return updateSession(sessionId, store, (stored) => ({
+    ...stored,
+    oauthDiscoveryState: discoveryState as unknown as JsonSerializable,
+  }));
 }
 
 async function saveClientTokens(
@@ -642,27 +668,29 @@ async function saveClientTokens(
   store: McpClientStore,
   tokens: OAuthTokens,
 ): Promise<McpClientData> {
-  const { oauthDiscoveryState: _, ...stored } = await getClientData(sessionId, store);
-  assertSameIssuer(sessionId, stored.oauthClientInformation, tokens, 'tokens');
-  assertSameIssuer(sessionId, stored.oauthTokens, tokens, 'tokens');
-  // The discovery state served the callback that obtained these tokens, so it
-  // is dropped and later authorizations discover afresh.
-  const client = {
-    ...stored,
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    oauthTokens: tokens,
-  };
-  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
-  return client;
+  return updateSession(sessionId, store, (session) => {
+    const { oauthDiscoveryState: _, ...stored } = session;
+    assertSameIssuer(sessionId, stored.oauthClientInformation, tokens, 'tokens');
+    assertSameIssuer(sessionId, stored.oauthTokens, tokens, 'tokens');
+    // The discovery state served the callback that obtained these tokens, so it
+    // is dropped and later authorizations discover afresh.
+    return {
+      ...stored,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      oauthTokens: tokens,
+    };
+  });
 }
 
 /**
  * Handles typing for reading client data our of the store by session id.
  */
 async function getClientData(sessionId: string, store: McpClientStore) {
-  const clientData = await store.read(`${SESSION_PREFIX}${sessionId}`);
+  return toClientData(sessionId, await store.read(`${SESSION_PREFIX}${sessionId}`));
+}
 
+function toClientData(sessionId: string, clientData: JsonSerializable) {
   if (
     !clientData ||
     typeof clientData !== 'object' ||

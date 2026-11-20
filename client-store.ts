@@ -20,4 +20,18 @@ export type JsonSerializable =
 export interface McpClientStore {
   write: (key: string, value: JsonSerializable) => Promise<void>;
   read: (key: string) => Promise<JsonSerializable>;
+  /**
+   * Optional. Writes `value` to `key` only if the key still holds `expected`, a
+   * value `read` returned for it, as one atomic step, and resolves whether it
+   * wrote. Sessions are saved with it when it is present, so two processes
+   * saving the same session at once cannot both bind it to an authorization
+   * server: the later save sees the earlier binding and is checked against it.
+   * Without it, a save reads and then writes, and the later of two overlapping
+   * saves replaces the earlier one.
+   */
+  compareAndSet?: (
+    key: string,
+    expected: JsonSerializable,
+    value: JsonSerializable,
+  ) => Promise<boolean>;
 }

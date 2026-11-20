@@ -49,6 +49,54 @@ function createStore(): McpClientStore {
   };
 }
 
+/**
+ * A store with `compareAndSet`, as one whose backend can update a key atomically.
+ */
+function createAtomicStore(): McpClientStore {
+  const data = new Map<string, string>();
+  return {
+    write: async (key, value) => {
+      data.set(key, JSON.stringify(value));
+    },
+    read: async (key) => {
+      const value = data.get(key);
+      return value ? (JSON.parse(value) as JsonSerializable) : undefined;
+    },
+    compareAndSet: async (key, expected, value) => {
+      if (data.get(key) !== JSON.stringify(expected)) return false;
+      data.set(key, JSON.stringify(value));
+      return true;
+    },
+  };
+}
+
+/**
+ * Wraps `store` so that `overlap(key, count)` holds the next `count` reads of
+ * `key` until all of them have read. Saves that overlap this way read the same
+ * session before any of them writes, as saves in separate processes can.
+ */
+function overlappingReads(store: McpClientStore) {
+  let held: { key: string; count: number; releases: (() => void)[] } | undefined;
+  const wrapped: McpClientStore = {
+    ...store,
+    read: async (key) => {
+      const value = await store.read(key);
+      if (!held || held.key !== key) return value;
+      const { releases, count } = held;
+      return new Promise((resolve) => {
+        releases.push(() => resolve(value));
+        if (releases.length < count) return;
+        held = undefined;
+        for (const release of releases) release();
+      });
+    },
+  };
+  const overlap = (key: string, count: number) => {
+    held = { key, count, releases: [] };
+  };
+  return { store: wrapped, overlap };
+}
+
 function discoveryState(authorizationServerUrl = issuer) {
   return {
     authorizationServerUrl,
@@ -688,5 +736,123 @@ describe('OAuth credential persistence', () => {
     );
     expect(credentialRequests(fetchFn)).toEqual([]);
     expect(await store.read(`session_${initial.sessionId}`)).toEqual(registered);
+  });
+});
+
+describe('overlapping session saves', () => {
+  const issuers = ['https://a.example/', 'https://b.example/'];
+
+  /** The one save that bound the session, after checking that the other was rejected for it. */
+  function boundIssuer(results: PromiseSettledResult<void>[], name: string) {
+    const bound = results.flatMap((result, index) =>
+      result.status === 'fulfilled' ? [issuers[index]] : [],
+    );
+    expect(bound).toHaveLength(1);
+    const [rejected] = results.filter((result) => result.status === 'rejected');
+    const other = issuers.find((value) => value !== bound[0]);
+    expect((rejected as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+    expect((rejected as PromiseRejectedResult).reason.message).toContain(
+      `is bound to authorization server ${bound[0]} and does not save ${name} for ${other}`,
+    );
+    return bound[0];
+  }
+
+  test('overlapping client information saves bind the session to one issuer', async () => {
+    const { store, overlap } = overlappingReads(createAtomicStore());
+    const initial = await createDynamicallyRegisteredMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+    });
+    const key = `session_${initial.sessionId}`;
+    // Taken while the session is unbound, as two processes registering for it would.
+    const saves = issuers.map(() => initial.authProvider.saveClientInformation!);
+
+    overlap(key, 2);
+    const results = await Promise.allSettled(
+      saves.map((save, index) =>
+        save({ ...clientInformation, client_id: `client-${index}`, issuer: issuers[index] }),
+      ),
+    );
+
+    const bound = boundIssuer(results, 'client information');
+    expect(await store.read(key)).toMatchObject({
+      clientId: `client-${issuers.indexOf(bound)}`,
+      oauthClientInformation: { issuer: bound },
+    });
+  });
+
+  test('overlapping token saves bind the session to one issuer', async () => {
+    const { store, overlap } = overlappingReads(createAtomicStore());
+    const initial = await createDynamicallyRegisteredMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+    });
+    const key = `session_${initial.sessionId}`;
+    // Two resumed providers, as two processes handling the session would have.
+    const resumed = await Promise.all(
+      issuers.map(() => getMcpClientBySessionId({ sessionId: initial.sessionId, store })),
+    );
+
+    overlap(key, 2);
+    const results = await Promise.allSettled(
+      resumed.map(({ authProvider }, index) =>
+        authProvider.saveTokens({
+          ...tokens,
+          access_token: `access-${index}`,
+          issuer: issuers[index],
+        }),
+      ),
+    );
+
+    const bound = boundIssuer(results, 'tokens');
+    expect(await store.read(key)).toMatchObject({
+      accessToken: `access-${issuers.indexOf(bound)}`,
+      oauthTokens: { issuer: bound },
+    });
+  });
+
+  test('overlapping saves for the same issuer keep both changes', async () => {
+    const { store, overlap } = overlappingReads(createAtomicStore());
+    const initial = await createDynamicallyRegisteredMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+    });
+    const key = `session_${initial.sessionId}`;
+    const saveClientInformation = initial.authProvider.saveClientInformation!;
+
+    overlap(key, 2);
+    await Promise.all([
+      saveClientInformation(clientInformation),
+      initial.authProvider.saveTokens(tokens),
+    ]);
+
+    expect(await store.read(key)).toMatchObject({
+      clientId: clientInformation.client_id,
+      oauthClientInformation: { issuer },
+      accessToken: tokens.access_token,
+      oauthTokens: { issuer },
+    });
+  });
+
+  test('a save that keeps losing to overlapping saves gives up', async () => {
+    const store = createAtomicStore();
+    const initial = await createDynamicallyRegisteredMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+    });
+    const compareAndSet = vi.fn(async () => false);
+
+    const resumed = await getMcpClientBySessionId({
+      sessionId: initial.sessionId,
+      store: { ...store, compareAndSet },
+    });
+    await expect(resumed.authProvider.saveTokens(tokens)).rejects.toThrow(
+      `Session "${initial.sessionId}" was changed by other saves 10 times while saving it, so it was not saved.`,
+    );
+    expect(compareAndSet).toHaveBeenCalledTimes(10);
   });
 });
