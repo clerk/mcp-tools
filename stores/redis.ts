@@ -105,6 +105,35 @@ export function createRedisStore(config: RedisStoreConfig = {}) {
   // Connect immediately
   const connectionPromise = redis.connect();
 
+  // Sets KEYS[1] to ARGV[2], with a TTL of ARGV[3] seconds unless it is empty,
+  // only if the value `read` returns for it equals ARGV[1]. Values are compared
+  // decoded, since the stored wrapper's timestamps differ and cjson does not
+  // keep key order.
+  const compareAndSetScript = `
+    local function equal(a, b)
+      if type(a) ~= type(b) then return false end
+      if type(a) ~= 'table' then return a == b end
+      for k, v in pairs(a) do
+        if not equal(v, b[k]) then return false end
+      end
+      for k in pairs(b) do
+        if a[k] == nil then return false end
+      end
+      return true
+    end
+    local current = redis.call('GET', KEYS[1])
+    if not current then return 0 end
+    local stored = cjson.decode(current)
+    if type(stored) == 'table' and stored.value ~= nil then stored = stored.value end
+    if not equal(stored, cjson.decode(ARGV[1])) then return 0 end
+    if ARGV[3] ~= '' then
+      redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+    else
+      redis.call('SET', KEYS[1], ARGV[2])
+    end
+    return 1
+  `;
+
   const store = {
     write: async (k: string, v: JsonSerializable): Promise<void> => {
       await connectionPromise; // Ensure connected
@@ -120,6 +149,27 @@ export function createRedisStore(config: RedisStoreConfig = {}) {
       } else {
         await redis.set(key, serializedValue);
       }
+    },
+
+    /**
+     * Write a value only if the key still holds `expected`, in one script
+     */
+    compareAndSet: async (
+      k: string,
+      expected: JsonSerializable,
+      v: JsonSerializable,
+    ): Promise<boolean> => {
+      await connectionPromise; // Ensure connected
+      const serializedValue = JSON.stringify({
+        value: v,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      const result = await redis.eval(compareAndSetScript, {
+        keys: [formatKey(k)],
+        arguments: [JSON.stringify(expected ?? null), serializedValue, ttl ? String(ttl) : ''],
+      });
+      return result === 1;
     },
 
     read: async (k: string): Promise<JsonSerializable> => {

@@ -154,6 +154,26 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
       await client.query(query, [k, JSON.stringify(v)]);
     },
 
+    /**
+     * Write a value only if the key still holds `expected`, compared as JSONB.
+     * A concurrent update of the key makes this one wait, then re-check.
+     */
+    compareAndSet: async (
+      k: string,
+      expected: JsonSerializable,
+      v: JsonSerializable,
+    ): Promise<boolean> => {
+      await initPromise; // Ensure connected and table exists
+
+      const query = `
+        UPDATE ${tableName} SET value = $3, updated_at = NOW()
+        WHERE key = $1 AND value = $2::jsonb
+      `;
+      const result = await client.query(query, [k, JSON.stringify(expected), JSON.stringify(v)]);
+
+      return (result.rowCount ?? 0) > 0;
+    },
+
     read: async (k: string): Promise<JsonSerializable> => {
       await initPromise; // Ensure connected and table exists
 
