@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import type {
+  OAuthClientProvider,
+  OAuthDiscoveryState,
+} from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type {
   OAuthClientInformationMixed,
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { McpClientStore } from './client-store';
+import type { JsonSerializable, McpClientStore } from './client-store';
 
 export type { JsonSerializable, McpClientStore } from './client-store';
 
@@ -114,6 +117,17 @@ export async function getMcpClientBySessionId({
         );
       }
       return info;
+    },
+    // The callback restores the discovery state saved at redirect, so the code
+    // is exchanged with the authorization server that issued it, even when
+    // discovery would now name another, as it can when the redirect followed a
+    // resource metadata URL from a 401 challenge that the callback does not
+    // have. Other resumptions discover afresh, so a change of authorization
+    // server still meets the binding check.
+    discoveryState: async () => {
+      if (!state) return undefined;
+      client = await getClientData(sessionId, store);
+      return client.oauthDiscoveryState as OAuthDiscoveryState | undefined;
     },
     tokens: () => {
       if (client.oauthTokens) return client.oauthTokens;
@@ -251,6 +265,12 @@ export async function createKnownCredentialsMcpClient({
   // re-create the client later in the oauth callback and any mcp call endpoints
   await store.write(`${SESSION_PREFIX}${sessionId}`, { ...client });
 
+  // Staged when discovery reports the authorization server and saved just
+  // before the redirect, so a start that fails before the redirect leaves the
+  // session unbound.
+  let pendingClientInformation: OAuthClientInformationMixed | undefined;
+  let pendingDiscoveryState: OAuthDiscoveryState | undefined;
+
   // there's some non-dry code between this and the dynamically registered
   // client, but this is on purpose for flexibility and clarity.
   const authProvider: OAuthClientProvider = {
@@ -262,28 +282,37 @@ export async function createKnownCredentialsMcpClient({
       tos_uri: undefined,
     },
     state: () => state,
-    clientInformation: () => getStoredClientInformation(client),
+    clientInformation: () => pendingClientInformation ?? getStoredClientInformation(client),
     // The SDK reports the authorization server it discovered before it reads
     // the client information and builds the authorization request. The known
-    // credentials are bound to it here, so the code exchange sends the code
-    // and client secret to that server only (RFC 9700 section 4.4.2). There
-    // is no saveClientInformation: known credentials never register, so
-    // another authorization server is rejected once they are bound.
-    saveDiscoveryState: async ({ authorizationServerUrl }) => {
+    // credentials are bound to it here, and saved with the discovery state
+    // before the redirect, so the code exchange sends the code and client
+    // secret to that server only (RFC 9700 section 4.4.2). There is no
+    // saveClientInformation: known credentials never register, so another
+    // authorization server is rejected once they are bound.
+    saveDiscoveryState: async (discoveryState) => {
+      pendingDiscoveryState = discoveryState;
       client = await getClientData(sessionId, store);
       if (client.oauthClientInformation && isBound(client.oauthClientInformation)) return;
-      client = await saveClientInformation(sessionId, store, {
+      pendingClientInformation = {
         client_id: clientParams.clientId,
         client_secret: clientParams.clientSecret,
-        issuer: String(authorizationServerUrl),
-      });
+        issuer: String(discoveryState.authorizationServerUrl),
+      };
     },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
     tokens: () => undefined,
     // called in the oauth callback route
     saveTokens: unexpectedFunctionCall('saveTokens', 'initializing a known credentials client'),
-    redirectToAuthorization: (url) => {
+    redirectToAuthorization: async (url) => {
+      if (pendingClientInformation) {
+        client = await saveClientInformation(sessionId, store, pendingClientInformation);
+        pendingClientInformation = undefined;
+      }
+      if (pendingDiscoveryState) {
+        client = await saveDiscoveryState(sessionId, store, pendingDiscoveryState);
+      }
       redirect(url.toString());
     },
     saveCodeVerifier: async (verifier: string) => {
@@ -372,6 +401,9 @@ export async function createDynamicallyRegisteredMcpClient({
   // re-create the client later in the oauth callback and any mcp call endpoints
   await store.write(`${SESSION_PREFIX}${sessionId}`, { ...client });
 
+  // Saved just before the redirect, for the callback to restore.
+  let pendingDiscoveryState: OAuthDiscoveryState | undefined;
+
   const authProvider: OAuthClientProvider = {
     redirectUrl: client.oauthRedirectUrl,
     // this information is used to create an oauth client via dynamic client
@@ -414,7 +446,13 @@ export async function createDynamicallyRegisteredMcpClient({
     saveTokens: async (tokens) => {
       client = await saveClientTokens(sessionId, store, tokens);
     },
-    redirectToAuthorization: (url) => {
+    saveDiscoveryState: (discoveryState) => {
+      pendingDiscoveryState = discoveryState;
+    },
+    redirectToAuthorization: async (url) => {
+      if (pendingDiscoveryState) {
+        client = await saveDiscoveryState(sessionId, store, pendingDiscoveryState);
+      }
       redirect(url.toString());
     },
     // since the code verifier is saved before the client is registered, we
@@ -500,6 +538,11 @@ export interface McpClientData {
    * Complete SDK tokens, including their authorization server issuer.
    */
   oauthTokens?: OAuthTokens;
+  /**
+   * SDK `OAuthDiscoveryState` saved at the redirect, restored by the OAuth
+   * callback and dropped once tokens are saved.
+   */
+  oauthDiscoveryState?: JsonSerializable;
   authComplete?: boolean;
   oauthClientName?: string;
   oauthClientUri?: string;
@@ -582,14 +625,28 @@ async function saveClientInformation(
   return client;
 }
 
+async function saveDiscoveryState(
+  sessionId: string,
+  store: McpClientStore,
+  discoveryState: OAuthDiscoveryState,
+): Promise<McpClientData> {
+  const stored = await getClientData(sessionId, store);
+  // The SDK's metadata types allow unknown members, which parsed JSON holds.
+  const client = { ...stored, oauthDiscoveryState: discoveryState as unknown as JsonSerializable };
+  await store.write(`${SESSION_PREFIX}${sessionId}`, client);
+  return client;
+}
+
 async function saveClientTokens(
   sessionId: string,
   store: McpClientStore,
   tokens: OAuthTokens,
 ): Promise<McpClientData> {
-  const stored = await getClientData(sessionId, store);
+  const { oauthDiscoveryState: _, ...stored } = await getClientData(sessionId, store);
   assertSameIssuer(sessionId, stored.oauthClientInformation, tokens, 'tokens');
   assertSameIssuer(sessionId, stored.oauthTokens, tokens, 'tokens');
+  // The discovery state served the callback that obtained these tokens, so it
+  // is dropped and later authorizations discover afresh.
   const client = {
     ...stored,
     accessToken: tokens.access_token,
