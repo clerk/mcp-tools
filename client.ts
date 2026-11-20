@@ -99,15 +99,25 @@ export async function getMcpClientBySessionId({
       tos_uri: undefined,
     },
     clientInformation: () => getStoredClientInformation(client),
-    saveClientInformation: async (newInfo) => {
-      client = await saveClientInformation(sessionId, store, newInfo);
+    // Absent once the client information is bound to an issuer, so the SDK
+    // rejects another authorization server instead of registering there and
+    // overwriting the stored credentials. This is a getter because the SDK
+    // binds unstamped credentials after the provider is created.
+    get saveClientInformation() {
+      if (client.oauthClientInformation?.issuer) return undefined;
+      return async (newInfo: OAuthClientInformationMixed) => {
+        client = await saveClientInformation(sessionId, store, newInfo);
+      };
     },
     tokens: () => {
       if (client.oauthTokens) return client.oauthTokens;
       if (!client.accessToken) return undefined;
+      // Tokens saved by an earlier version have no issuer, and the SDK would
+      // send their refresh token and the client secret to whichever
+      // authorization server the MCP server names, so only the access token
+      // is returned.
       return {
         access_token: client.accessToken,
-        refresh_token: client.refreshToken,
         token_type: 'Bearer',
       };
     },
