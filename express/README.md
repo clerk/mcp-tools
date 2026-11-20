@@ -497,14 +497,20 @@ app.all(
 
 ### CORS for browser-based MCP clients
 
-The metadata handlers send their own CORS headers, which allow any origin (see [`protectedResourceMetadataHandler`](#protectedresourcemetadatahandler)). `mcpAuth` and `streamableHttpHandler` don't set CORS headers on `/mcp`; use Express middleware such as the `cors` package. A browser-based client needs the response to expose `WWW-Authenticate` (`Access-Control-Expose-Headers`), or it can't read the `401` challenge ([RFC 6750 section 3](https://datatracker.ietf.org/doc/html/rfc6750#section-3)) that points it to the metadata. It also sends `Authorization`, `Content-Type`, and, after `initialize`, `Mcp-Protocol-Version`, so the preflight must allow those request headers. Mount the CORS middleware before `mcpAuth`, so it answers the `OPTIONS` preflight, which carries no token, and adds its headers to the `401` and `403`:
+The metadata handlers send their own CORS headers, which allow any origin (see [`protectedResourceMetadataHandler`](#protectedresourcemetadatahandler)). `mcpAuth` and `streamableHttpHandler` don't set CORS headers on `/mcp`; use Express middleware such as the `cors` package. A browser-based client needs the response to expose `WWW-Authenticate` (`Access-Control-Expose-Headers`), or it can't read the `401` challenge ([RFC 6750 section 3](https://datatracker.ietf.org/doc/html/rfc6750#section-3)) that points it to the metadata. It also sends `Authorization`, `Content-Type`, `Mcp-Protocol-Version`, and the [standard request headers](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#standard-request-headers) of the 2026-07-28 transport: `Mcp-Method` on every request, and `Mcp-Name` on `tools/call`, `resources/read`, and `prompts/get`. The preflight must allow all of them. If a tool marks a parameter with `x-mcp-header`, clients also send its `Mcp-Param-{Name}` header; add each of those names to the allowed headers too. Mount the CORS middleware before `mcpAuth`, so it answers the `OPTIONS` preflight, which carries no token, and adds its headers to the `401` and `403`:
 
 ```ts
 import cors from 'cors';
 
 app.use(
   cors({
-    allowedHeaders: ['Authorization', 'Content-Type', 'Mcp-Protocol-Version'],
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      'Mcp-Protocol-Version',
+      'Mcp-Method',
+      'Mcp-Name',
+    ],
     exposedHeaders: ['WWW-Authenticate'],
   }),
 );
