@@ -1,10 +1,20 @@
-// End to end: the MCP SDK v1 client against a Hono server that uses `mcpAuth` with `publicAccess`, on MCP SDK 2.x.
+// End to end: the MCP SDK v1 client against a Hono server that uses `mcpAuth`, discoverable by default and with
+// `publicAccess`, on MCP SDK 2.x.
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
+import {
+  McpServer,
+  ResourceTemplate,
+  WebStandardStreamableHTTPServerTransport,
+} from '@modelcontextprotocol/server';
 import { type Context, Hono } from 'hono';
 import { describe, expect, test, vi } from 'vitest';
 
-import { mcpAuth, requireAdditionalScopes, streamableHttpHandler } from '../hono';
+import {
+  type McpAuthOptions,
+  mcpAuth,
+  requireAdditionalScopes,
+  streamableHttpHandler,
+} from '../hono';
 import type { AuthInfo } from '../mcp-types';
 import { connectOAuthClient, expiresAt, oauthMetadata, textOf } from './mcp-harness';
 
@@ -31,7 +41,14 @@ function verifyToken(token: string): AuthInfo | undefined {
 
 type ReadBody = (context: Context) => Promise<unknown>;
 
-function startServer(readBody: ReadBody | undefined = undefined) {
+// The options besides the verifier and the URLs: by default, the server is discoverable and names two public tools
+type ServerOptions = Pick<McpAuthOptions, 'discoverable' | 'publicAccess'>;
+const PUBLIC_TOOLS: ServerOptions = { publicAccess: { tools: ['search_docs', 'slow_search'] } };
+
+function startServer(
+  readBody: ReadBody | undefined = undefined,
+  options: ServerOptions = PUBLIC_TOOLS,
+) {
   const toolCalls = vi.fn();
   // Every answer the MCP endpoint gave, as `<method> <status>`
   const answers: string[] = [];
@@ -59,6 +76,18 @@ function startServer(readBody: ReadBody | undefined = undefined) {
         return { content: [{ type: 'text' as const, text: `email of ${userId}` }] };
       },
     );
+    server.registerResource('guide', 'docs://guide', { description: 'The guide' }, async (uri) => ({
+      contents: [{ uri: uri.href, text: 'guide' }],
+    }));
+    server.registerResource(
+      'page',
+      new ResourceTemplate('docs://pages/{slug}', { list: undefined }),
+      { description: 'A docs page' },
+      async (uri) => ({ contents: [{ uri: uri.href, text: 'page' }] }),
+    );
+    server.registerPrompt('summarize', { description: 'Summarizes a page' }, () => ({
+      messages: [{ role: 'user' as const, content: { type: 'text' as const, text: 'Summarize' } }],
+    }));
     return server;
   };
 
@@ -75,8 +104,8 @@ function startServer(readBody: ReadBody | undefined = undefined) {
       verifyToken,
       resourceUrl: MCP_URL.href,
       challengeScopes: ['profile', 'email'],
-      publicAccess: { methods: true, tools: ['search_docs', 'slow_search'] },
-    }),
+      ...options,
+    } as McpAuthOptions),
     streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
   );
 
@@ -102,7 +131,24 @@ async function connect(token?: string, readBody: ReadBody | undefined = undefine
   return { client, redirects, toolCalls, answers };
 }
 
-describe('a server with publicAccess', () => {
+// A POST of one JSON-RPC request without a token, as a client on protocol revision 2026-07-28 sends it
+function postRequest(
+  fetchImpl: ReturnType<typeof startServer>['fetchImpl'],
+  method: string,
+  params: Record<string, unknown> = {},
+) {
+  return fetchImpl(MCP_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2026-07-28',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+}
+
+describe('a server with publicAccess, discoverable by default', () => {
   test.each([
     { name: 'cached JSON', readBody: (c: Context) => c.req.json() },
     { name: 'cached text', readBody: (c: Context) => c.req.text() },
@@ -248,5 +294,82 @@ describe('a server with publicAccess', () => {
     expect(redirects).toHaveLength(1);
     expect(redirects[0]!.searchParams.get('scope')).toBe('profile email');
     expect(toolCalls).not.toHaveBeenCalled();
+  });
+
+  test('lets a client without a token list resources, resource templates, and prompts', async () => {
+    const { client, redirects, answers } = await connect();
+
+    const { resources } = await client.listResources();
+    expect(resources.map((resource) => resource.uri)).toEqual(['docs://guide']);
+    const { resourceTemplates } = await client.listResourceTemplates();
+    expect(resourceTemplates.map((template) => template.uriTemplate)).toEqual([
+      'docs://pages/{slug}',
+    ]);
+    const { prompts } = await client.listPrompts();
+    expect(prompts.map((prompt) => prompt.name)).toEqual(['summarize']);
+
+    expect(redirects).toHaveLength(0);
+    expect(answers.filter((answer) => answer.endsWith(' 401'))).toEqual([]);
+  });
+
+  // Protocol revision 2026-07-28 replaces `initialize` with this request
+  test('answers the server/discover of a client without a token, not a challenge', async () => {
+    const { fetchImpl } = startServer();
+
+    const res = await postRequest(fetchImpl, 'server/discover');
+    await res.body?.cancel();
+    expect(res.status).not.toBe(401);
+    expect(res.headers.get('www-authenticate')).toBeNull();
+  });
+
+  test('challenges a call to a tool it does not name, which a token then reaches', async () => {
+    const { fetchImpl } = startServer();
+    const res = await postRequest(fetchImpl, 'tools/call', {
+      name: 'get_primary_email',
+      arguments: {},
+    });
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
+
+    const { client } = await connect('token_full');
+    try {
+      expect(textOf(await client.callTool({ name: 'get_primary_email', arguments: {} }))).toBe(
+        'email of user_1',
+      );
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+describe('a server with discoverable: false', () => {
+  test('challenges a client without a token when it connects', async () => {
+    const { fetchImpl, answers } = startServer(undefined, { discoverable: false });
+    const { client, connected, redirects } = connectOAuthClient(MCP_URL, fetchImpl, undefined);
+
+    await expect(connected).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(answers[0]).toBe('POST 401');
+    expect(redirects).toHaveLength(1);
+    await client.close();
+  });
+
+  test('challenges the server/discover of a client without a token', async () => {
+    const { fetchImpl } = startServer(undefined, { discoverable: false });
+
+    const res = await postRequest(fetchImpl, 'server/discover');
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
+  });
+
+  test('lets a client with a token connect and list tools', async () => {
+    const { fetchImpl } = startServer(undefined, { discoverable: false });
+    const { client, connected } = connectOAuthClient(MCP_URL, fetchImpl, 'token_full');
+    await connected;
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toContain('get_primary_email');
+    } finally {
+      await client.close();
+    }
   });
 });

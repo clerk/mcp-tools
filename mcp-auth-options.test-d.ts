@@ -165,6 +165,61 @@ describe('the mcpAuth options', () => {
     expressMetadataHandler({ resourceUrl, publicAccess: { methods: true, tools } });
   });
 
+  test('accept discoverable, true by default, with or without named public calls', () => {
+    const tools = ['search_docs'] as const;
+    expressMcpAuth({ resourceUrl, discoverable: true, publicAccess: { tools } });
+    expressMcpAuth({ resourceUrl, publicAccess: { tools: ['search_docs'], resources: true } });
+    honoMcpAuth({ verifyToken, discoverable: true });
+    honoMcpAuth({ verifyToken, discoverable: undefined, publicAccess: { prompts: ['x'] } });
+    nextWithMcpAuth(handler, { resourceUrl, discoverable: true, publicAccess: { tools } });
+    expressMetadataHandler({ resourceUrl, discoverable: true, publicAccess: { tools } });
+    nextMetadataHandler({ discoverable: true });
+  });
+
+  test('accept discoverable: false without named public calls', () => {
+    expressMcpAuth({ resourceUrl, discoverable: false });
+    honoMcpAuth({ verifyToken, discoverable: false, publicAccess: {} });
+    nextWithMcpAuth(handler, { resourceUrl, clerkClient, discoverable: false });
+    honoMetadataHandler({ resourceUrl, discoverable: false });
+    nextMetadataHandler({ discoverable: false, onAuthFailure: () => {} });
+  });
+
+  test('accept discoverable from a shared options object that is not const', () => {
+    const privateOptions = { resourceUrl, discoverable: false };
+    expressMcpAuth(privateOptions);
+    expressMetadataHandler(privateOptions);
+    const publicOptions = { resourceUrl, publicAccess: { tools: ['search_docs'] } };
+    honoMcpAuth(publicOptions);
+    honoMetadataHandler(publicOptions);
+    // A widened discoverable could be false, so named calls need it as a literal, such as with `as const`
+    const widened = { resourceUrl, discoverable: true, publicAccess: { tools: ['search_docs'] } };
+    // @ts-expect-error discoverable is a boolean here, not true
+    honoMcpAuth(widened);
+    honoMcpAuth({ ...widened, discoverable: true as const });
+  });
+
+  test('reject named public calls with discoverable: false', () => {
+    // @ts-expect-error a public tool that no client without a token can connect to reach
+    expressMcpAuth({ resourceUrl, discoverable: false, publicAccess: { tools: ['search_docs'] } });
+    // @ts-expect-error public resources that no client without a token can connect to reach
+    honoMcpAuth({ verifyToken, discoverable: false, publicAccess: { resources: true } });
+    // @ts-expect-error public prompts that no client without a token can connect to reach
+    nextWithMcpAuth(handler, {
+      resourceUrl,
+      discoverable: false,
+      publicAccess: { prompts: ['x'] },
+    });
+    // @ts-expect-error the metadata handler takes the same options
+    expressMetadataHandler({ resourceUrl, discoverable: false, publicAccess: { tools: ['x'] } });
+  });
+
+  test('reject a discoverable that is not a boolean', () => {
+    // @ts-expect-error discoverable is true or false
+    expressMcpAuth({ resourceUrl, discoverable: 'yes' });
+    // @ts-expect-error discoverable is true or false
+    honoMetadataHandler({ discoverable: null });
+  });
+
   test('reject publicAccess options that would open every call or do nothing', () => {
     // @ts-expect-error each tool is listed by name
     expressMcpAuth({ resourceUrl, publicAccess: { tools: true } });

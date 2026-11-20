@@ -178,8 +178,9 @@ async function expressClerkClient(): Promise<ClerkOAuthClient> {
 }
 
 /**
- * The JSON body `express.json()` parsed, which `publicAccess` checks. Without that middleware a JSON request has no
- * parsed body, and every request without a token would get a 401 with nothing to say why, so that case throws.
+ * The JSON body `express.json()` parsed, which `discoverable` and `publicAccess` check. Without that middleware a
+ * JSON request has no parsed body, and every request without a token would get a 401 with nothing to say why, so that
+ * case throws. With `discoverable: false` and nothing else open, the body is never read.
  * `express.json()`'s `limit` bounds decoded bytes, not encoded bytes. A content-encoded body cannot be public because
  * the parsed body cannot establish its original size. Without a `Content-Length`, an identity body's size check uses
  * the parsed body serialized again, not the byte count sent (see `PUBLIC_BODY_LIMIT`).
@@ -193,7 +194,7 @@ function parsedJsonBody(req: express.Request): unknown {
   if ((req.get('content-encoding') ?? 'identity').toLowerCase() !== 'identity') return undefined;
   if (req.body === undefined) {
     throw new Error(
-      'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
+      'Clerk error: mcpAuth discoverable and publicAccess read the parsed JSON body of a request without a token. Mount express.json() before mcpAuth, as app.use(express.json()), or set discoverable: false to require a token for every request',
     );
   }
   const declared = req.get('content-length');
