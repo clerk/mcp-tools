@@ -34,9 +34,10 @@ type BaseAuthOptions = {
    * `X-Forwarded-*` headers you trust (in Express, set `trust proxy`), or pass a single URL. Never list the internal
    * URLs: each listed URL is an audience and a metadata `resource`, and clients connect to the public one.
    * The challenge's `resource_metadata` is derived from it.
-   * With `verifyToken` it can be omitted, and it is then derived from the incoming request, which can differ from the
-   * public URL in the same cases. With `verifyToken` and `resourceUrl`, a token whose auth info has a `resource` other
-   * than the URL for the request is rejected with `invalid_token`. Without `verifyToken` it is required: Clerk
+   * With `verifyToken` it can be omitted, and the URL derived from the incoming request, which can differ from the public
+   * URL in the same cases, is then used only to locate metadata and is not checked against the verifier's reported
+   * `resource`. With `verifyToken` and `resourceUrl`, a token whose auth info has a `resource` other than the URL for
+   * the request is rejected with `invalid_token`. Without `verifyToken` it is required: Clerk
    * rejects a token whose `aud` claim does not include the URL for the request's origin, so a token issued for one
    * listed URL does not pass on another. Pass the same value to `protectedResourceMetadataHandler`, so its `resource`
    * is the URL checked here.
@@ -554,6 +555,7 @@ export function createBearerAuth<Req>(
     clientFor = async () => clerkClient;
   }
   // Keep the name here rather than importing the tool: auth-only entry points must not require its optional Zod peer.
+  // The warning tests list the tool by `CREATE_BROWSER_SESSION_TOOL_NAME`, so they fail if the two names drift apart.
   // submit_feedback supports anonymous callers; create_browser_session is the only prebuilt identity-only tool.
   if (
     !warnedPublicIdentityTool &&
@@ -1095,9 +1097,9 @@ function fail(
   };
 }
 
-// Whether a verifier's reported `resource` is the expected resource URL. Normalize host case, default ports and
-// empty root paths (RFC 3986 section 6.2.3), but keep non-root trailing slashes and fragments distinct, as Clerk's
-// audience check does. RFC 8707 section 2 forbids fragments in resource identifiers. Unlike MCP SDK 2's independent
+// Whether a verifier's reported `resource` is the expected resource URL. Normalize scheme and host case (RFC 3986
+// section 6.2.2.1), default ports and empty root paths (section 6.2.3), but keep non-root trailing slashes and fragments
+// distinct, as Clerk's audience check does. RFC 8707 section 2 forbids fragments in resource identifiers. Unlike MCP SDK 2's independent
 // `verifyBearerToken` middleware, accepting its AuthInfo shape does not require its looser `sameResource` rule.
 function isSameResource(reported: URL | string, expected: string): boolean {
   if (!URL.canParse(reported) || !URL.canParse(expected)) return false;
