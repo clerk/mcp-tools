@@ -445,6 +445,13 @@ describe('generateServerCard options', () => {
       'mcp.dev/x',
       'api.modelcontextprotocol.org/x',
       'tools.mcp.com/x',
+      // MCP 2025-11-25: the second label
+      'io.modelcontextprotocol/x',
+      'dev.mcp/x',
+      'org.modelcontextprotocol.api/x',
+      'com.mcp.tools/x',
+      'MCP.dev/x',
+      'IO.ModelContextProtocol/x',
     ].map((key): [string, unknown, string] => [
       `the reserved _meta key ${key}`,
       { ...required, _meta: { [key]: 1 } },
@@ -500,7 +507,8 @@ describe('generateServerCard options', () => {
       ...required,
       resourceUrl: 'http://localhost:3000/mcp',
       icons: [{ src: 'data:image/png;base64,iVBORw0KGgo=' }],
-      _meta: { 'com.example/': 'x' },
+      // The second label is example, so MCP 2025-11-25 does not reserve com.example.mcp/
+      _meta: { 'com.example/': 'x', 'com.example.mcp/x': 1 },
       title: undefined,
       repository: undefined,
     });

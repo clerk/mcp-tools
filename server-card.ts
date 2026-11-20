@@ -181,13 +181,15 @@ const NAME_PATTERN = /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/;
 // meaningful in the core version, before any prerelease or build metadata.
 const VERSION_RANGE_OPERATORS = new Set(['^', '~', '<', '>', '=', '*', '|']);
 const VERSION_X_WILDCARD = /(^|\.)[xX](\.|$)/;
-// A `_meta` key: a prefix of dot-separated labels and a slash, then a name. A prefix whose second-to-last label is
-// `modelcontextprotocol` or `mcp` is reserved for MCP.
+// A `_meta` key: a prefix of dot-separated labels and a slash, then a name. MCP 2025-11-25 reserves a prefix whose
+// second label is `modelcontextprotocol` or `mcp` (`io.modelcontextprotocol/`, `dev.mcp/`). The pinned Server Card
+// schema still reserves one whose second-to-last label is (`modelcontextprotocol.io/`, `mcp.dev/`), so while the API is
+// beta both are rejected. Labels are compared without case, as DNS names are.
 const META_LABEL = '[a-zA-Z](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?';
 const META_KEY = new RegExp(
   `^((?:${META_LABEL}\\.)*${META_LABEL})/((?:[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?)?)$`,
 );
-const RESERVED_META_PREFIX = /(^|\.)(modelcontextprotocol|mcp)\.[^.]+$/;
+const RESERVED_META_LABELS = new Set(['modelcontextprotocol', 'mcp']);
 
 /**
  * Validates the options of `generateServerCard`, or of a `serverCardHandler` for one of its URLs, and generates the
@@ -297,13 +299,22 @@ function assertText(fail: Fail, key: string, value: unknown, optional: boolean) 
   }
 }
 
+function isReservedMetaPrefix(prefix: string): boolean {
+  const labels = prefix.toLowerCase().split('.');
+  if (labels.length < 2) return false;
+  return (
+    RESERVED_META_LABELS.has(labels[1] as string) ||
+    RESERVED_META_LABELS.has(labels.at(-2) as string)
+  );
+}
+
 function assertMeta(fail: Fail, meta: unknown) {
   if (!isPlainObject(meta)) fail("_meta must be an object, such as { 'com.example/tier': 'free' }");
   for (const [key, value] of Object.entries(meta as object)) {
     const match = META_KEY.exec(key);
-    if (!match || RESERVED_META_PREFIX.test(match[1] as string)) {
+    if (!match || isReservedMetaPrefix(match[1] as string)) {
       fail(
-        `_meta key ${key} needs a namespace prefix of your own, such as 'com.example/${key}'. Prefixes whose second-to-last label is modelcontextprotocol or mcp are reserved for MCP`,
+        `_meta key ${key} needs a namespace prefix of your own, such as 'com.example/${key}'. Prefixes whose second label is modelcontextprotocol or mcp, such as io.modelcontextprotocol/ and dev.mcp/, are reserved for MCP, and so, during the beta, are those whose second-to-last label is, such as modelcontextprotocol.io/`,
       );
     }
     if (!isJson(value, new Set())) {
