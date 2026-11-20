@@ -68,8 +68,9 @@ export type CreateBrowserSessionToolOptions = CreateBrowserSessionOptions & {
    * Organization the session starts in, as `CreateBrowserSessionRequest.organizationId`: an ID, or a function that
    * returns one for each call from the request's verified auth info, after the auth, scope, and path checks pass. Return
    * `undefined` to leave it to Clerk. When the function throws, or returns anything but a non-empty string or
-   * `undefined`, the tool refuses the call with `organization_lookup_failed`. To give the agent another reason, throw
-   * a `BrowserSessionError` with that code instead, such as `organization_rejected`.
+   * `undefined`, the tool refuses the call with `organization_lookup_failed` and the agent reads a generic text. To tell
+   * the agent what the user can do, throw an `OrganizationLookupError`. To give the agent another reason, throw a
+   * `BrowserSessionError` with that code instead, such as `organization_rejected`.
    */
   organizationId?:
     | string
@@ -151,6 +152,45 @@ export class BrowserSessionError extends Error {
   }
 }
 
+/**
+ * The error a `createBrowserSessionTool` `organizationId` function throws to tell the agent why it could not find the
+ * organization, for example that the user must reconnect. The tool still refuses with `organization_lookup_failed`, so
+ * `_meta[ERROR_CODE_META_KEY]` stays the same, and adds `code` as `_meta[ERROR_CAUSE_META_KEY]` and to its log line.
+ * The agent reads `agentMessage` instead of the generic text. Any other error the function throws gets the generic
+ * text, and its message never reaches the agent or the log.
+ */
+export class OrganizationLookupError extends Error {
+  /**
+   * @param code - Stable, safe-to-log name of the failure, such as `token_exchange_rejected`
+   * @param agentMessage - Text the agent reads instead of the generic one
+   * @param options - Standard error options, such as the `cause` the lookup caught
+   */
+  constructor(
+    /**
+     * Stable, safe-to-log name of the failure: a letter, then up to 63 letters, digits, `_`, or `.`. A code of any other
+     * shape, or one that looks like a Clerk key, is left out of `_meta` and the log.
+     */
+    readonly code: string,
+    /**
+     * Text the agent reads, as given. Never put the caught error's message, the token, or other secrets in it. When
+     * omitted or blank, the agent reads the generic `organization_lookup_failed` text.
+     */
+    readonly agentMessage?: string,
+    options?: ErrorOptions,
+  ) {
+    super('The organization lookup failed', options);
+    this.name = 'OrganizationLookupError';
+  }
+}
+
+// The `OrganizationLookupError` behind an `organization_lookup_failed` error, when the lookup threw one.
+function lookupError(error: BrowserSessionError): OrganizationLookupError | undefined {
+  return error.code === 'organization_lookup_failed' &&
+    error.cause instanceof OrganizationLookupError
+    ? error.cause
+    : undefined;
+}
+
 // The copy for each code: `message` is the error's own message, `agent` is the text the agent reads.
 const ERROR_COPY = {
   not_authenticated: {
@@ -204,8 +244,12 @@ const ERROR_COPY = {
   },
   organization_lookup_failed: {
     message: 'The organization for the sign-in link could not be resolved',
-    agent: () =>
-      'The server could not work out which workspace to open the sign-in link in. Try again at most once, then tell the user the server owner must check the workspace lookup.',
+    agent: (error) => {
+      const agentMessage = lookupError(error)?.agentMessage;
+      return typeof agentMessage === 'string' && agentMessage.trim()
+        ? agentMessage.trim()
+        : 'The server could not work out which workspace to open the sign-in link in. Try again at most once, then tell the user the server owner must check the workspace lookup.';
+    },
   },
 } satisfies Record<
   BrowserSessionErrorCode,
@@ -417,7 +461,10 @@ async function lookUpOrganization(
   } catch (error) {
     // A BrowserSessionError names its own reason; one with an unknown code (only through a cast) has no copy.
     if (error instanceof BrowserSessionError && isKnownCode(error.code)) throw error;
-    throw sessionError('organization_lookup_failed', lookupFailureDetail(error));
+    // The cause carries an OrganizationLookupError's code and agent message to the tool's result.
+    const failure = sessionError('organization_lookup_failed', lookupFailureDetail(error));
+    failure.cause = error;
+    throw failure;
   }
   if (value === undefined || (typeof value === 'string' && value !== '')) return value;
   const kind = value === null ? 'null' : value === '' ? 'an empty string' : typeof value;
@@ -567,6 +614,12 @@ export type CreateBrowserSessionTool = McpToolTuple<
   typeof browserSessionOutputSchema
 >;
 
+// The code of the OrganizationLookupError behind `error`, for `_meta[ERROR_CAUSE_META_KEY]`, when it is an identifier.
+function errorCause(error: BrowserSessionError): string | undefined {
+  const code = lookupError(error)?.code;
+  return typeof code === 'string' && IDENTIFIER_PATTERN.test(code) ? code : undefined;
+}
+
 /** The message for the agent after a failed `createBrowserSession`. It never includes the link or secret key. */
 export function browserSessionErrorMessage(error: BrowserSessionError): string {
   return ERROR_COPY[error.code].agent(error);
@@ -592,7 +645,9 @@ const warnStepUpUnsupported = once(() =>
 /**
  * Builds the `create_browser_session` tool. Register it with `server.registerTool(...createBrowserSessionTool(options))`,
  * or override parts of the returned config and wrap the callback to customise it. Every error result carries a code in
- * `_meta[ERROR_CODE_META_KEY]`: the `BrowserSessionErrorCode`, or `unexpected_error` for a failure it cannot name.
+ * `_meta[ERROR_CODE_META_KEY]`: the `BrowserSessionErrorCode`, or `unexpected_error` for a failure it cannot name. An
+ * `organization_lookup_failed` result from an `OrganizationLookupError` also carries its code in
+ * `_meta[ERROR_CAUSE_META_KEY]`.
  * Throws when the options cannot work.
  */
 export function createBrowserSessionTool(
@@ -632,7 +687,7 @@ export function createBrowserSessionTool(
         console.error(
           `Clerk error: createBrowserSession failed (${error.code}${error.detail ? `: ${error.detail}` : ''})`,
         );
-        return toolError(browserSessionErrorMessage(error), error.code);
+        return toolError(browserSessionErrorMessage(error), error.code, errorCause(error));
       }
       // Not the message or stack: they could carry the link or the key.
       console.error(

@@ -15,6 +15,7 @@ export {
   type CreateBrowserSessionToolOptions,
   BrowserSessionError,
   CREATE_BROWSER_SESSION_TOOL_NAME,
+  OrganizationLookupError,
   browserSessionInstructions,
   createBrowserSession,
   createBrowserSessionTool,
@@ -36,4 +37,4 @@ export {
   submitFeedback,
   submitFeedbackTool,
 } from './feedback';
-export { ERROR_CODE_META_KEY } from './mcp-tool';
+export { ERROR_CAUSE_META_KEY, ERROR_CODE_META_KEY } from './mcp-tool';
