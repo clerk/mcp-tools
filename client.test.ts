@@ -224,10 +224,15 @@ describe('OAuth credential persistence', () => {
   test('SDK code exchange uses known credentials bound at redirect', async () => {
     const store = createStore();
     const { fetchFn } = authorizationServerFetch('https://a.example/');
+    let atRedirect: Promise<JsonSerializable | undefined> | undefined;
     const initial = await createKnownCredentialsMcpClient({
       ...clientParams,
       store,
-      redirect: vi.fn(),
+      // Reads the session as the user is sent away, so a callback that
+      // arrives before auth() returns still finds the binding.
+      redirect: () => {
+        atRedirect = store.read(`session_${initial.sessionId}`);
+      },
       clientId: 'user-client',
       clientSecret: 'user-secret',
     });
@@ -235,7 +240,8 @@ describe('OAuth credential persistence', () => {
       auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
     ).resolves.toBe('REDIRECT');
     // Bound before the user is sent to the authorization server, with nothing posted.
-    expect(await store.read(`session_${initial.sessionId}`)).toMatchObject({
+    expect(atRedirect).toBeDefined();
+    expect(await atRedirect).toMatchObject({
       oauthClientInformation: {
         client_id: 'user-client',
         client_secret: 'user-secret',
