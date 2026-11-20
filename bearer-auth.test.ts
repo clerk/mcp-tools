@@ -423,7 +423,7 @@ describe('public identity tool warning', () => {
   test.each([
     undefined,
     {},
-    { methods: true },
+    { methods: ['initialize'] as const },
     { tools: [] },
     { tools: ['submit_feedback', 'search_docs', 'create_browser_session_custom'] },
   ])('does not warn for publicAccess %j', async (publicAccess) => {
@@ -771,13 +771,13 @@ describe('publicAccess', () => {
   });
 
   type Case = [PublicAccess, unknown];
-  const all = { methods: true, tools: ['search_docs'], resources: true, prompts: true };
+  const all = { tools: ['search_docs'], resources: true, prompts: true };
   const methodList: PublicAccess = { methods: ['initialize', 'tools/list'] };
   const tools: PublicAccess = { tools: ['search_docs'] };
   const resources: PublicAccess = { resources: ['docs://index'] };
   const prompts: PublicAccess = { prompts: ['summarize'] };
-  const listed: PublicAccess = { methods: true, resources: ['docs://index', 'docs://faq'] };
-  const methodsAndResources: PublicAccess = { methods: true, resources: true };
+  const listed: PublicAccess = { resources: ['docs://index', 'docs://faq'] };
+  const allResources: PublicAccess = { resources: true };
   const initialized = { jsonrpc: '2.0', method: 'notifications/initialized' };
   const call = (name: unknown) => rpc('tools/call', { name });
   const read = (uri: unknown) => rpc('resources/read', { uri });
@@ -794,7 +794,7 @@ describe('publicAccess', () => {
       'resources/list',
       'resources/templates/list',
       'prompts/list',
-    ].map((method): Case => [{ methods: true }, rpc(method)]),
+    ].map((method): Case => [{}, rpc(method)]),
     [methodList, rpc('initialize')],
     [methodList, rpc('tools/list')],
     // notifications/initialized follows initialize
@@ -805,10 +805,10 @@ describe('publicAccess', () => {
     [resources, read('docs://index')],
     [prompts, get('summarize')],
     // A batch whose every message is open
-    [{ methods: true, tools: ['search_docs'] }, [rpc('tools/list'), call('search_docs')]],
+    [tools, [rpc('tools/list'), call('search_docs')]],
     [listed, listen({ resourceSubscriptions: ['docs://index', 'docs://faq'] })],
     [listed, listen({ resourceSubscriptions: [] })],
-    [methodsAndResources, listen({ resourceSubscriptions: ['x://y'] })],
+    [allResources, listen({ resourceSubscriptions: ['x://y'] })],
   ])('%j opens %j', async (publicAccess, body) => {
     await expect(withoutToken(publicAccess, body)).resolves.toEqual(open);
   });
@@ -817,10 +817,10 @@ describe('publicAccess', () => {
     [methodList, rpc('resources/list')],
     [methodList, rpc('ping')],
     [{ methods: ['server/discover', 'tools/list'] }, initialized],
-    // `methods` opens no call
-    [{ methods: true }, call('search_docs')],
-    [{ methods: true }, read('docs://index')],
-    [{ methods: true }, get('summarize')],
+    // `discoverable` opens no call
+    [{}, call('search_docs')],
+    [{}, read('docs://index')],
+    [{}, get('summarize')],
     // A tools/call for a tool not named, with a name inherited from Object.prototype or not a string, or without one
     [tools, call('whoami')],
     [tools, call('constructor')],
@@ -848,8 +848,8 @@ describe('publicAccess', () => {
     [prompts, call('summarize')],
     [prompts, read('summarize')],
     // One protected message closes a batch, and an empty batch has nothing open
-    [{ methods: true, tools: ['search_docs'] }, [call('search_docs'), call('whoami')]],
-    [{ methods: true, tools: ['search_docs'] }, []],
+    [tools, [call('search_docs'), call('whoami')]],
+    [tools, []],
     // A body that could not be read, null, a string, a response, an unknown notification or method, or a method that
     // is not a string
     [all, undefined],
@@ -869,12 +869,12 @@ describe('publicAccess', () => {
     [listed, listen({ resourceSubscriptions: ['DOCS://index'] })],
     [listed, listen({ resourceSubscriptions: 'docs://index' })],
     [listed, listen({ resourceSubscriptions: [['docs://index']] })],
-    [{ methods: true }, listen({ resourceSubscriptions: ['docs://index'] })],
-    [methodsAndResources, rpc('subscriptions/listen')],
-    [methodsAndResources, rpc('subscriptions/listen', {})],
-    [methodsAndResources, listen(true)],
-    [methodsAndResources, listen(null)],
-    [methodsAndResources, listen([])],
+    [{}, listen({ resourceSubscriptions: ['docs://index'] })],
+    [allResources, rpc('subscriptions/listen')],
+    [allResources, rpc('subscriptions/listen', {})],
+    [allResources, listen(true)],
+    [allResources, listen(null)],
+    [allResources, listen([])],
   ])('%j challenges %j', async (publicAccess, body) => {
     await expect(withoutToken(publicAccess, body)).resolves.toMatchObject(challenged);
   });
@@ -896,13 +896,15 @@ describe('publicAccess', () => {
 
   test.each([
     [undefined, {}],
-    [{ methods: true }, {}],
     [{ methods: ['ping'] }, {}],
     [{ tools: ['search_docs'] }, {}],
     [{ resources: ['docs://index'] }, {}],
-    [{ methods: true, tools: ['search_docs'], resources: true, prompts: true }, {}],
+    [
+      { methods: ['initialize', 'ping'], tools: ['search_docs'], resources: true, prompts: true },
+      {},
+    ],
     [{}, { discoverable: false }],
-    [{ methods: true }, { discoverable: false }],
+    [{ tools: [], resources: [], prompts: false }, { discoverable: false }],
   ] as const)(
     'challenges the cancelled, progress, and roots notifications whatever %j and %j open',
     async (publicAccess, options) => {
@@ -918,17 +920,12 @@ describe('publicAccess', () => {
   );
 
   const handshakeOpen: PublicAccess[] = [
-    { methods: true },
+    {},
     { methods: ['initialize'] },
     { methods: ['server/discover'] },
   ];
-  // A `methods` setting replaces the methods `discoverable` opens by default
-  const handshakeClosed: PublicAccess[] = [
-    { methods: ['ping', 'tools/list'] },
-    { methods: ['ping'], tools: ['search_docs'] },
-    { methods: false, resources: true },
-    { methods: [] },
-  ];
+  // A `methods` list replaces the methods `discoverable` opens by default
+  const handshakeClosed: PublicAccess[] = [{ methods: ['ping', 'tools/list'] }, { methods: [] }];
 
   test.each(handshakeOpen)(
     'answers a GET without a token with a 405 when %j opens the handshake',
@@ -967,22 +964,20 @@ describe('publicAccess', () => {
 
   test('answers a DELETE without a token with the 401, and reads a body only for a POST', async () => {
     const body = vi.fn(() => rpc('initialize'));
-    await expect(
-      withoutToken({ methods: true }, undefined, { method: 'DELETE', body }),
-    ).resolves.toMatchObject(challenged);
-    await expect(
-      withoutToken({ methods: true }, undefined, { method: undefined, body }),
-    ).resolves.toMatchObject(challenged);
+    await expect(withoutToken({}, undefined, { method: 'DELETE', body })).resolves.toMatchObject(
+      challenged,
+    );
+    await expect(withoutToken({}, undefined, { method: undefined, body })).resolves.toMatchObject(
+      challenged,
+    );
     expect(body).not.toHaveBeenCalled();
-    await expect(
-      withoutToken({ methods: true }, undefined, { method: 'post', body }),
-    ).resolves.toEqual(open);
+    await expect(withoutToken({}, undefined, { method: 'post', body })).resolves.toEqual(open);
     expect(body).toHaveBeenCalledTimes(1);
   });
 
   test('verifies a request that carries a token as usual, without reading its body', async () => {
     const body = vi.fn(() => rpc('initialize'));
-    const publicAccess: PublicAccess = { methods: true };
+    const publicAccess = {};
     await expect(authenticate({ publicAccess, method: 'POST', body })).resolves.toMatchObject({
       ok: true,
       authInfo: { clientId: 'client-1' },
@@ -998,7 +993,7 @@ describe('publicAccess', () => {
 
   test('answers an unlisted origin with the 421 before the public check', async () => {
     await expect(
-      withoutToken({ methods: true }, rpc('initialize'), {
+      withoutToken({}, rpc('initialize'), {
         resourceUrl: ['https://mcp.example.com/mcp'],
         requestUrl: 'https://other.example.com/mcp',
       }),
@@ -1010,10 +1005,9 @@ describe('assertPublicAccess', () => {
   test.each([
     undefined,
     {},
-    { methods: true },
-    { methods: false },
+    { methods: [] },
     { methods: ['initialize', 'server/discover', 'ping', 'tools/list'] },
-    { methods: true, tools: ['search_docs'], resources: true, prompts: false },
+    { methods: ['initialize'], tools: ['search_docs'], resources: true, prompts: false },
     { resources: ['docs://index'], prompts: ['summarize'] },
     { resources: [], prompts: [] },
     { methods: undefined, tools: undefined, resources: undefined, prompts: undefined },
@@ -1029,7 +1023,18 @@ describe('assertPublicAccess', () => {
       { method: true },
       'Clerk error: mcpAuth publicAccess has no method option. It takes any of methods, tools, resources, prompts',
     ],
-    [{ methods: 'initialize' }, 'Clerk error: mcpAuth publicAccess.methods must be true or a list'],
+    [
+      { methods: true },
+      'Clerk error: mcpAuth publicAccess.methods must be a list; use discoverable',
+    ],
+    [
+      { methods: false },
+      'Clerk error: mcpAuth publicAccess.methods must be a list; use discoverable',
+    ],
+    [
+      { methods: 'initialize' },
+      'Clerk error: mcpAuth publicAccess.methods must be a list; use discoverable to open every method',
+    ],
     [
       { methods: ['tools/call'] },
       'Clerk error: mcpAuth publicAccess.methods cannot list tools/call. To open it without a token, name the tools in publicAccess.tools',
@@ -1044,7 +1049,7 @@ describe('assertPublicAccess', () => {
     ],
     [
       { methods: ['notifications/initialized'] },
-      'Clerk error: mcpAuth publicAccess.methods cannot list "notifications/initialized". It takes true or any of initialize, server/discover, ping, tools/list, resources/list, resources/templates/list, prompts/list',
+      'Clerk error: mcpAuth publicAccess.methods cannot list "notifications/initialized". It takes any of initialize, server/discover, ping, tools/list, resources/list, resources/templates/list, prompts/list',
     ],
     [{ methods: [1] }, 'Clerk error: mcpAuth publicAccess.methods cannot list 1'],
     [{ tools: true }, 'Clerk error: mcpAuth publicAccess.tools must be a list of tool names'],
@@ -1077,7 +1082,7 @@ describe('assertPublicAccess', () => {
     expect(() =>
       assertProtectedResourceMetadataOptions({
         resourceUrl: 'https://mcp.example.com/mcp',
-        publicAccess: { methods: true, tools: ['search_docs'] },
+        publicAccess: { methods: ['server/discover'], tools: ['search_docs'] },
       }),
     ).not.toThrow();
     expect(() =>

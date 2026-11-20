@@ -17,7 +17,12 @@ import {
   withClerkMcpAuth as nextWithMcpAuth,
   protectedResourceMetadataHandler as nextMetadataHandler,
 } from './next';
-import { type ClerkOAuthAuth, type ClerkOAuthClient, toClerkAuthInfo } from './server';
+import {
+  type ClerkOAuthAuth,
+  type ClerkOAuthClient,
+  type PublicAccess,
+  toClerkAuthInfo,
+} from './server';
 
 describe('the mcpAuth options', () => {
   const resourceUrl = 'https://mcp.example.com/mcp';
@@ -153,16 +158,39 @@ describe('the mcpAuth options', () => {
   test('accept publicAccess with readonly lists, as const', () => {
     const tools = ['search_docs'] as const;
     const methods = ['initialize', 'server/discover', 'tools/list'] as const;
-    expressMcpAuth({
-      resourceUrl,
-      publicAccess: { methods: true, resources: true, prompts: ['x'] },
-    });
+    expressMcpAuth({ resourceUrl, publicAccess: { resources: true, prompts: ['x'] } });
     honoMcpAuth({ verifyToken, publicAccess: { methods, tools } });
     nextWithMcpAuth(handler, {
       resourceUrl,
-      publicAccess: { methods: false, tools: [], resources: ['docs://index'], prompts: false },
+      publicAccess: { tools: [], resources: ['docs://index'], prompts: false },
     });
-    expressMetadataHandler({ resourceUrl, publicAccess: { methods: true, tools } });
+    expressMetadataHandler({ resourceUrl, publicAccess: { methods, tools } });
+  });
+
+  test('accept a publicAccess.methods list in place of discoverable', () => {
+    expressMcpAuth({
+      resourceUrl,
+      publicAccess: { methods: ['initialize'], tools: ['search_docs'] },
+    });
+    honoMcpAuth({ verifyToken, publicAccess: { methods: ['server/discover', 'ping'] } });
+    nextWithMcpAuth(handler, { resourceUrl, publicAccess: { methods: [], resources: false } });
+    nextMetadataHandler({ publicAccess: { methods: ['initialize'], prompts: ['x'] } });
+    // A shared PublicAccess, which may hold a methods list, needs discoverable left out
+    const shared: PublicAccess = { tools: ['search_docs'] };
+    honoMcpAuth({ verifyToken, publicAccess: shared });
+    // @ts-expect-error the PublicAccess type allows a methods list, which discoverable cannot be set next to
+    honoMcpAuth({ verifyToken, discoverable: true, publicAccess: shared });
+  });
+
+  test('reject discoverable next to publicAccess.methods, and methods that is not a list', () => {
+    // @ts-expect-error discoverable or a methods list, not both
+    expressMcpAuth({ resourceUrl, discoverable: true, publicAccess: { methods: ['initialize'] } });
+    // @ts-expect-error discoverable or a methods list, not both
+    honoMcpAuth({ verifyToken, discoverable: false, publicAccess: { methods: [] } });
+    // @ts-expect-error discoverable opens every method
+    nextWithMcpAuth(handler, { resourceUrl, publicAccess: { methods: true } });
+    // @ts-expect-error discoverable: false requires a token for every method
+    honoMetadataHandler({ resourceUrl, publicAccess: { methods: false } });
   });
 
   test('accept discoverable, true by default, with or without named public calls', () => {

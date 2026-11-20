@@ -118,8 +118,8 @@ export class McpAuthError extends Error {
 }
 
 /**
- * A protocol method that `publicAccess.methods` can open to requests without a token, each of which `discoverable`
- * opens by default. `initialize` is the handshake of the protocol revisions before 2026-07-28 and covers its
+ * A protocol method that a `publicAccess.methods` list can open to requests without a token, each of which
+ * `discoverable` opens by default. `initialize` is the handshake of the protocol revisions before 2026-07-28 and covers its
  * `notifications/initialized` notification, and `server/discover` replaces it from 2026-07-28. The methods that run something, `tools/call`, `resources/read`, and
  * `prompts/get`, are not in this list: `publicAccess.tools`, `resources`, and `prompts` open those.
  */
@@ -140,14 +140,17 @@ export type McpPublicMethod =
  */
 export type PublicAccess = {
   /**
-   * The protocol methods open without a token, in place of the ones `discoverable` opens: `true` for every
-   * `McpPublicMethod`, or a list of them. Leave it out to use `discoverable`. An open list method shows its whole
-   * list, so with `tools/list` open anyone can read the name, description, and input schema of every tool, the
-   * protected ones included. It never opens a call. With `initialize` or `server/discover` open, a GET
-   * without a token gets a 405 rather than the 401, and a `subscriptions/listen` (protocol revision 2026-07-28) is
-   * open when every resource in its `resourceSubscriptions` is one `resources` opens.
+   * Advanced: exactly the protocol methods open without a token, as a list of `McpPublicMethod`s, in place of the
+   * ones `discoverable` opens. Leave it out to use `discoverable`, which cannot be set next to it. A client connects
+   * with `initialize` before protocol revision 2026-07-28 and with `server/discover` from it, so a list that names
+   * one and not the other leaves some clients unable to connect, and `tools`, `resources`, and `prompts` need the
+   * list to name at least one. An open list method shows its whole list, so with `tools/list` open anyone can read
+   * the name, description, and input schema of every tool, the protected ones included. It never opens a call. With
+   * `initialize` or `server/discover` open, a GET without a token gets a 405 rather than the 401, and a
+   * `subscriptions/listen` (protocol revision 2026-07-28) is open when every resource in its `resourceSubscriptions`
+   * is one `resources` opens.
    */
-  methods?: boolean | readonly McpPublicMethod[] | undefined;
+  methods?: readonly McpPublicMethod[] | undefined;
   /**
    * The tools a `tools/call` may name without a token. Each one is listed by name: no value opens every tool.
    * Keep `create_browser_session` out: it requires a Clerk identity, and its `not_authenticated` error will not start
