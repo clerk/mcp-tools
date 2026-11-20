@@ -31,7 +31,7 @@ For detailed implementation guides and examples specific to your framework, see:
 - **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono and edge runtimes
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
 
-Upgrading from 0.9.x? Every entry point was renamed in 0.10.0, with no deprecated aliases. The [changelog](./CHANGELOG.md) maps each old name, such as `mcpAuthClerk`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`, `verifyClerkToken`, `@clerk/mcp-tools/feedback`, and `@clerk/mcp-tools/create-browser-session`, to its replacement.
+Upgrading from 0.9.x? Every entry point was renamed in 1.0.0, with no deprecated aliases. The [changelog](./CHANGELOG.md) maps each old name, such as `mcpAuthClerk`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`, `verifyClerkToken`, `@clerk/mcp-tools/feedback`, and `@clerk/mcp-tools/create-browser-session`, to its replacement.
 
 ### Table of Contents
 
