@@ -1524,9 +1524,10 @@ describe.each(discoveryApps)('%s', (_name, mount, doc) => {
 
     expect(head.status).toBe(200);
     expect(head.body).toBeNull();
-    // RFC 9110 section 8.6: a Content-Length on HEAD, if any, is that of the GET's content
-    expect([null, String(Buffer.byteLength(JSON.stringify(get.body)))]).toContain(
-      head.headers.get('content-length'),
+    // RFC 9110 sections 8.6 and 9.3.2: HEAD sends the Content-Length the GET would, as the length is known before
+    // the content is sent
+    expect(head.headers.get('content-length')).toBe(
+      String(Buffer.byteLength(JSON.stringify(get.body))),
     );
     expectHeaders(head.headers, {
       'content-type': doc.type,

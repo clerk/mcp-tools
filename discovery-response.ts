@@ -198,10 +198,17 @@ function discoveryResponder(
     return { status: 200, headers: { ...validators, 'Content-Type': config.mediaType }, body };
   };
 
-  // HEAD gets the headers GET would, without the content
+  // HEAD gets the headers GET would, without the content. Its Content-Length is the GET's, which is known before any
+  // content is sent, so RFC 9110 section 9.3.2 has the server send it; the adapters send no body to measure.
   return (request: DiscoveryRequest): DiscoveryAnswer => {
     const response = answer(request);
-    return request.method === 'HEAD' ? { ...response, body: null } : response;
+    if (request.method !== 'HEAD' || response.body === null) return response;
+    const contentLength = String(new TextEncoder().encode(response.body).byteLength);
+    return {
+      ...response,
+      headers: { ...response.headers, 'Content-Length': contentLength },
+      body: null,
+    };
   };
 }
 
