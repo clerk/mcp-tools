@@ -304,7 +304,7 @@ import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
 const catalog = aiCatalogHandler({
   entries: [
     {
-      identifier: 'urn:air:example.com:weather:mcp',
+      identifier: 'urn:air:example.com:weather',
       displayName: 'Weather',
       url: 'https://mcp.example.com/mcp/server-card',
     },

@@ -165,7 +165,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  * const handler = aiCatalogHandler({
  *   entries: [
  *     {
- *       identifier: 'urn:air:example.com:weather:mcp',
+ *       identifier: 'urn:air:example.com:weather',
  *       displayName: 'Weather',
  *       url: 'https://mcp.example.com/mcp/server-card',
  *     },

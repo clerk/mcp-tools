@@ -15,7 +15,8 @@ const SERVER_CARD_TYPE = 'application/mcp-server-card+json' as const;
 export type AICatalogEntryOptions = {
   /**
    * The server's logical identifier, which stays the same wherever the card is hosted, such as
-   * `urn:air:example.com:weather:mcp`. The v0.9 release candidate recommends `urn:air:{publisher}:{name}[:{kind}]`;
+   * `urn:air:example.com:weather`. The v0.9 release candidate recommends `urn:air:{publisher}:{name}[:{kind}]`,
+   * where ARD v0.91 reads a third segment as the agent name, so a publisher and a name alone read the same in both;
    * this is a logical identifier, not a URL.
    */
   identifier: string;
@@ -57,7 +58,7 @@ export type AICatalogTrustManifest = {
    * The publisher's identity, an absolute URI such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID. An
    * `http`, `data`, `file`, or `javascript` URI is rejected.
    * ARD requires its trust domain to match the publisher in the entry's `identifier`, as `example.com` in
-   * `urn:air:example.com:weather:mcp`.
+   * `urn:air:example.com:weather`.
    */
   readonly identity: string;
   /**
@@ -142,7 +143,7 @@ export type AICatalog = {
  * const catalog = generateAICatalog({
  *   entries: [
  *     {
- *       identifier: 'urn:air:example.com:weather:mcp',
+ *       identifier: 'urn:air:example.com:weather',
  *       displayName: 'Weather',
  *       url: 'https://mcp.example.com/mcp/server-card',
  *     },
@@ -170,7 +171,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   const fail = failFor(caller);
   if (!isPlainObject(options)) {
     return fail(
-      "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:weather:mcp', displayName: 'Weather', url: 'https://example.com/mcp/server-card' }] })",
+      "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:weather', displayName: 'Weather', url: 'https://example.com/mcp/server-card' }] })",
     );
   }
   assertKnownKeys(fail, options, {
@@ -185,7 +186,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   // The pinned specification: "This array MAY be empty."
   if (!Array.isArray(entries) || !Array.from(entries).every(isPlainObject)) {
     return fail(
-      "entries must be a list of { identifier, displayName, url }, such as [{ identifier: 'urn:air:example.com:weather:mcp', displayName: 'Weather', url: 'https://example.com/mcp/server-card' }]",
+      "entries must be a list of { identifier, displayName, url }, such as [{ identifier: 'urn:air:example.com:weather', displayName: 'Weather', url: 'https://example.com/mcp/server-card' }]",
     );
   }
 
@@ -203,7 +204,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     const { identifier, displayName, url, trustManifest } = entry;
     if (!isIdentifier(identifier)) {
       fail(
-        `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:weather:mcp'. It names the server and is not the URL of its card`,
+        `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:weather'. It names the server and is not the URL of its card`,
       );
     }
     if (identifiers.has(identifier as string)) {
