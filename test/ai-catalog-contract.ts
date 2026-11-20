@@ -94,7 +94,8 @@ export function linkedCardCatalogErrors(document: unknown): string[] {
     if (!isExactHttpUrl(url)) errors.push(`${at}.url is not an exact absolute HTTP URL`);
     else {
       const parsed = new URL(url);
-      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+      const loopback =
+        /^http:\/\/(?::?@)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d*)?(?:[/?]|$)/i.test(url);
       if (
         (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) ||
         parsed.username !== '' ||

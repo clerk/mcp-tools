@@ -158,15 +158,16 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   return deepFreeze({ specVersion: '0.9', entries: linked });
 }
 
-// The hosts a card URL may use plain http on, for local development. `URL` keeps an IPv6 hostname's brackets.
+// The exact raw hosts a card URL may use plain http on, without WHATWG hostname normalization.
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 // A card URL is https, so a client reads the card it links over TLS, except on a loopback host, which a local
 // development server answers on
 function isCardUrl(value: unknown): value is string {
   if (!isStaticHttpUrl(value)) return false;
-  const { protocol, hostname } = new URL(value);
-  return protocol === 'https:' || LOOPBACK_HOSTS.has(hostname);
+  if (value.startsWith('https://')) return true;
+  const rawHostname = /^http:\/\/(?::?@)?(\[[^\]]+\]|[^:/?#]+)/.exec(value)?.[1];
+  return rawHostname !== undefined && LOOPBACK_HOSTS.has(rawHostname.toLowerCase());
 }
 
 // Open text in the specification, so only what can't be a logical identifier is rejected: nothing, whitespace or

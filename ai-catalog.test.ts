@@ -15,6 +15,7 @@ const weather = {
 };
 
 const CARD_TYPE = 'application/mcp-server-card+json';
+const loopbackAliases = ['127.1', '2130706433', '0x7f.0.0.1', '[0:0:0:0:0:0:0:1]'];
 
 describe('generateAICatalog', () => {
   // The Single Server example of ext-server-card@526201b docs/discovery.md, AI Catalog
@@ -74,17 +75,36 @@ describe('generateAICatalog', () => {
   });
 
   // For local development only: everywhere else a card URL is https
-  test.each([
-    'http://localhost:3000/mcp/server-card',
-    'http://127.0.0.1:3000/mcp/server-card',
-    'http://[::1]:3000/mcp/server-card',
-  ])('links a card at the loopback URL %s over http', (url) => {
-    expect(generateAICatalog({ entries: [{ ...weather, url }] }).entries[0]?.url).toBe(url);
+  test.each(
+    ['localhost', 'LOCALhost', '127.0.0.1', '[::1]'].flatMap((host) =>
+      ['', ':3000'].map((port) => `http://${host}${port}/mcp/server-card`),
+    ),
+  )('links a card at the literal loopback URL %s over http', (url) => {
+    const catalog = generateAICatalog({ entries: [{ ...weather, url }] });
+    expect(catalog.entries[0]?.url).toBe(url);
+    expect(linkedCardCatalogErrors(JSON.parse(JSON.stringify(catalog)))).toEqual([]);
+  });
+
+  test.each(
+    loopbackAliases.flatMap((host) => ['', ':3000'].map((port) => `http://${host}${port}/card`)),
+  )('rejects a normalized loopback alias in the builder and independent contract: %s', (url) => {
+    expect(() => generateAICatalog({ entries: [{ ...weather, url }] })).toThrow(
+      'Clerk error: generateAICatalog entries[0].url must be',
+    );
+    expect(
+      linkedCardCatalogErrors({
+        specVersion: '0.9',
+        entries: [{ ...weather, type: CARD_TYPE, url }],
+      }),
+    ).not.toEqual([]);
   });
 });
 
 describe('generateAICatalog contract', () => {
   test.each([
+    ...loopbackAliases.map((host) => `https://${host}/card`),
+    'http://@localhost:3000/card',
+    'http://:@[::1]/card',
     'https://my_host.example/card',
     'https://@example.com/card',
     'https://:@example.com/card',
