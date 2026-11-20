@@ -377,9 +377,14 @@ export async function createDynamicallyRegisteredMcpClient({
     // uses to construct the authorization url with the client id.
     clientInformation: () => getStoredClientInformation(client),
     // this is called after a new oauth client is created, so we now have a
-    // client id and secret
-    saveClientInformation: async (newInfo) => {
-      client = await saveClientInformation(sessionId, store, newInfo);
+    // client id and secret. It is absent once that registration is bound to
+    // an issuer, so a later authorization against another server is rejected
+    // instead of registering there and overwriting the stored client.
+    get saveClientInformation() {
+      if (client.oauthClientInformation?.issuer) return undefined;
+      return async (newInfo: OAuthClientInformationMixed) => {
+        client = await saveClientInformation(sessionId, store, newInfo);
+      };
     },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
