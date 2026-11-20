@@ -274,49 +274,6 @@ Handler that fetches and returns Clerk's OAuth Authorization Server Metadata. Re
 
 Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.on(['GET', 'OPTIONS'], path, handler)` or `app.all`), each answers the CORS preflight with a `200` and those CORS headers. A `cors()` middleware in front of them, as in the Quick Start, answers the preflight itself, and on the `GET` the headers it sets, such as its `Access-Control-Allow-Origin`, are kept in place of the handlers' own.
 
-### `serverCardHandler(options)`
-
-Handler that serves an MCP [Server Card](../README.md#discovery-server-cards-beta) (beta). It takes the `generateServerCard` options, with `resourceUrl` as one URL or a list with one for each origin, plus `maxAge`, the seconds the card may be reused before revalidation (default `3600`; `0` for `public, no-cache`). It validates them and generates the card when it is created, throwing a `Clerk error:` for anything the card can't have, so it needs no Clerk keys or MCP SDK, and later changes to the options change nothing. Mount it with `app.all` so `OPTIONS` and other methods reach it:
-
-```ts
-import { serverCardHandler } from '@clerk/mcp-tools/hono';
-
-app.all(
-  '/mcp/server-card',
-  serverCardHandler({
-    name: 'com.example/weather',
-    version: '1.2.0',
-    description: 'Forecasts and current conditions.',
-    resourceUrl: 'https://mcp.example.com/mcp',
-  }),
-);
-```
-
-`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. The handler sends its own `ETag`, `Cache-Control`, and `Content-Length` over earlier values and keeps other headers that earlier middleware set; as with the metadata handlers, for an origin a `cors()` middleware in front of it allows, that middleware's `Access-Control-Allow-Origin` replaces the handler's `*`. Mount discovery routes outside a restrictive `cors()` to keep them readable from any origin.
-
-### `aiCatalogHandler(options)`
-
-Handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount the one handler with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs-beta), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
-
-```ts
-import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
-
-const catalog = aiCatalogHandler({
-  entries: [
-    {
-      identifier: 'urn:air:example.com:weather',
-      displayName: 'Weather',
-      url: 'https://mcp.example.com/mcp/server-card',
-    },
-  ],
-});
-
-app.all('/.well-known/ard.json', catalog);
-app.all('/.well-known/ai-catalog.json', catalog);
-```
-
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and treats earlier middleware headers the same way: its own `ETag`, `Cache-Control`, and `Content-Length` win, other earlier headers are kept, and a `cors()` middleware's `Access-Control-Allow-Origin` still wins. Both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
-
 ### `streamableHttpHandler(createServer, Transport)`
 
 Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` as `Transport`, from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` on SDK 1.x or from `@modelcontextprotocol/server` on SDK 2.x, with `McpServer` from the same SDK: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than a Hono `404`.

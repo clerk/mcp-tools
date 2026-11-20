@@ -16,14 +16,6 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
-import {
-  type AICatalogHandlerOptions,
-  type DiscoveryAnswer,
-  type DiscoveryRequest,
-  type ServerCardHandlerOptions,
-  aiCatalogResponder,
-  serverCardResponder,
-} from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 declare global {
@@ -39,8 +31,6 @@ declare global {
 
 // Everything in the core subpath, so an Express app imports from this subpath alone
 export * from '../server';
-
-export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -248,7 +238,6 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
-    varyOnForwardedOrigin(req, res, typeof options.resourceUrl !== 'string');
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
@@ -257,143 +246,6 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
       }),
     );
   };
-}
-
-/**
- * An Express handler that serves an MCP Server Card, the public document a client reads before it connects to learn
- * what the server is and where to connect. It validates the options and generates the card when it is created, so it
- * needs no Clerk keys or MCP SDK and makes no request, and later changes to the options change nothing. Mount it with
- * `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
- *
- * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
- * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS
- * gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has a 421, each
- * error with `Cache-Control: no-store`. An absolute-form request target supplies its own origin. For origin-form,
- * the origin is `req.protocol` and `req.host`, which come from `X-Forwarded-*` headers only when the app sets
- * `trust proxy`. With a list of `resourceUrl`s, a request without a valid absolute-form target or a `Host` header
- * that parses gets a 400; a single `resourceUrl` never reads the request's URL.
- * @see https://github.com/modelcontextprotocol/ext-server-card
- * @param options - See `ServerCardHandlerOptions`
- * @returns The handler. It throws a `Clerk error:` naming the first option the card cannot have.
- * @example
- * ```ts
- * app.all(
- *   "/mcp/server-card",
- *   serverCardHandler({
- *     name: "com.example/weather",
- *     version: "1.2.0",
- *     description: "Forecasts and current conditions.",
- *     resourceUrl: "https://mcp.example.com/mcp",
- *   }),
- * );
- * ```
- */
-export function serverCardHandler(options: ServerCardHandlerOptions) {
-  return discoveryHandler(
-    serverCardResponder('serverCardHandler', options),
-    Array.isArray((options as { resourceUrl?: unknown } | null)?.resourceUrl),
-  );
-}
-
-/**
- * An Express handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
- * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
- * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
- * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
- * request: to answer on several origins with their own cards, create one handler for each and pick it by origin. Mount
- * it at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
- *
- * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
- * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight and another method a 405 with
- * `Cache-Control: no-store`. The request's URL is never read, so a request without a `Host` header still gets the
- * catalog, and both paths get the same body and headers.
- * @see https://github.com/Agent-Card/ai-catalog
- * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
- * @param options - See `AICatalogHandlerOptions`
- * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
- * @example
- * ```ts
- * app.all(
- *   ["/.well-known/ard.json", "/.well-known/ai-catalog.json"],
- *   aiCatalogHandler({
- *     entries: [
- *       {
- *         identifier: "urn:air:example.com:weather",
- *         displayName: "Weather",
- *         url: "https://mcp.example.com/mcp/server-card",
- *       },
- *     ],
- *   }),
- * );
- * ```
- */
-export function aiCatalogHandler(options: AICatalogHandlerOptions) {
-  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
-}
-
-function discoveryHandler(
-  respond: (request: DiscoveryRequest) => DiscoveryAnswer,
-  dependsOnRequestOrigin = false,
-) {
-  return (req: express.Request, res: express.Response): void => {
-    const { status, headers, body } = respond({
-      method: req.method,
-      url: getRequestUrl(req),
-      // Node joins repeated If-Match and If-None-Match headers with commas
-      ifMatch: req.get('if-match'),
-      ifNoneMatch: req.get('if-none-match'),
-    });
-    // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,
-    // which add an ETag of their own and answer a 304 by Express's own freshness rules
-    varyOnForwardedOrigin(req, res, dependsOnRequestOrigin);
-    const exposeHeaders = res.getHeader('access-control-expose-headers');
-    const mergedExposeHeaders =
-      typeof exposeHeaders === 'string' || Array.isArray(exposeHeaders)
-        ? [...(Array.isArray(exposeHeaders) ? exposeHeaders : [exposeHeaders])]
-            .flatMap((value) => value.split(','))
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : undefined;
-    if (
-      mergedExposeHeaders &&
-      !mergedExposeHeaders.includes('*') &&
-      !mergedExposeHeaders.some((header) => header.toLowerCase() === 'etag')
-    ) {
-      mergedExposeHeaders.push('ETag');
-    }
-    res.status(status);
-    // An answer without a validator, such as an error, keeps none an earlier middleware set. No earlier length survives
-    // either: a body is sent with its own, a HEAD answer carries the GET's, and another bodyless answer has none.
-    // `removeHeader` only when one was set, since it also stops Node framing a body by its length.
-    if (headers.ETag === undefined) res.removeHeader('etag');
-    if (body !== null) res.setHeader('content-length', Buffer.byteLength(body));
-    else if (headers['Content-Length'] === undefined && res.hasHeader('content-length')) {
-      res.removeHeader('content-length');
-    }
-    for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
-    if (mergedExposeHeaders) {
-      res.setHeader('access-control-expose-headers', mergedExposeHeaders.join(', '));
-    }
-    res.end(body ?? undefined);
-  };
-}
-
-function varyOnForwardedOrigin(
-  req: express.Request,
-  res: express.Response,
-  dependsOnRequestOrigin: boolean,
-): void {
-  if (
-    !dependsOnRequestOrigin ||
-    !req.originalUrl.startsWith('/') ||
-    !req.app.get('trust proxy fn')(req.socket.remoteAddress, 0)
-  ) {
-    return;
-  }
-  // Include absent headers too: either can select another origin (RFC 9110 section 12.5.5).
-  res.vary('X-Forwarded-Host');
-  res.vary('X-Forwarded-Proto');
 }
 
 function sendMetadata(res: express.Response, { status, headers, body }: MetadataAnswer) {

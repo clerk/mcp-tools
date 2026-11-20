@@ -290,11 +290,7 @@ app.all(
 );
 ```
 
-Without `resourceUrl`, or with a list of resource URLs, an origin-form request whose immediate peer is trusted by Express's `trust proxy` policy also gets `Vary: X-Forwarded-Host, X-Forwarded-Proto`, merged with any existing `Vary`, so caches distinguish the origins those headers select. This applies even when either header is absent. A fixed `resourceUrl`, an absolute-form request-target, or an untrusted peer does not add these `Vary` fields.
-
 Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.all` or `app.use`, not `app.get`), each answers the CORS preflight with a `200` and those CORS headers.
-
-`serverCardHandler` follows the same rule for a list of `resourceUrl`s, the only case where its card depends on the request's origin. For origin-form requests from a trusted proxy, these handlers select a response using the forwarded public host and scheme and set `Vary: X-Forwarded-Host, X-Forwarded-Proto`; a shared cache must honor those fields and key on the public origin, not only the internal host. This follows HTTP's `Vary` selection rules (RFC 9110 §12.5.5).
 
 ## Authorization Server Metadata
 
@@ -312,55 +308,6 @@ app.all('/.well-known/oauth-authorization-server', authorizationServerMetadataHa
 ```
 
 **Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable.
-
-## Discovery (beta)
-
-### `serverCardHandler`
-
-Express handler that serves an MCP [Server Card](../README.md#discovery-server-cards-beta) (beta). It takes the `generateServerCard` options, with `resourceUrl` as one URL or a list with one for each origin, plus `maxAge`, the seconds the card may be reused before revalidation (default `3600`; `0` for `public, no-cache`). It validates them and generates the card when it is created, throwing a `Clerk error:` for anything the card can't have, so it needs no Clerk keys or MCP SDK, and later changes to the options change nothing. Mount it with `app.all` so `OPTIONS` and other methods reach it:
-
-```ts
-import { serverCardHandler } from '@clerk/mcp-tools/express';
-
-app.all(
-  '/mcp/server-card',
-  serverCardHandler({
-    name: 'com.example/weather',
-    version: '1.2.0',
-    description: 'Forecasts and current conditions.',
-    resourceUrl: 'https://mcp.example.com/mcp',
-  }),
-);
-```
-
-`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. The handler answers conditional requests itself, whatever the app's `etag` setting.
-
-With a list of `resourceUrl`s, the request's origin is the one Express gives the rest of the app, `req.protocol` and `req.host`, as for `mcpAuth`: behind a proxy, set `trust proxy` so they come from `X-Forwarded-Proto` and `X-Forwarded-Host`, which are ignored otherwise. The browser's `Origin` header plays no part. With a list, a request without a `Host` header that parses gets a `400`, since there is no origin to select by. A single `resourceUrl` never reads the request's URL, so that request still gets the card, as it does from `aiCatalogHandler`.
-
-Express writes the discovery answer's headers over earlier values, including `Cache-Control`, `ETag`, `Content-Type`, and `Access-Control-Allow-Origin`. It merges `ETag` into an earlier `Access-Control-Expose-Headers` value without duplication, preserving `*`. A `cors` middleware mounted with `app.use` in front of it answers the `OPTIONS` preflight itself; allow `If-Match` and `If-None-Match` there, or mount the discovery routes before it.
-
-### `aiCatalogHandler`
-
-Express handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs-beta), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
-
-```ts
-import { aiCatalogHandler } from '@clerk/mcp-tools/express';
-
-app.all(
-  ['/.well-known/ard.json', '/.well-known/ai-catalog.json'],
-  aiCatalogHandler({
-    entries: [
-      {
-        identifier: 'urn:air:example.com:weather',
-        displayName: 'Weather',
-        url: 'https://mcp.example.com/mcp/server-card',
-      },
-    ],
-  }),
-);
-```
-
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `${req.protocol}://${req.host}` (with `trust proxy` behind a proxy), and answer `421` for an origin without one rather than serving another origin's catalog.
 
 ## MCP Request Handler
 

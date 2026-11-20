@@ -65,17 +65,6 @@ describe('server entry points', () => {
     expect(sdkImports(entry)).toEqual([]);
   });
 
-  // Public discovery needs no schema validator, Clerk package, or MCP SDK: the Server Card and AI Catalog modules
-  // import only other package files
-  test('the discovery modules import no package at all', () => {
-    const packages = reachableFiles('discovery-response.ts').flatMap((file) =>
-      importedSpecifiers(file)
-        .filter((specifier) => !specifier.startsWith('.'))
-        .map((specifier) => `${relative(file)} imports ${specifier}`),
-    );
-    expect(packages).toEqual([]);
-  });
-
   test('the import scan finds the SDK where it is used', () => {
     expect(sdkImports('client.ts')).toContain(
       'client.ts imports @modelcontextprotocol/sdk/client/index.js',
@@ -116,14 +105,6 @@ vi.mock('@clerk/backend', () => {
   clerkLoads.push('@clerk/backend');
   throw new Error('Cannot find package @clerk/backend');
 });
-vi.mock('@clerk/nextjs/server', () => {
-  clerkLoads.push('@clerk/nextjs/server');
-  throw new Error('Cannot find package @clerk/nextjs');
-});
-vi.mock('@clerk/express', () => {
-  clerkLoads.push('@clerk/express');
-  throw new Error('Cannot find package @clerk/express');
-});
 
 describe('the adapter entry points without Clerk packages', () => {
   test.each(['hono/index.ts', 'next/index.ts', 'express/index.ts'])(
@@ -163,155 +144,6 @@ describe('the adapter entry points without Clerk packages', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ clientId: 'client-1' });
-    expect(clerkLoads).toEqual([]);
-  });
-
-  test('serves a Server Card with serverCardHandler without loading a Clerk package', async () => {
-    const { Hono } = await import('hono');
-    const { serverCardHandler } = await import('./hono/index');
-    const app = new Hono();
-    app.all(
-      '/mcp/server-card',
-      serverCardHandler({
-        name: 'com.example/weather',
-        version: '1.2.0',
-        description: 'Forecasts.',
-        resourceUrl: 'https://mcp.example.com/mcp',
-      }),
-    );
-
-    const res = await app.request('https://mcp.example.com/mcp/server-card', {
-      headers: { Authorization: 'Bearer token-1' },
-    });
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ name: 'com.example/weather' });
-    expect(clerkLoads).toEqual([]);
-  });
-
-  test('serves an AI Catalog with aiCatalogHandler without loading a Clerk package', async () => {
-    const { Hono } = await import('hono');
-    const { aiCatalogHandler } = await import('./hono/index');
-    const app = new Hono();
-    app.all(
-      '/.well-known/ai-catalog.json',
-      aiCatalogHandler({
-        entries: [
-          {
-            identifier: 'urn:air:example.com:weather:mcp',
-            displayName: 'Weather',
-            url: 'https://mcp.example.com/mcp/server-card',
-          },
-        ],
-      }),
-    );
-
-    const res = await app.request('https://mcp.example.com/.well-known/ai-catalog.json', {
-      headers: { Authorization: 'Bearer token-1' },
-    });
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ specVersion: '0.9' });
-    expect(clerkLoads).toEqual([]);
-  });
-
-  test('serves a Server Card and an AI Catalog from Next.js routes without loading a Clerk package', async () => {
-    vi.stubEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', '');
-    vi.stubEnv('CLERK_SECRET_KEY', '');
-    const { aiCatalogHandler, serverCardHandler } = await import('./next/index');
-    const cardRoute = serverCardHandler({
-      name: 'com.example/weather',
-      version: '1.2.0',
-      description: 'Forecasts.',
-      resourceUrl: 'https://mcp.example.com/mcp',
-    });
-    const catalogRoute = aiCatalogHandler({
-      entries: [
-        {
-          identifier: 'urn:air:example.com:weather:mcp',
-          displayName: 'Weather',
-          url: 'https://mcp.example.com/mcp/server-card',
-        },
-      ],
-    });
-    const headers = { Authorization: 'Bearer token-1' };
-
-    const card = cardRoute(new Request('https://mcp.example.com/mcp/server-card', { headers }));
-    const catalog = catalogRoute(
-      new Request('https://mcp.example.com/.well-known/ai-catalog.json', { headers }),
-    );
-
-    expect(card.status).toBe(200);
-    expect(await card.json()).toMatchObject({ name: 'com.example/weather' });
-    expect(catalog.status).toBe(200);
-    expect(await catalog.json()).toMatchObject({ specVersion: '0.9' });
-    expect(clerkLoads).toEqual([]);
-    vi.unstubAllEnvs();
-  });
-
-  // The control for the test above: the Next.js Clerk path does load the mocked package, so its absence is recorded
-  test('records a load of @clerk/nextjs/server where the Next.js entry loads it', async () => {
-    const { withClerkMcpAuth } = await import('./next/index');
-    const route = withClerkMcpAuth(() => new Response('reached'), {
-      resourceUrl: 'https://mcp.example.com/mcp',
-    });
-
-    try {
-      await route(
-        new Request('https://mcp.example.com/mcp', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer token-1' },
-        }),
-      ).catch(() => undefined);
-
-      expect(clerkLoads).toContain('@clerk/nextjs/server');
-    } finally {
-      // So a later test that expects no loads starts from none
-      clerkLoads.length = 0;
-    }
-  });
-
-  test('serves a Server Card and an AI Catalog through Express without loading a Clerk package', async () => {
-    const { default: express } = await import('express');
-    const { withListening } = await import('./test/mcp-harness');
-    const { aiCatalogHandler, serverCardHandler } = await import('./express/index');
-    const app = express();
-    app.all(
-      '/mcp/server-card',
-      serverCardHandler({
-        name: 'com.example/weather',
-        version: '1.2.0',
-        description: 'Forecasts.',
-        resourceUrl: 'https://mcp.example.com/mcp',
-      }),
-    );
-    app.all(
-      '/.well-known/ai-catalog.json',
-      aiCatalogHandler({
-        entries: [
-          {
-            identifier: 'urn:air:example.com:weather:mcp',
-            displayName: 'Weather',
-            url: 'https://mcp.example.com/mcp/server-card',
-          },
-        ],
-      }),
-    );
-
-    const [cardBody, catalogBody] = await withListening(app, (baseUrl) =>
-      Promise.all(
-        ['/mcp/server-card', '/.well-known/ai-catalog.json'].map(async (path) => {
-          const res = await fetch(`${baseUrl}${path}`, {
-            headers: { Authorization: 'Bearer token-1' },
-          });
-          expect(res.status).toBe(200);
-          return res.json();
-        }),
-      ),
-    );
-
-    expect(cardBody).toMatchObject({ name: 'com.example/weather' });
-    expect(catalogBody).toMatchObject({ specVersion: '0.9' });
     expect(clerkLoads).toEqual([]);
   });
 });

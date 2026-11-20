@@ -17,14 +17,6 @@ import {
   serverErrorAnswer,
 } from '../bearer-auth';
 import {
-  type AICatalogHandlerOptions,
-  type DiscoveryAnswer,
-  type DiscoveryRequest,
-  type ServerCardHandlerOptions,
-  aiCatalogResponder,
-  serverCardResponder,
-} from '../discovery-response';
-import {
   type ClerkOAuthClient,
   type McpAuthError,
   type McpAuthFailure,
@@ -47,8 +39,6 @@ declare module 'hono' {
 
 // Everything in the core subpath, so a Hono app imports from this subpath alone
 export * from '../server';
-
-export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -200,104 +190,6 @@ export function authorizationServerMetadataHandler() {
       publishableKey: env<ClerkEnv>(c).CLERK_PUBLISHABLE_KEY,
     });
     return c.json(answer.body, { status: answer.status as 200 | 502, headers: answer.headers });
-  };
-}
-
-/**
- * A Hono handler that serves an MCP Server Card, the public document a client reads before it connects to learn what
- * the server is and where to connect. It validates the options and generates the card when it is created, so it
- * needs no Clerk keys or MCP SDK and makes no request, and later changes to the options change nothing. Mount it with
- * `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
- *
- * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
- * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body.
- * OPTIONS gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has a
- * 421, each error with `Cache-Control: no-store`.
- * @see https://github.com/modelcontextprotocol/ext-server-card
- * @param options - See `ServerCardHandlerOptions`
- * @returns The handler. It throws a `Clerk error:` naming the first option the card cannot have.
- * @example
- * ```ts
- * app.all(
- *   '/mcp/server-card',
- *   serverCardHandler({
- *     name: 'com.example/weather',
- *     version: '1.2.0',
- *     description: 'Forecasts and current conditions.',
- *     resourceUrl: 'https://mcp.example.com/mcp',
- *   }),
- * );
- * ```
- */
-export function serverCardHandler(options: ServerCardHandlerOptions) {
-  return discoveryHandler(serverCardResponder('serverCardHandler', options));
-}
-
-/**
- * A Hono handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
- * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
- * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
- * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
- * request: to answer on several origins with their own cards, create one handler for each and pick it by origin. Mount
- * the one handler at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
- *
- * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
- * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
- * `Cache-Control: no-store`. Both paths get the same body and headers.
- * @see https://github.com/Agent-Card/ai-catalog
- * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
- * @param options - See `AICatalogHandlerOptions`
- * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
- * @example
- * ```ts
- * const catalog = aiCatalogHandler({
- *   entries: [
- *     {
- *       identifier: 'urn:air:example.com:weather',
- *       displayName: 'Weather',
- *       url: 'https://mcp.example.com/mcp/server-card',
- *     },
- *   ],
- * });
- *
- * app.all('/.well-known/ard.json', catalog);
- * app.all('/.well-known/ai-catalog.json', catalog);
- * ```
- */
-export function aiCatalogHandler(options: AICatalogHandlerOptions) {
-  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
-}
-
-function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
-  return (c: Context) => {
-    const answer = respond({
-      method: c.req.method,
-      url: c.req.url,
-      ifMatch: c.req.header('if-match'),
-      ifNoneMatch: c.req.header('if-none-match'),
-    });
-    const exposeHeaders = c.res.headers.get('access-control-expose-headers');
-    if (exposeHeaders !== null) {
-      const exposed = exposeHeaders.split(',').map((header) => header.trim());
-      if (!exposed.includes('*') && !exposed.some((header) => header.toLowerCase() === 'etag')) {
-        c.res.headers.set('access-control-expose-headers', [...exposed, 'ETag'].join(', '));
-      }
-    }
-    // Headers already on `c.res` win over those given to `c.body`, so the validator and cache policy are set there:
-    // an earlier ETag would advertise a tag the conditional requests were not evaluated against
-    if (answer.headers.ETag === undefined) c.res.headers.delete('etag');
-    else c.res.headers.set('etag', answer.headers.ETag);
-    const cacheControl = answer.headers['Cache-Control'];
-    if (cacheControl !== undefined) c.res.headers.set('cache-control', cacheControl);
-    // An earlier length would misframe the body, so only a HEAD answer's own, the GET's, is sent; the runtime measures
-    // any body
-    const contentLength = answer.headers['Content-Length'];
-    if (contentLength === undefined) c.res.headers.delete('content-length');
-    else c.res.headers.set('content-length', contentLength);
-    // `c.body`, not `c.json` or a new Response, keeps the media type and the other headers earlier middleware set
-    if (answer.body === null) return c.body(null, answer.status, answer.headers);
-    return c.body(answer.body, answer.status as 200 | 400 | 405 | 412 | 421, answer.headers);
   };
 }
 

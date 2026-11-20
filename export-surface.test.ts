@@ -15,9 +15,7 @@ const SERVER: Surface = {
     'McpAuthError',
     'McpTokenVerificationError',
     'fetchAuthorizationServerMetadata',
-    'generateAICatalog',
     'generateProtectedResourceMetadata',
-    'generateServerCard',
     'isClerkAuthInfo',
     'matchResourceUrl',
     'metadataCorsHeaders',
@@ -25,12 +23,6 @@ const SERVER: Surface = {
     'toClerkAuthInfo',
   ],
   types: [
-    'AICatalog',
-    'AICatalogAttestation',
-    'AICatalogEntry',
-    'AICatalogEntryOptions',
-    'AICatalogOptions',
-    'AICatalogTrustManifest',
     'ClerkAuthInfo',
     'ClerkOAuthAuth',
     'ClerkOAuthClient',
@@ -38,10 +30,6 @@ const SERVER: Surface = {
     'McpPublicMethod',
     'McpResourceUrl',
     'PublicAccess',
-    'ServerCard',
-    'ServerCardIcon',
-    'ServerCardOptions',
-    'ServerCardRepository',
   ],
 };
 
@@ -53,19 +41,12 @@ const withServer = (values: string[], types: string[]): Surface => ({
 // The Express and Hono adapters export the same names on top of `./server`
 const ADAPTER: Surface = {
   values: [
-    'aiCatalogHandler',
     'authorizationServerMetadataHandler',
     'mcpAuth',
     'protectedResourceMetadataHandler',
-    'serverCardHandler',
     'streamableHttpHandler',
   ],
-  types: [
-    'AICatalogHandlerOptions',
-    'McpAuthOptions',
-    'ProtectedResourceMetadataOptions',
-    'ServerCardHandlerOptions',
-  ],
+  types: ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
 };
 
 const PINNED: Record<string, Surface> = {
@@ -121,19 +102,12 @@ const PINNED: Record<string, Surface> = {
   './server': SERVER,
   './next': withServer(
     [
-      'aiCatalogHandler',
       'authorizationServerMetadataHandler',
       'metadataCorsHandler',
       'protectedResourceMetadataHandler',
-      'serverCardHandler',
       'withClerkMcpAuth',
     ],
-    [
-      'AICatalogHandlerOptions',
-      'McpAuthOptions',
-      'ProtectedResourceMetadataOptions',
-      'ServerCardHandlerOptions',
-    ],
+    ['McpAuthOptions', 'ProtectedResourceMetadataOptions'],
   ),
   './next/client': {
     values: ['completeOAuthHandler'],

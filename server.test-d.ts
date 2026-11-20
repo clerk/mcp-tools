@@ -1,14 +1,9 @@
 import { describe, expectTypeOf, test } from 'vitest';
 
 import {
-  type AICatalog,
-  type AICatalogTrustManifest,
   type ClerkAuthInfo,
   type ClerkOAuthAuth,
-  type ServerCard,
-  generateAICatalog,
   generateProtectedResourceMetadata,
-  generateServerCard,
 } from './server';
 
 describe('generateProtectedResourceMetadata types', () => {
@@ -42,120 +37,5 @@ describe('ClerkAuthInfo types', () => {
       extra: { userId: 'user_1', verifiedBy: 'clerk' },
     };
     expectTypeOf(built.extra.auth).toEqualTypeOf<ClerkOAuthAuth | undefined>();
-  });
-});
-
-describe('generateServerCard types', () => {
-  const required = {
-    name: 'com.example/weather',
-    version: '1.2.0',
-    description: 'Forecasts.',
-    resourceUrl: 'https://mcp.example.com/mcp',
-  };
-
-  test('takes the supported fields and returns a read-only card', () => {
-    const card = generateServerCard({
-      ...required,
-      title: 'Weather',
-      icons: [{ src: 'https://example.com/icon.png', theme: 'dark' }],
-      _meta: { 'com.example/tier': { plan: 'free', limits: [1, null] } },
-    });
-    expectTypeOf(card).toEqualTypeOf<ServerCard>();
-    expectTypeOf(card.remotes[0].type).toEqualTypeOf<'streamable-http'>();
-    // @ts-expect-error the card is read-only
-    card.name = 'com.example/other';
-  });
-
-  test('rejects generated fields, unknown keys, a URL list, and _meta that is not JSON', () => {
-    // @ts-expect-error $schema is generated
-    generateServerCard({ ...required, $schema: 'https://example.com/schema.json' });
-    // @ts-expect-error remotes are generated
-    generateServerCard({ ...required, remotes: [] });
-    // @ts-expect-error not a supported field
-    generateServerCard({ ...required, tools: [] });
-    // @ts-expect-error one URL: a list is for the handlers
-    generateServerCard({ ...required, resourceUrl: ['https://mcp.example.com/mcp'] });
-    // @ts-expect-error a function is not JSON
-    generateServerCard({ ...required, _meta: { 'com.example/x': () => 1 } });
-    // @ts-expect-error a theme is light or dark
-    generateServerCard({ ...required, icons: [{ src: 'i.png', theme: 'blue' }] });
-  });
-});
-
-describe('generateAICatalog types', () => {
-  const entry = {
-    identifier: 'urn:air:example.com:weather:mcp',
-    displayName: 'Weather',
-    url: 'https://example.com/mcp/server-card',
-  };
-
-  test('takes linked entries and returns a read-only catalog of Server Cards', () => {
-    const catalog = generateAICatalog({ entries: [entry] });
-    expectTypeOf(catalog).toEqualTypeOf<AICatalog>();
-    expectTypeOf(catalog.specVersion).toEqualTypeOf<'0.9'>();
-    expectTypeOf(catalog.entries[0]!.displayName).toEqualTypeOf<string>();
-    expectTypeOf(catalog.entries[0]!.type).toEqualTypeOf<'application/mcp-server-card+json'>();
-    // @ts-expect-error the catalog is read-only
-    catalog.entries[0]!.url = 'https://evil.example/card';
-  });
-
-  test('takes an optional ARD trustManifest on an entry and returns it read-only', () => {
-    const catalog = generateAICatalog({
-      entries: [
-        {
-          ...entry,
-          trustManifest: {
-            identity: 'https://example.com',
-            identityType: 'https',
-            attestations: [
-              { type: 'SOC2-Type2', uri: 'https://example.com/soc2', digest: 'sha256:0' },
-            ],
-          },
-        },
-        { ...entry, identifier: 'urn:air:example.com:search:mcp', trustManifest: undefined },
-      ],
-    });
-    expectTypeOf(catalog.entries[0]!.trustManifest).toEqualTypeOf<
-      AICatalogTrustManifest | undefined
-    >();
-    // @ts-expect-error the trust manifest is read-only
-    catalog.entries[0]!.trustManifest!.identity = 'https://evil.example';
-    // @ts-expect-error a trust manifest needs its identity
-    generateAICatalog({ entries: [{ ...entry, trustManifest: { identityType: 'https' } }] });
-    generateAICatalog({
-      entries: [
-        {
-          ...entry,
-          trustManifest: {
-            identity: 'https://example.com',
-            // @ts-expect-error an attestation needs its uri
-            attestations: [{ type: 'SOC2' }],
-          },
-        },
-      ],
-    });
-    generateAICatalog({
-      // @ts-expect-error signatures are not supported
-      entries: [{ ...entry, trustManifest: { identity: 'https://example.com', signature: 'x' } }],
-    });
-  });
-
-  test('rejects generated fields and members outside the linked-card subset', () => {
-    // @ts-expect-error specVersion is generated
-    generateAICatalog({ entries: [entry], specVersion: '0.9' });
-    // @ts-expect-error no host information
-    generateAICatalog({ entries: [entry], host: { displayName: 'Example' } });
-    // @ts-expect-error each entry's type is generated
-    generateAICatalog({ entries: [{ ...entry, type: 'application/mcp-server-card+json' }] });
-    // @ts-expect-error no inline documents
-    generateAICatalog({ entries: [{ identifier: entry.identifier, data: {} }] });
-    // @ts-expect-error no AI Catalog trustManifests, the contributor-keyed list
-    generateAICatalog({ entries: [{ ...entry, trustManifests: [] }] });
-    generateAICatalog({
-      // @ts-expect-error an entry needs its url
-      entries: [{ identifier: entry.identifier, displayName: entry.displayName }],
-    });
-    // @ts-expect-error an entry needs its displayName, which ARD requires
-    generateAICatalog({ entries: [{ identifier: entry.identifier, url: entry.url }] });
   });
 });
