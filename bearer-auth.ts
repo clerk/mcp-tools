@@ -23,7 +23,12 @@ import {
 /**
  * The options every auth entry point takes, with `resourceUrl` optional as it is for a custom verifier.
  */
-type BaseAuthOptions = {
+type BaseAuthOptions = SharedAuthOptions & DiscoveryOptions;
+
+/**
+ * The options every auth entry point takes besides `discoverable` and `publicAccess`.
+ */
+type SharedAuthOptions = {
   /**
    * The exact URL clients use for this MCP endpoint, such as `https://mcp.example.com/mcp`, or a list of them, one
    * for each origin the server answers on. A request uses the listed URL with its origin, and a request to any other
@@ -57,15 +62,54 @@ type BaseAuthOptions = {
    * tool's own step-up.
    */
   challengeScopes?: readonly string[] | undefined;
-  /**
-   * What a request without an `Authorization` header may do. Without it, every such request gets the 401 challenge.
-   * With it, a POST passes without auth info when every JSON-RPC message in its body is open: a protocol method in
-   * `methods`, a `tools/call` for a tool in `tools`, a `resources/read` that `resources` opens, or a `prompts/get`
-   * that `prompts` opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
-   * when it reaches something protected. A request with a token is verified as usual.
-   */
-  publicAccess?: PublicAccess | undefined;
 };
+
+/**
+ * `discoverable` and `publicAccess`, which decide what a request without an `Authorization` header may do. A
+ * server that is not discoverable cannot name public calls: no client without a token could connect to reach them.
+ * The second branch takes any boolean, so that an options object whose `discoverable` TypeScript widened to
+ * `boolean` is accepted while it names no calls.
+ */
+type DiscoveryOptions =
+  | {
+      /**
+       * Whether anyone can connect and list the server's tools, resources, resource templates, and prompts, with
+       * their descriptions and schemas (protected ones included), without a token. `true`, the default, opens
+       * `initialize` with its `notifications/initialized`, `server/discover`, `ping`, `tools/list`,
+       * `resources/list`, `resources/templates/list`, and `prompts/list`, so a GET without a token gets a 405
+       * rather than the 401. Calls still need a token, except the ones `publicAccess` names. `false` requires a
+       * token for every MCP request, as 0.9 did. It is only about these MCP methods: protected resource metadata
+       * (RFC 9728) and the Server Card are public either way, and it is unrelated to OAuth token introspection
+       * (RFC 7662). A `publicAccess.methods` setting replaces it with exactly the methods it opens.
+       */
+      discoverable?: true | undefined;
+      /**
+       * What else a request without an `Authorization` header may do. A POST passes without auth info when every
+       * JSON-RPC message in its body is open: a method `discoverable` or `methods` opens, a `tools/call` for a tool
+       * in `tools`, a `resources/read` that `resources` opens, or a `prompts/get` that `prompts` opens. Anything
+       * else still gets the 401 challenge, which is what makes an MCP client start authorization only when it
+       * reaches something protected. A request with a token is verified as usual.
+       */
+      publicAccess?: PublicAccess | undefined;
+    }
+  | {
+      /**
+       * `false` requires a token for every MCP request, as 0.9 did. See `discoverable: true`, the default.
+       */
+      discoverable?: boolean | undefined;
+      /**
+       * Without `discoverable`, no client without a token can connect, so `publicAccess` can name calls only when
+       * `discoverable` is `true` or left out.
+       */
+      publicAccess?:
+        | {
+            methods?: PublicAccess['methods'];
+            tools?: never;
+            resources?: never;
+            prompts?: never;
+          }
+        | undefined;
+    };
 
 /**
  * The branch of every adapter's options union that verifies tokens with the caller's function, for the framework's
@@ -128,6 +172,7 @@ const mcpAuthOptionKeys: ReadonlySet<string> = new Set<keyof MiddlewareAuthOptio
   'resourceUrl',
   'requiredScopes',
   'challengeScopes',
+  'discoverable',
   'publicAccess',
   'clerkClient',
   'verifyToken',
@@ -197,7 +242,7 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
   if (publicAccess === undefined) return;
   if (typeof publicAccess !== 'object' || publicAccess === null || Array.isArray(publicAccess)) {
     throw new Error(
-      `Clerk error: ${caller} publicAccess must be an object, such as { methods: true, tools: ['search_docs'] }`,
+      `Clerk error: ${caller} publicAccess must be an object, such as { tools: ['search_docs'] }`,
     );
   }
   const unknownKey = Object.keys(publicAccess).find((key) => !publicAccessKeys.has(key));
@@ -247,6 +292,53 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
   }
 }
 
+/**
+ * Throws a `Clerk error:` message unless `discoverable` is `undefined`, `true`, or `false`, and, when it is
+ * `false`, `publicAccess` names no calls. Empty placeholders, `tools: []`, `resources: false`, and
+ * `prompts: false`, name nothing.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param discoverable - The option's value, unchecked
+ * @param publicAccess - The `publicAccess` option, already checked
+ */
+function assertDiscoverable(
+  caller: string,
+  discoverable: unknown,
+  publicAccess: PublicAccess | undefined,
+) {
+  if (discoverable !== undefined && typeof discoverable !== 'boolean') {
+    throw new Error(`Clerk error: ${caller} discoverable must be true or false`);
+  }
+  if (discoverable !== false) return;
+  for (const key of ['tools', 'resources', 'prompts'] as const) {
+    if (opensSome(publicAccess?.[key])) {
+      throw new Error(
+        `Clerk error: ${caller} publicAccess.${key} needs discoverable, so clients can connect without a token`,
+      );
+    }
+  }
+}
+
+// Whether a `true`-or-list option opens anything, so that `[]` and `false` are placeholders that open nothing
+function opensSome(option: boolean | readonly string[] | undefined): boolean {
+  return option === true || (Array.isArray(option) && option.length > 0);
+}
+
+/**
+ * What a request without a token may do under `discoverable` and `publicAccess`: `undefined` when it may do
+ * nothing. A `publicAccess.methods` setting opens exactly the methods it names, whatever `discoverable` is.
+ * Otherwise `discoverable`, true by default, opens every `McpPublicMethod`, as `methods: true` does.
+ * @param options - The entry point's options, already checked
+ * @returns The `PublicAccess` the request rules apply
+ */
+function effectivePublicAccess({
+  discoverable,
+  publicAccess,
+}: Pick<BaseAuthOptions, 'discoverable' | 'publicAccess'>): PublicAccess | undefined {
+  if (publicAccess?.methods !== undefined) return publicAccess;
+  if (discoverable === false) return undefined;
+  return { ...publicAccess, methods: true };
+}
+
 function isNameList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((name) => typeof name === 'string' && name !== '');
 }
@@ -268,9 +360,7 @@ function opensHandshake(publicAccess: PublicAccess): boolean {
 
 // Whether `publicAccess` opens anything at all, so that a client without a token can have a request in flight
 function opensAnything({ methods, tools, resources, prompts }: PublicAccess): boolean {
-  return [methods, tools, resources, prompts].some(
-    (option) => option === true || (Array.isArray(option) && option.length > 0),
-  );
+  return [methods, tools, resources, prompts].some(opensSome);
 }
 
 // The notifications a client sends about work already under way, which pass whenever `publicAccess` opens anything.
@@ -355,7 +445,7 @@ export async function readJsonBody(request: Request): Promise<unknown> {
   if (mediaType.trim().toLowerCase() !== 'application/json') return undefined;
   if (request.bodyUsed) {
     throw new Error(
-      'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+      'Clerk error: discoverable and publicAccess read the body of a request without a token, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
     );
   }
   // `Number(null)` is 0, so a request without the header goes on to the counted read below
@@ -429,6 +519,7 @@ export function assertMcpAuthOptions(
   assertScopeTokens(caller, 'challengeScopes', options?.challengeScopes ?? []);
   if (options?.resourceUrl !== undefined) assertResourceUrls(caller, options.resourceUrl);
   assertPublicAccess(caller, options?.publicAccess);
+  assertDiscoverable(caller, options?.discoverable, options?.publicAccess);
 }
 
 /**
@@ -890,7 +981,7 @@ type BearerRequest = {
   method?: string | undefined;
   /**
    * Returns the request's parsed JSON body, or `undefined` when it cannot be read. It is called at most once, and
-   * only for a POST without a token when `publicAccess` is set.
+   * only for a POST without a token when `discoverable` or `publicAccess` opens something.
    */
   body?: (() => unknown) | undefined;
   verifyToken: TokenVerifier;
@@ -902,10 +993,10 @@ type BearerRequest = {
  * 1. With a list of `resourceUrl`s, a request to an origin none of them has gets a 421 without a challenge, before the
  *    token is read, since a token is issued for one resource (the 421 is this package's answer, not an RFC 8707 rule).
  *    Otherwise it uses the listed URL with its origin.
- * 2. With `publicAccess`, a request without an `Authorization` header can pass with `authInfo` `undefined`: a POST
- *    whose every JSON-RPC message is open. A GET gets a 405 when the handshake is public, the transport
- *    specification's answer for "no stream", since a 401 there would make the client sign in before it reached
- *    anything protected.
+ * 2. Unless `discoverable` is `false` and `publicAccess` opens nothing, a request without an `Authorization` header
+ *    can pass with `authInfo` `undefined`: a POST whose every JSON-RPC message is open. A GET gets a 405 when the
+ *    handshake is public, the transport specification's answer for "no stream", since a 401 there would make the
+ *    client sign in before it reached anything protected.
  * 3. A missing or malformed header gets a 401 challenge without an error code, and a rejected token adds
  *    `error="invalid_token"` (RFC 6750 section 3). Both list `requiredScopes` then `challengeScopes` in `scope`. A
  *    verifier that throws an `McpTokenVerificationError` rejects the token, with it as the failure's `cause`; any
@@ -922,8 +1013,13 @@ export function bearerAuthenticator({
   resourceUrl,
   requiredScopes = [],
   challengeScopes: extraChallengeScopes = [],
-  publicAccess,
-}: Pick<BaseAuthOptions, 'resourceUrl' | 'requiredScopes' | 'challengeScopes' | 'publicAccess'>) {
+  discoverable,
+  publicAccess: publicAccessOption,
+}: Pick<
+  BaseAuthOptions,
+  'resourceUrl' | 'requiredScopes' | 'challengeScopes' | 'discoverable' | 'publicAccess'
+>) {
+  const publicAccess = effectivePublicAccess({ discoverable, publicAccess: publicAccessOption });
   const unauthorizedScopes = requestedScopes({
     requiredScopes,
     challengeScopes: extraChallengeScopes,

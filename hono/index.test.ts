@@ -463,7 +463,12 @@ describe('mcpAuth', () => {
       });
       app.get(
         '/mcp',
-        mcpAuth({ verifyToken: async () => authInfo, requiredScopes: ['profile'] }),
+        // Not discoverable, so a GET without a token gets the 401 rather than the 405
+        mcpAuth({
+          verifyToken: async () => authInfo,
+          requiredScopes: ['profile'],
+          discoverable: false,
+        }),
         (c) => c.json({ ok: true }),
       );
 

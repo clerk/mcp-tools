@@ -118,9 +118,9 @@ export class McpAuthError extends Error {
 }
 
 /**
- * A protocol method that `publicAccess.methods` can open to requests without a token. `initialize` is the handshake
- * of the protocol revisions before 2026-07-28 and covers its `notifications/initialized` notification, and
- * `server/discover` replaces it from 2026-07-28. The methods that run something, `tools/call`, `resources/read`, and
+ * A protocol method that `publicAccess.methods` can open to requests without a token, each of which `discoverable`
+ * opens by default. `initialize` is the handshake of the protocol revisions before 2026-07-28 and covers its
+ * `notifications/initialized` notification, and `server/discover` replaces it from 2026-07-28. The methods that run something, `tools/call`, `resources/read`, and
  * `prompts/get`, are not in this list: `publicAccess.tools`, `resources`, and `prompts` open those.
  */
 export type McpPublicMethod =
@@ -133,16 +133,17 @@ export type McpPublicMethod =
   | 'prompts/list';
 
 /**
- * What a request without an `Authorization` header may do, as the `publicAccess` option of `mcpAuth` and
- * `withClerkMcpAuth`. Nothing is open unless it is listed here, and a request for anything else gets the 401 challenge that
- * starts authorization, so an MCP client signs in only when it reaches something protected. A request that carries a
- * token is verified as usual, whatever it asks for.
+ * What a request without an `Authorization` header may do besides what `discoverable` opens, as the `publicAccess`
+ * option of `mcpAuth` and `withClerkMcpAuth`. A call is open only when it is listed here, and a request for anything
+ * else gets the 401 challenge that starts authorization, so an MCP client signs in only when it reaches something
+ * protected. A request that carries a token is verified as usual, whatever it asks for.
  */
 export type PublicAccess = {
   /**
-   * The protocol methods open without a token: `true` for every `McpPublicMethod`, or a list of them. An open list
-   * method shows its whole list, so with `tools/list` open anyone can read the name, description, and input schema of
-   * every tool, the protected ones included. It never opens a call. With `initialize` or `server/discover` open, a GET
+   * The protocol methods open without a token, in place of the ones `discoverable` opens: `true` for every
+   * `McpPublicMethod`, or a list of them. Leave it out to use `discoverable`. An open list method shows its whole
+   * list, so with `tools/list` open anyone can read the name, description, and input schema of every tool, the
+   * protected ones included. It never opens a call. With `initialize` or `server/discover` open, a GET
    * without a token gets a 405 rather than the 401, and a `subscriptions/listen` (protocol revision 2026-07-28) is
    * open when every resource in its `resourceSubscriptions` is one `resources` opens.
    */

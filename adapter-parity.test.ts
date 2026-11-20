@@ -1237,6 +1237,135 @@ describe.each(authApps)('%s publicAccess', (_name, mount) => {
   });
 });
 
+// `discoverable`: whether a client without a token can connect and list, which is the default
+describe.each(authApps)('%s discoverable', (name, mount) => {
+  const caller = name === 'next' ? 'withClerkMcpAuth' : 'mcpAuth';
+  const send = (options: object, init: Init) => post(mount, { verifyToken, ...options }, init);
+  // What the default opens: the handshake of either protocol revision, `ping`, and every list
+  const discoveryMessages = [
+    rpc('initialize'),
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    rpc('server/discover'),
+    rpc('ping'),
+    rpc('tools/list'),
+    rpc('resources/list'),
+    rpc('resources/templates/list'),
+    rpc('prompts/list'),
+  ];
+
+  test.each([
+    ['left out', {}],
+    ['true', { discoverable: true }],
+    ['undefined', { discoverable: undefined }],
+  ])(
+    'lets the handshake and every list through without a token when discoverable is %s',
+    async (_case, options) => {
+      for (const body of discoveryMessages) {
+        const res = await send(options, { body });
+        expect(res.status, JSON.stringify(body)).toBe(200);
+        expect(res.body).toEqual({ reached: true, auth: null, body });
+      }
+      const get = await send(options, { method: 'GET' });
+      expect(get.status).toBe(405);
+      expect(get.challenge).toBeNull();
+
+      const call = await send(options, { body: rpc('tools/call', { name: 'search_docs' }) });
+      expect(call.status).toBe(401);
+      expect(call.challenge).toMatch(/^Bearer resource_metadata="/);
+    },
+  );
+
+  test('opens the calls publicAccess names alongside the default', async () => {
+    const options = { publicAccess: { tools: ['search_docs'] } };
+
+    expect((await send(options, { body: rpc('initialize') })).status).toBe(200);
+    const call = await send(options, { body: rpc('tools/call', { name: 'search_docs' }) });
+    expect(call.status).toBe(200);
+    expect(call.body).toMatchObject({ reached: true, auth: null });
+  });
+
+  test('challenges every request without a token with discoverable: false', async () => {
+    for (const body of discoveryMessages) {
+      const res = await send({ discoverable: false }, { body });
+      expect(res.status, JSON.stringify(body)).toBe(401);
+      expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+    }
+    expect((await send({ discoverable: false }, { method: 'GET' })).status).toBe(401);
+  });
+
+  test('verifies a token as usual with discoverable: false', async () => {
+    const res = await send(
+      { discoverable: false },
+      { body: rpc('tools/list'), authorization: 'Bearer token-1' },
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reached: true, auth: { token: 'token-1' } });
+  });
+
+  test('opens only the methods a publicAccess.methods list names, in place of the default', async () => {
+    const options = { publicAccess: { methods: ['initialize'] } };
+
+    expect((await send(options, { body: rpc('initialize') })).status).toBe(200);
+    expect((await send(options, { body: rpc('tools/list') })).status).toBe(401);
+  });
+
+  test.each(['yes', 'false', 1, 0, null])('rejects discoverable %j at setup', (discoverable) => {
+    expect(() => mount({ verifyToken, discoverable })).toThrow(
+      `Clerk error: ${caller} discoverable must be true or false`,
+    );
+  });
+
+  test.each([
+    ['tools', { tools: ['search_docs'] }],
+    ['resources', { resources: true }],
+    ['resources', { resources: ['docs://index'] }],
+    ['prompts', { prompts: true }],
+    ['prompts', { prompts: ['summarize'] }],
+  ])('rejects publicAccess.%s with discoverable: false at setup', (key, publicAccess) => {
+    expect(() => mount({ verifyToken, discoverable: false, publicAccess })).toThrow(
+      `Clerk error: ${caller} publicAccess.${key} needs discoverable, so clients can connect without a token`,
+    );
+  });
+
+  test('accepts empty placeholders with discoverable: false, which open nothing', async () => {
+    const options = {
+      discoverable: false,
+      publicAccess: { tools: [], resources: false, prompts: false },
+    };
+    expect(() => mount({ verifyToken, ...options })).not.toThrow();
+    expect((await send(options, { body: rpc('initialize') })).status).toBe(401);
+  });
+});
+
+// Protected resource metadata stays public whatever `discoverable` is, and its handler takes the same option
+describe.each(protectedResourceApps)(
+  '%s protectedResourceMetadataHandler discoverable',
+  (_name, mount) => {
+    test.each([true, false])('serves the metadata with discoverable: %s', async (discoverable) => {
+      const res = await serve(
+        mount({ resourceUrl: `${origin}/mcp`, discoverable }),
+        `${WELL_KNOWN}/mcp`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ resource: `${origin}/mcp` });
+    });
+
+    test('rejects a discoverable that is not a boolean at setup', () => {
+      expect(() => mount({ discoverable: 'yes' })).toThrow(
+        'Clerk error: protectedResourceMetadataHandler discoverable must be true or false',
+      );
+    });
+
+    test('rejects named public calls with discoverable: false at setup', () => {
+      expect(() =>
+        mount({ discoverable: false, publicAccess: { tools: ['search_docs'] } }),
+      ).toThrow(
+        'Clerk error: protectedResourceMetadataHandler publicAccess.tools needs discoverable, so clients can connect without a token',
+      );
+    });
+  },
+);
+
 // The public identity tool warning is module-level, so each entry point is loaded fresh for its own.
 const freshAuthEntryPoints: [Adapter, () => Promise<(options: object) => unknown>][] = [
   [
@@ -1340,29 +1469,34 @@ describe('express publicAccess without express.json()', () => {
     return app;
   }
 
-  test('throws a setup error for a JSON request without a token, instead of a 401 with no cause', async () => {
-    const res = await serve(appWithoutJsonParser({ publicAccess: { methods: true } }), '/mcp', {
+  test.each([
+    ['discoverable by default', {}],
+    ['publicAccess', { publicAccess: { methods: ['initialize'] } }],
+  ])(
+    'throws a setup error for a JSON request without a token when %s, instead of a 401 with no cause',
+    async (_case, options) => {
+      const res = await serve(appWithoutJsonParser(options), '/mcp', {
+        body: rpc('initialize'),
+      });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({
+        message:
+          'Clerk error: mcpAuth discoverable and publicAccess read the parsed JSON body of a request without a token. Mount express.json() before mcpAuth, as app.use(express.json()), or set discoverable: false to require a token for every request',
+      });
+    },
+  );
+
+  test('does not need the parser with discoverable: false, or for a request with a token', async () => {
+    const notDiscoverable = await serve(appWithoutJsonParser({ discoverable: false }), '/mcp', {
       body: rpc('initialize'),
     });
+    expect(notDiscoverable.status).toBe(401);
 
-    expect(res.status).toBe(500);
-    expect(res.body).toEqual({
-      message:
-        'Clerk error: mcpAuth publicAccess reads the parsed JSON body of the request. Mount express.json() before mcpAuth, as app.use(express.json())',
-    });
-  });
-
-  test('does not need the parser without publicAccess, or for a request with a token', async () => {
-    const withoutOption = await serve(appWithoutJsonParser({}), '/mcp', {
+    const withToken = await serve(appWithoutJsonParser({}), '/mcp', {
       body: rpc('initialize'),
+      authorization: 'Bearer token-1',
     });
-    expect(withoutOption.status).toBe(401);
-
-    const withToken = await serve(
-      appWithoutJsonParser({ publicAccess: { methods: true } }),
-      '/mcp',
-      { body: rpc('initialize'), authorization: 'Bearer token-1' },
-    );
     expect(withToken).toMatchObject({ status: 200, body: { reached: true } });
   });
 });
@@ -1425,7 +1559,7 @@ test('hono publicAccess throws a setup error when a middleware before it read th
   expect(res.status).toBe(500);
   expect(res.body).toEqual({
     message:
-      'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+      'Clerk error: discoverable and publicAccess read the body of a request without a token, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
   });
 });
 

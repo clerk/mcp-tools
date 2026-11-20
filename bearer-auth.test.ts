@@ -29,8 +29,15 @@ type Authenticate = ReturnType<typeof bearerAuthenticator>;
 function authenticate(
   overrides: Partial<Parameters<typeof bearerAuthenticator>[0] & Parameters<Authenticate>[0]> = {},
 ): ReturnType<Authenticate> {
-  const { resourceUrl, requiredScopes, challengeScopes, publicAccess, ...request } = overrides;
-  return bearerAuthenticator({ resourceUrl, requiredScopes, challengeScopes, publicAccess })({
+  const { resourceUrl, requiredScopes, challengeScopes, discoverable, publicAccess, ...request } =
+    overrides;
+  return bearerAuthenticator({
+    resourceUrl,
+    requiredScopes,
+    challengeScopes,
+    discoverable,
+    publicAccess,
+  } as Parameters<typeof bearerAuthenticator>[0])({
     authorization: 'Bearer t',
     requestUrl: 'https://mcp.example.com/mcp',
     verifyToken: async () => authInfo,
@@ -754,9 +761,11 @@ describe('publicAccess', () => {
   const open = { ok: true, authInfo: undefined };
   const challenged = { ok: false, status: 401, failure: { reason: 'missing_token' } };
 
-  test('without it, a request without a token gets the 401 and its body is never read', async () => {
+  test('without it and with discoverable: false, a request without a token gets the 401 and its body is never read', async () => {
     const body = vi.fn(() => rpc('initialize'));
-    await expect(withoutToken(undefined, undefined, { body })).resolves.toMatchObject(challenged);
+    await expect(
+      withoutToken(undefined, undefined, { body, discoverable: false }),
+    ).resolves.toMatchObject(challenged);
     expect(body).not.toHaveBeenCalled();
   });
 
@@ -819,8 +828,8 @@ describe('publicAccess', () => {
     [tools, rpc('tools/call', {})],
     [tools, rpc('tools/call')],
     [{ resources: true }, get('summarize')],
-    // The list is a protocol method, which only `methods` opens
-    [{ resources: true }, rpc('resources/list')],
+    // The list is a protocol method, which `resources` does not open
+    [{ methods: ['initialize'], resources: true }, rpc('resources/list')],
     // A resources list opens a URI it names, exactly
     ...['docs://private', 'docs://index/', 'DOCS://index', ['docs://index']].map((uri): Case => [
       resources,
@@ -904,10 +913,12 @@ describe('publicAccess', () => {
     { methods: false },
     { methods: [], tools: [], resources: [], prompts: false },
   ] as const)(
-    'keeps the cancelled, progress, and roots notifications closed when %j opens nothing',
+    'keeps the cancelled, progress, and roots notifications closed when %j, not discoverable, opens nothing',
     async (publicAccess) => {
       for (const notification of openNotifications) {
-        await expect(withoutToken(publicAccess, notification)).resolves.toMatchObject(challenged);
+        await expect(
+          withoutToken(publicAccess, notification, { discoverable: false }),
+        ).resolves.toMatchObject(challenged);
       }
     },
   );
@@ -917,11 +928,12 @@ describe('publicAccess', () => {
     { methods: ['initialize'] },
     { methods: ['server/discover'] },
   ];
+  // A `methods` setting replaces the methods `discoverable` opens by default
   const handshakeClosed: PublicAccess[] = [
     { methods: ['ping', 'tools/list'] },
-    { tools: ['search_docs'] },
-    { resources: true },
-    {},
+    { methods: ['ping'], tools: ['search_docs'] },
+    { methods: false, resources: true },
+    { methods: [] },
   ];
 
   test.each(handshakeOpen)(
@@ -1161,7 +1173,7 @@ describe('readJsonBody', () => {
     await request.json();
 
     await expect(readJsonBody(request)).rejects.toThrow(
-      'Clerk error: publicAccess reads the body of the request, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+      'Clerk error: discoverable and publicAccess read the body of a request without a token, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
     );
   });
 });
