@@ -194,6 +194,20 @@ describe('toClerkAuthInfo', () => {
     expect(isClerkAuthInfo(undefined)).toBe(false);
   });
 
+  test('preserves Clerk identity when adding metadata to the same auth object', () => {
+    const authInfo = toClerkAuthInfo(clerkAuthenticated().toAuth(), 'token');
+    if (!isClerkAuthInfo(authInfo)) throw new Error('Expected Clerk auth info');
+    const resourceMetadataUrl = 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp';
+
+    const withMetadata = Object.assign(authInfo, { resourceMetadataUrl });
+    const copy = { ...authInfo, resourceMetadataUrl };
+
+    expect(withMetadata).toBe(authInfo);
+    expect(withMetadata.resourceMetadataUrl).toBe(resourceMetadataUrl);
+    expect(isClerkAuthInfo(withMetadata)).toBe(true);
+    expect(isClerkAuthInfo(copy)).toBe(false);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
