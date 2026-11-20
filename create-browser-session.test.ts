@@ -725,7 +725,7 @@ describe('createBrowserSessionTool', () => {
       expect(first.isError).toBe(true);
       expect(consoleWarn).toHaveBeenCalledTimes(1);
       expect(consoleWarn.mock.calls[0]![0]).toBe(
-        "Clerk warning: create_browser_session returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.",
+        "Clerk warning: create_browser_session returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.3.0 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.",
       );
     });
 

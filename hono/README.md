@@ -12,7 +12,7 @@ npm install @hono/node-server
 
 These are optional peer dependencies, so the package manager doesn't install them for you or warn when one is missing. The package is ESM-only: it has no CommonJS build, so import it from an ES module (`"type": "module"` in `package.json`).
 
-The MCP SDK is only for `streamableHttpHandler`, which runs your server on the SDK's web-standard transport. It takes either `@modelcontextprotocol/sdk` 1.x or `@modelcontextprotocol/server` 2.x, whichever your server is built with. On SDK 2.1 or later, its `scopeChallenge` step-up works through the handler too; see [Per-tool scopes](#per-tool-scopes). An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need the handler.
+The MCP SDK is only for `streamableHttpHandler`, which runs your server on the SDK's web-standard transport. It takes either `@modelcontextprotocol/sdk` 1.x or `@modelcontextprotocol/server` 2.x, whichever your server is built with. On SDK 2.3.0 or later, its `scopeChallenge` step-up works through the handler too; see [Per-tool scopes](#per-tool-scopes). An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `@modelcontextprotocol/hono`, does not need the handler.
 
 The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also import `zod` (3.25 or later, or 4), an optional peer dependency. Add it to your app's own dependencies, on the same major version your MCP SDK uses (4.2 or later for SDK 2), even though the SDK depends on it too: a package manager that doesn't hoist dependencies, such as Yarn PnP or pnpm with an isolated layout, can't resolve the SDK's copy from `@clerk/mcp-tools`.
 
@@ -206,7 +206,7 @@ app.all(
 
 ### Per-tool scopes
 
-Step-up authorization, a `403` challenge that makes the MCP client ask the user to approve more scopes before a tool runs, comes from the `scopeChallenge` option of `registerTool` with `requireAdditionalScopes`, and needs `@modelcontextprotocol/server` 2.1 or later. Build the server with SDK 2 and pass its transport to `streamableHttpHandler`, and the handler sends that challenge:
+Step-up authorization, a `403` challenge that makes the MCP client ask the user to approve more scopes before a tool runs, comes from the `scopeChallenge` option of `registerTool` with `requireAdditionalScopes`, and needs `@modelcontextprotocol/server` 2.3.0 or later. Build the server with SDK 2 and pass its transport to `streamableHttpHandler`, and the handler sends that challenge:
 
 ```ts
 import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';

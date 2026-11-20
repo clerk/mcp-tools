@@ -585,7 +585,7 @@ function once(fn: () => void): () => void {
 // SDK 2.0. Module-level, so servers that build the tool per request still warn once.
 const warnStepUpUnsupported = once(() =>
   console.warn(
-    `Clerk warning: ${CREATE_BROWSER_SESSION_TOOL_NAME} returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.1 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.`,
+    `Clerk warning: ${CREATE_BROWSER_SESSION_TOOL_NAME} returned its missing-scope error instead of a step-up challenge. MCP server SDK @modelcontextprotocol/server 2.3.0 or later sends the challenge before the tool runs; upgrade it, and keep the tool's scopeChallenge registration option.`,
   ),
 );
 
