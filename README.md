@@ -338,17 +338,23 @@ In Next.js, create one `mcp-handler` handler for each set of tools, once, and ch
 ```ts
 const handlers = {
   admin: createMcpHandler((server) => registerTools(server, { admin: true })),
-  default: createMcpHandler((server) => registerTools(server, { admin: false })),
+  member: createMcpHandler((server) => registerTools(server, { admin: false })),
+  // Clients without a token get their own handler, so their listen streams have their own limit
+  anonymous: createMcpHandler((server) => registerTools(server, { admin: false })),
 };
 
+function handlerFor(authInfo: AuthInfo | undefined) {
+  if (!authInfo) return handlers.anonymous;
+  return isAdmin(authInfo) ? handlers.admin : handlers.member;
+}
+
 const authHandler = withClerkMcpAuth(
-  (req) =>
-    handlers[isAdmin((req as Request & { auth?: AuthInfo }).auth) ? 'admin' : 'default'](req),
+  (req) => handlerFor((req as Request & { auth?: AuthInfo }).auth)(req),
   mcpAuthOptions,
 );
 ```
 
-Don't create the handler inside the route handler. MCP SDK 2.x counts the `subscriptions/listen` streams a handler holds open against its `maxSubscriptions`, and a handler created for a request starts that count again, so the limit never applies and a client without a token can hold open as many streams as the platform allows. Each handler keeps its own count, so the limit applies to each set of tools.
+Don't create the handler inside the route handler. MCP SDK 2.x counts the `subscriptions/listen` streams a handler holds open against its `maxSubscriptions`, and a handler created for a request starts that count again, so the limit never applies and a client without a token can hold open as many streams as the platform allows. Each handler keeps its own count, so the callers who share a handler share its limit, 1024 streams by default. A client without a token that shared the `member` handler could hold open every stream it allows, and signed-in users would get "Subscription limit reached" (`-32603`) when they listen, which is why the recipe gives clients without a token their own handler. To change a handler's limit, pass `maxSubscriptions` in its options: `createMcpHandler(initializeServer, { maxSubscriptions: 64 })`.
 
 - The auth info is `undefined` for a request that `publicAccess` let through, so decide what a client without a token is shown as well.
 - A call to a tool that is not registered for the caller is answered as a call to an unknown tool: "Tool delete_project not found", a JSON-RPC error on MCP SDK 2.x and an error result on 1.x, with no challenge. A request without a token gets the `401` before that, unless the tool is in `publicAccess.tools`.
