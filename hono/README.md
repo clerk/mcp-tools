@@ -292,7 +292,7 @@ app.all(
 );
 ```
 
-`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. Headers that earlier middleware set are kept, and as with the metadata handlers, for an origin a `cors()` middleware in front of it allows, that middleware's `Access-Control-Allow-Origin` replaces the handler's `*`. Mount discovery routes outside a restrictive `cors()` to keep them readable from any origin.
+`GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. The handler sends its own `ETag`, `Cache-Control`, and `Content-Length` over earlier values and keeps other headers that earlier middleware set; as with the metadata handlers, for an origin a `cors()` middleware in front of it allows, that middleware's `Access-Control-Allow-Origin` replaces the handler's `*`. Mount discovery routes outside a restrictive `cors()` to keep them readable from any origin.
 
 ### `aiCatalogHandler(options)`
 
@@ -315,7 +315,7 @@ app.all('/.well-known/ard.json', catalog);
 app.all('/.well-known/ai-catalog.json', catalog);
 ```
 
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and keeps earlier middleware headers the same way. Both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
+It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and treats earlier middleware headers the same way: its own `ETag`, `Cache-Control`, and `Content-Length` win, other earlier headers are kept, and a `cors()` middleware's `Access-Control-Allow-Origin` still wins. Both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
 
 ### `streamableHttpHandler(createServer, Transport)`
 
