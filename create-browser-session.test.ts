@@ -9,7 +9,9 @@ import {
   BrowserSessionError,
   createBrowserSessionTool,
   browserSessionInstructions,
+  ERROR_CAUSE_META_KEY,
   ERROR_CODE_META_KEY,
+  OrganizationLookupError,
   type CreateBrowserSessionOptions,
   type CreateBrowserSessionToolOptions,
 } from './tools';
@@ -1095,6 +1097,83 @@ describe('createBrowserSessionTool', () => {
       expect(textOf(result)).toContain('choose a workspace');
       expect(logs).toEqual(['Clerk error: createBrowserSession failed (organization_rejected)']);
     });
+
+    test('adds no cause to a lookup that throws any other error', async () => {
+      const { result } = await callWithOrg(async () => {
+        throw Object.assign(new Error('token_exchange_rejected'), {
+          code: 'token_exchange_rejected',
+        });
+      });
+      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+      expect(textOf(result)).toContain('server owner must check the workspace lookup');
+    });
+
+    test('gives the agent the message and cause of an OrganizationLookupError', async () => {
+      const fetchImpl = okFetch();
+      const { result, logs } = await callWithOrg(async () => {
+        throw new OrganizationLookupError(
+          'token_exchange_rejected',
+          'Ask the user to reconnect this MCP server, then try again.',
+        );
+      }, fetchImpl);
+      expect(result.isError).toBe(true);
+      expect(result._meta).toEqual({
+        [ERROR_CODE_META_KEY]: 'organization_lookup_failed',
+        [ERROR_CAUSE_META_KEY]: 'token_exchange_rejected',
+      });
+      expect(textOf(result)).toBe('Ask the user to reconnect this MCP server, then try again.');
+      expect(logs).toEqual([
+        'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw OrganizationLookupError, code token_exchange_rejected)',
+      ]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ['omitted', undefined],
+      ['blank', '  '],
+    ])(
+      'keeps the generic text for an OrganizationLookupError whose message is %s',
+      async (_kind, agentMessage) => {
+        const { result } = await callWithOrg(async () => {
+          throw new OrganizationLookupError('workspace_missing', agentMessage);
+        });
+        expect(result._meta).toEqual({
+          [ERROR_CODE_META_KEY]: 'organization_lookup_failed',
+          [ERROR_CAUSE_META_KEY]: 'workspace_missing',
+        });
+        expect(textOf(result)).toBe(
+          browserSessionErrorMessage(new BrowserSessionError('organization_lookup_failed', '')),
+        );
+      },
+    );
+
+    test('never sends the caught error or an unsafe code of an OrganizationLookupError', async () => {
+      const { result, logs } = await callWithOrg(async () => {
+        throw new OrganizationLookupError(`${SECRET} ${LINK}`, undefined, {
+          cause: new Error(`exchange failed ${SECRET} ${LINK}`),
+        });
+      });
+      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+      expect(JSON.stringify(result)).not.toMatch(LEAKS);
+      expect(JSON.stringify(result)).not.toContain('exchange failed');
+      expect(logs).toEqual([
+        'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw OrganizationLookupError)',
+      ]);
+    });
+
+    test.each(['sk_test_123', 'pk_live_abc', 'exchange.sk_live_abc'])(
+      'leaves the Clerk key shaped code %s out of the cause and the log',
+      async (code) => {
+        const { result, logs } = await callWithOrg(async () => {
+          throw new OrganizationLookupError(code, 'Reconnect.');
+        });
+        expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+        expect(textOf(result)).toBe('Reconnect.');
+        expect(logs).toEqual([
+          'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw OrganizationLookupError)',
+        ]);
+      },
+    );
 
     test('treats a BrowserSessionError with an unknown code as a failed lookup', async () => {
       const { result, logs } = await callWithOrg(async () => {

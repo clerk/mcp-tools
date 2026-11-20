@@ -67,6 +67,13 @@ export type McpToolTuple<
  */
 export const ERROR_CODE_META_KEY = 'clerk.com/error_code';
 
+/**
+ * The `_meta` key of an error result that also carries the cause of its code, set by the caller's own code. Today only
+ * `create_browser_session` sets it, for an `organization_lookup_failed` result whose lookup threw an
+ * `OrganizationLookupError`.
+ */
+export const ERROR_CAUSE_META_KEY = 'clerk.com/error_cause';
+
 /** The `_meta[ERROR_CODE_META_KEY]` code of a failure the tool cannot name. */
 export const UNEXPECTED_ERROR_CODE = 'unexpected_error';
 
@@ -74,10 +81,13 @@ export function toolResult<T extends Record<string, unknown>>(text: string, stru
   return { content: [{ type: 'text' as const, text }], structuredContent };
 }
 
-export function toolError(text: string, code: string) {
+export function toolError(text: string, code: string, cause?: string) {
   return {
     isError: true,
     content: [{ type: 'text' as const, text }],
-    _meta: { [ERROR_CODE_META_KEY]: code },
+    _meta: {
+      [ERROR_CODE_META_KEY]: code,
+      ...(cause !== undefined && { [ERROR_CAUSE_META_KEY]: cause }),
+    },
   };
 }
