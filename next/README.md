@@ -10,7 +10,7 @@ For an MCP server, install these in your Next.js app:
 npm install @clerk/mcp-tools @clerk/nextjs mcp-handler @modelcontextprotocol/server zod
 ```
 
-The server runs on `mcp-handler` 2.x, which uses `@modelcontextprotocol/server` 2.1 or later and `zod` 4.2 or later. `withClerkMcpAuth` verifies tokens with `clerkClient` from `@clerk/nextjs`, so an app that passes its own `verifyToken` can leave `@clerk/nextjs` out.
+The server runs on `mcp-handler` 2.x with `@modelcontextprotocol/server` 2.3.0 or later, this package's minimum for SDK 2.x (`mcp-handler` itself accepts any 2.x release), and `zod` 4.2 or later. `withClerkMcpAuth` verifies tokens with `clerkClient` from `@clerk/nextjs`, so an app that passes its own `verifyToken` can leave `@clerk/nextjs` out.
 
 By default the handlers read two environment variables:
 

@@ -8,7 +8,7 @@ Express.js utilities for building MCP servers with authentication support. These
 npm install @clerk/mcp-tools @clerk/express express@5 @modelcontextprotocol/sdk
 ```
 
-This package supports `express` 5, `@clerk/express` 2.1.70 or later, and `@modelcontextprotocol/sdk` 1.29.0 or later. The prebuilt tools in `@clerk/mcp-tools/tools` also need `zod` 3.25 or later, or 4: `npm install zod`.
+This package supports `express` 5, `@clerk/express` 2.1.70 or later, and `@modelcontextprotocol/sdk` 1.32.0 or later. The prebuilt tools in `@clerk/mcp-tools/tools` also need `zod` 3.25 or later, or 4: `npm install zod`.
 
 `@modelcontextprotocol/sdk` is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `toNodeHandler` from `@modelcontextprotocol/node`, does not need it. `@clerk/express` is only for verifying tokens with Clerk's default client, so an app that passes `verifyToken` or its own `clerkClient` to `mcpAuth` does not need it.
 
