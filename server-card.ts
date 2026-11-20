@@ -384,7 +384,7 @@ export function isUri(value: unknown): value is string {
   );
 }
 
-function isHttpUrl(value: unknown): value is string {
+export function isHttpUrl(value: unknown): value is string {
   if (!isUri(value) || !/^https?:\/\/[^/?#]+/i.test(value)) return false;
   const url = new URL(value);
   return url.username === '' && url.password === '';

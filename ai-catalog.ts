@@ -2,7 +2,7 @@
 // pinned at Agent-Card/ai-catalog@19208af (#141, the v0.9 release candidate). `./server` re-exports its public names, so
 // it must not import `./server`. This module is not a package entry point.
 import { assertKnownKeys, deepFreeze, failFor, isPlainObject } from './discovery-options';
-import { isStaticHttpUrl, isUri } from './server-card';
+import { isHttpUrl, isStaticHttpUrl, isUri } from './server-card';
 
 /**
  * The media type of the document an AI Catalog entry links to: an MCP Server Card.
@@ -54,7 +54,8 @@ export type AICatalogEntryOptions = {
  */
 export type AICatalogTrustManifest = {
   /**
-   * The publisher's identity, an absolute URI such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID.
+   * The publisher's identity, an absolute URI such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID. An
+   * `http`, `data`, `file`, or `javascript` URI is rejected.
    * ARD requires its trust domain to match the publisher in the entry's `identifier`, as `example.com` in
    * `urn:air:example.com:weather:mcp`.
    */
@@ -78,7 +79,8 @@ export type AICatalogAttestation = {
    */
   readonly type: string;
   /**
-   * The absolute URI of the attestation document.
+   * Where the attestation document is: an https URL, or an inline `data:` URI with the document. Plain http is
+   * rejected, even on a loopback host.
    */
   readonly uri: string;
   /**
@@ -222,7 +224,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     }
     if (trustManifest !== undefined && !isTrustManifest(trustManifest)) {
       fail(
-        `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity, such as 'https://example.com', and attestations a list of { type, uri, digest?, mediaType? } with an absolute URI uri. Trust schemas, provenance, and signatures are not supported`,
+        `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity that isn't http, data, file, or javascript, such as 'https://example.com' or 'did:web:example.com', and attestations a list of { type, uri, digest?, mediaType? } with an https URL or data: URI uri. Trust schemas, provenance, and signatures are not supported`,
       );
     }
     return {
@@ -262,7 +264,7 @@ function isTrustManifest(value: unknown): boolean {
   }
   const { identity, identityType, attestations } = value;
   return (
-    isUri(identity) &&
+    isIdentity(identity) &&
     (identityType === undefined || isToken(identityType)) &&
     (attestations === undefined ||
       (Array.isArray(attestations) && Array.from(attestations).every(isAttestation)))
@@ -277,10 +279,26 @@ function isAttestation(value: unknown): boolean {
   const { type, uri, digest, mediaType } = value;
   return (
     isDisplayName(type) &&
-    isUri(uri) &&
+    isAttestationUri(uri) &&
     (digest === undefined || isToken(digest)) &&
     (mediaType === undefined || isDisplayName(mediaType))
   );
+}
+
+// Schemes an identity can't name a publisher by: a script, inline content, a local file, or plain http, which a
+// network attacker can rewrite
+const UNTRUSTED_IDENTITY_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'http:']);
+
+// Open in ARD, so a did:, spiffe:, or https: identity, among others, is kept, but not a scheme that names no publisher
+function isIdentity(value: unknown): value is string {
+  return isUri(value) && !UNTRUSTED_IDENTITY_SCHEMES.has(new URL(value).protocol);
+}
+
+// The pinned AI Catalog RC, Attestation Object: the uri "may be an HTTPS URL or an inline Data URI", so not plain
+// http, even on a loopback host, nor any other scheme
+function isAttestationUri(value: unknown): value is string {
+  if (isUri(value) && value.startsWith('data:')) return true;
+  return isHttpUrl(value) && new URL(value).protocol === 'https:';
 }
 
 // Open text that names a format or carries a value, so it may not be empty or hold whitespace or control characters

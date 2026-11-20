@@ -169,7 +169,10 @@ describe('generateAICatalog contract', () => {
             identifier: 'urn:air:example.com:search:mcp',
             displayName: 'Search',
             url: 'https://example.com/search/server-card',
-            trustManifest: { identity: 'did:web:example.com' },
+            trustManifest: {
+              identity: 'did:web:example.com',
+              attestations: [{ type: 'ISO27001', uri: 'data:text/plain;base64,SVNPMjcwMDE=' }],
+            },
           },
           {
             identifier: 'urn:air:example.com:docs:mcp',
@@ -204,7 +207,10 @@ describe('generateAICatalog contract', () => {
           displayName: 'Search',
           type: CARD_TYPE,
           url: 'https://example.com/search/server-card',
-          trustManifest: { identity: 'did:web:example.com' },
+          trustManifest: {
+            identity: 'did:web:example.com',
+            attestations: [{ type: 'ISO27001', uri: 'data:text/plain;base64,SVNPMjcwMDE=' }],
+          },
         },
         {
           identifier: 'urn:air:example.com:docs:mcp',
@@ -440,6 +446,14 @@ describe('generateAICatalog options', () => {
         ['a trust manifest that is a list', [trustManifest]],
         ['a trust manifest identity that is not a URI', { identity: 'example.com' }],
         ['a trust manifest identity with a space', { identity: 'https://example.com/a b' }],
+        // A publisher's identity is a name, never a script, inline content, a local file, or plain http
+        ...[
+          'javascript:alert(1)',
+          'JavaScript:alert(1)',
+          'data:,example.com',
+          'file:///etc/passwd',
+          'http://example.com',
+        ].map((identity) => [`a trust manifest identity ${identity}`, { identity }] as const),
         ['a numeric identityType', { identity: 'https://example.com', identityType: 1 }],
         ['an empty identityType', { identity: 'https://example.com', identityType: '' }],
         ['attestations that are not a list', { ...trustManifest, attestations: {} }],
@@ -455,6 +469,23 @@ describe('generateAICatalog options', () => {
           'an attestation with a relative uri',
           { ...trustManifest, attestations: [{ type: 'SOC2-Type2', uri: '/soc2.pdf' }] },
         ],
+        // AI Catalog RC, Attestation Object: the uri "may be an HTTPS URL or an inline Data URI"
+        ...[
+          'javascript:alert(1)',
+          'http://example.com/soc2.pdf',
+          'http://localhost:3000/soc2.pdf',
+          'file:///soc2.pdf',
+          'ftp://example.com/soc2.pdf',
+          'https:example.com/soc2.pdf',
+          'https://user:pass@example.com/soc2.pdf',
+          'did:web:example.com',
+        ].map(
+          (uri) =>
+            [
+              `an attestation with the uri ${uri}`,
+              { ...trustManifest, attestations: [{ type: 'SOC2-Type2', uri }] },
+            ] as const,
+        ),
         [
           'an attestation with an empty type',
           { ...trustManifest, attestations: [{ type: ' ', uri: 'https://example.com/soc2' }] },
