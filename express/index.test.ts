@@ -678,6 +678,33 @@ describe('protectedResourceMetadataHandler', () => {
     },
   );
 
+  test.each(['http', 'https'])(
+    'varies listed metadata selected by forwarded %s origin',
+    async (protocol) => {
+      const response = await sendRawTo(
+        protectedResourceMetadataHandler({
+          resourceUrl: [
+            'http://header.example/mcp',
+            'http://forwarded.example/mcp',
+            'https://forwarded.example/mcp',
+          ],
+        }),
+        `GET /.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: header.example\r\nX-Forwarded-Host: forwarded.example\r\nX-Forwarded-Proto: ${protocol}\r\nConnection: close\r\n\r\n`,
+        (app, handler) => {
+          app.set('trust proxy', 1);
+          return app.all('/.well-known/oauth-protected-resource/mcp', handler);
+        },
+      );
+
+      expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+      expect(JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4))).toMatchObject({
+        resource: `${protocol}://forwarded.example/mcp`,
+      });
+      expect(response).toContain('Cache-Control: max-age=3600');
+      expect(response).toContain('Vary: X-Forwarded-Host, X-Forwarded-Proto\r\n');
+    },
+  );
+
   test.each([
     ['Accept-Encoding', 'Accept-Encoding, X-Forwarded-Host, X-Forwarded-Proto'],
     ['X-Forwarded-Host, Accept-Encoding', 'X-Forwarded-Host, Accept-Encoding, X-Forwarded-Proto'],
@@ -729,6 +756,27 @@ describe('protectedResourceMetadataHandler', () => {
       label: 'absolute-form target',
       trustProxy: true,
       configured: undefined,
+      target: 'https://target.example/.well-known/oauth-protected-resource/mcp',
+      resource: 'https://target.example/mcp',
+    },
+    {
+      label: 'listed URLs with trust proxy off',
+      trustProxy: false,
+      configured: ['http://header.example/mcp', 'https://forwarded.example/mcp'],
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'http://header.example/mcp',
+    },
+    {
+      label: 'listed URLs with an untrusted immediate peer',
+      trustProxy: () => false,
+      configured: ['http://header.example/mcp', 'https://forwarded.example/mcp'],
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'http://header.example/mcp',
+    },
+    {
+      label: 'listed URLs with an absolute-form target',
+      trustProxy: true,
+      configured: ['https://target.example/mcp', 'https://forwarded.example/mcp'],
       target: 'https://target.example/.well-known/oauth-protected-resource/mcp',
       resource: 'https://target.example/mcp',
     },

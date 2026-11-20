@@ -238,15 +238,7 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
-    if (
-      options.resourceUrl === undefined &&
-      req.originalUrl.startsWith('/') &&
-      req.app.get('trust proxy fn')(req.socket.remoteAddress, 0)
-    ) {
-      // Include absent headers too: forwarding either header changes the derived origin of this cacheable response.
-      res.vary('X-Forwarded-Host');
-      res.vary('X-Forwarded-Proto');
-    }
+    varyOnForwardedOrigin(req, res, typeof options.resourceUrl !== 'string');
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
@@ -255,6 +247,23 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
       }),
     );
   };
+}
+
+function varyOnForwardedOrigin(
+  req: express.Request,
+  res: express.Response,
+  dependsOnRequestOrigin: boolean,
+): void {
+  if (
+    !dependsOnRequestOrigin ||
+    !req.originalUrl.startsWith('/') ||
+    !req.app.get('trust proxy fn')(req.socket.remoteAddress, 0)
+  ) {
+    return;
+  }
+  // Include absent headers too: either can select another origin (RFC 9110 section 12.5.5).
+  res.vary('X-Forwarded-Host');
+  res.vary('X-Forwarded-Proto');
 }
 
 function sendMetadata(res: express.Response, { status, headers, body }: MetadataAnswer) {
