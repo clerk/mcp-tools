@@ -10,6 +10,7 @@ import {
   createKnownCredentialsMcpClient,
   getMcpClientBySessionId,
   type JsonSerializable,
+  type McpClientData,
   type McpClientStore,
 } from './client';
 
@@ -836,6 +837,66 @@ describe('overlapping session saves', () => {
       oauthTokens: { issuer },
     });
   });
+
+  test.each([
+    ['client information', 'tokens'],
+    ['tokens', 'client information'],
+  ] as const)(
+    'overlapping client information and token saves for different issuers keep the %s that committed first',
+    async (first, second) => {
+      const atomic = createAtomicStore();
+      // Each save's value, by the field only that save adds and the issuer it adds it for.
+      const savedBy = {
+        'client information': (value: unknown) =>
+          (value as McpClientData).oauthClientInformation?.issuer === issuers[0],
+        tokens: (value: unknown) => (value as McpClientData).oauthTokens?.issuer === issuers[1],
+      };
+      let committed!: () => void;
+      const firstCommitted = new Promise<void>((resolve) => {
+        committed = resolve;
+      });
+      // Holds the second save's writes until the first save's write lands, so it retries.
+      const { store, overlap } = overlappingReads({
+        ...atomic,
+        compareAndSet: async (key, expected, value) => {
+          if (savedBy[second](value)) await firstCommitted;
+          const written = await atomic.compareAndSet!(key, expected, value);
+          if (written && savedBy[first](value)) committed();
+          return written;
+        },
+      });
+      const initial = await createDynamicallyRegisteredMcpClient({
+        ...clientParams,
+        store,
+        redirect: vi.fn(),
+      });
+      const key = `session_${initial.sessionId}`;
+      const saveClientInformation = initial.authProvider.saveClientInformation!;
+
+      overlap(key, 2);
+      const [informationResult, tokensResult] = await Promise.allSettled([
+        saveClientInformation({ ...clientInformation, issuer: issuers[0] }),
+        initial.authProvider.saveTokens({ ...tokens, issuer: issuers[1] }),
+      ]);
+
+      const [kept, rejected, keptIssuer, otherIssuer] =
+        first === 'tokens'
+          ? [tokensResult, informationResult, issuers[1], issuers[0]]
+          : [informationResult, tokensResult, issuers[0], issuers[1]];
+      expect(kept.status).toBe('fulfilled');
+      expect(rejected.status).toBe('rejected');
+      expect((rejected as PromiseRejectedResult).reason.message).toContain(
+        `is bound to authorization server ${keptIssuer} and does not save ${second} for ${otherIssuer}`,
+      );
+      const [keptField, rejectedField] =
+        first === 'tokens'
+          ? ['oauthTokens', 'oauthClientInformation']
+          : ['oauthClientInformation', 'oauthTokens'];
+      const saved = await store.read(key);
+      expect(saved).toMatchObject({ [keptField]: { issuer: keptIssuer } });
+      expect(saved).not.toHaveProperty(rejectedField);
+    },
+  );
 
   test('a save that keeps losing to overlapping saves gives up', async () => {
     const store = createAtomicStore();

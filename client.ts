@@ -642,6 +642,7 @@ async function saveClientInformation(
       clientInformation,
       'client information',
     );
+    assertSameIssuer(sessionId, stored.oauthTokens, clientInformation, 'client information');
     return {
       ...stored,
       clientId: clientInformation.client_id,
