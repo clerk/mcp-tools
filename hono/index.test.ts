@@ -227,6 +227,38 @@ describe.each([
     expect(notModified.headers.get('x-request-id')).toBe('r1');
   });
 
+  test('sends its own ETag and Cache-Control over those earlier middleware set, and revalidates against its own', async () => {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      c.header('ETag', '"upstream"');
+      c.header('Cache-Control', 'private, max-age=60');
+      await next();
+    });
+    app.all(path, handler());
+    const own = await app.request(`http://myapp.com${path}`, { method: 'HEAD' });
+
+    const res = await app.request(`http://myapp.com${path}`);
+    const upstream = await app.request(`http://myapp.com${path}`, {
+      headers: { 'if-none-match': '"upstream"' },
+    });
+    const notModified = await app.request(`http://myapp.com${path}`, {
+      headers: { 'if-none-match': res.headers.get('etag')! },
+    });
+    const error = await app.request(`http://myapp.com${path}`, { method: 'POST' });
+
+    expect(res.headers.get('etag')).toMatch(/^W\//);
+    expect(res.headers.get('etag')).toBe(own.headers.get('etag'));
+    expect(res.headers.get('cache-control')).toBe('public, max-age=3600');
+    expect(upstream.status).toBe(200);
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('etag')).toBe(res.headers.get('etag'));
+    expect(notModified.headers.get('cache-control')).toBe('public, max-age=3600');
+    // An error has no validator, so it carries none
+    expect(error.status).toBe(405);
+    expect(error.headers.get('etag')).toBeNull();
+    expect(error.headers.get('cache-control')).toBe('no-store');
+  });
+
   test('answers HEAD without a body when mounted with app.get', async () => {
     const app = new Hono();
     app.get(path, handler());

@@ -284,8 +284,12 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
         c.res.headers.set('access-control-expose-headers', [...exposed, 'ETag'].join(', '));
       }
     }
-    if (answer.headers['Cache-Control'] === 'no-store')
-      c.res.headers.set('cache-control', 'no-store');
+    // Headers already on `c.res` win over those given to `c.body`, so the validator and cache policy are set there:
+    // an earlier ETag would advertise a tag the conditional requests were not evaluated against
+    if (answer.headers.ETag === undefined) c.res.headers.delete('etag');
+    else c.res.headers.set('etag', answer.headers.ETag);
+    const cacheControl = answer.headers['Cache-Control'];
+    if (cacheControl !== undefined) c.res.headers.set('cache-control', cacheControl);
     // `c.body`, not `c.json` or a new Response, keeps the media type and the headers earlier middleware set
     if (answer.body === null) return c.body(null, answer.status, answer.headers);
     return c.body(answer.body, answer.status as 200 | 400 | 405 | 412 | 421, answer.headers);

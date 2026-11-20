@@ -363,6 +363,8 @@ function discoveryHandler(
       mergedExposeHeaders.push('ETag');
     }
     res.status(status);
+    // An answer without a validator, such as an error, keeps none an earlier middleware set
+    if (headers.ETag === undefined) res.removeHeader('etag');
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
     if (mergedExposeHeaders) {
       res.setHeader('access-control-expose-headers', mergedExposeHeaders.join(', '));

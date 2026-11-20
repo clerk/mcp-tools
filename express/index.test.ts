@@ -1209,6 +1209,39 @@ describe.each([
     expect(res.headers.get('access-control-expose-headers')).toBe('ETag');
   });
 
+  test('sends its own ETag and Cache-Control over those earlier middleware set, and revalidates against its own', async () => {
+    const app = express();
+    app.use((_req, res, next) => {
+      res.setHeader('etag', '"upstream"');
+      res.setHeader('cache-control', 'private, max-age=60');
+      next();
+    });
+    app.all(path, handler());
+
+    const [res, upstream, notModified, error] = await withListening(app, async (baseUrl) => {
+      const first = await fetch(`${baseUrl}${path}`);
+      return [
+        first,
+        await fetch(`${baseUrl}${path}`, { headers: { 'if-none-match': '"upstream"' } }),
+        await fetch(`${baseUrl}${path}`, {
+          headers: { 'if-none-match': first.headers.get('etag')! },
+        }),
+        await fetch(`${baseUrl}${path}`, { method: 'POST' }),
+      ];
+    });
+
+    expect(res.headers.get('etag')).toMatch(/^W\//);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=3600');
+    expect(upstream.status).toBe(200);
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('etag')).toBe(res.headers.get('etag'));
+    expect(notModified.headers.get('cache-control')).toBe('public, max-age=3600');
+    // An error has no validator, so it carries none
+    expect(error.status).toBe(405);
+    expect(error.headers.get('etag')).toBeNull();
+    expect(error.headers.get('cache-control')).toBe('no-store');
+  });
+
   test('answers HEAD without a body when mounted with app.get', async () => {
     const app = express();
     app.get(path, handler());
