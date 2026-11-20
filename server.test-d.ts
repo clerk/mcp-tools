@@ -2,6 +2,7 @@ import { describe, expectTypeOf, test } from 'vitest';
 
 import {
   type AICatalog,
+  type AICatalogTrustManifest,
   type ClerkAuthInfo,
   type ClerkOAuthAuth,
   type ServerCard,
@@ -98,6 +99,47 @@ describe('generateAICatalog types', () => {
     catalog.entries[0]!.url = 'https://evil.example/card';
   });
 
+  test('takes an optional ARD trustManifest on an entry and returns it read-only', () => {
+    const catalog = generateAICatalog({
+      entries: [
+        {
+          ...entry,
+          trustManifest: {
+            identity: 'https://example.com',
+            identityType: 'https',
+            attestations: [
+              { type: 'SOC2-Type2', uri: 'https://example.com/soc2', digest: 'sha256:0' },
+            ],
+          },
+        },
+        { ...entry, identifier: 'urn:air:example.com:search:mcp', trustManifest: undefined },
+      ],
+    });
+    expectTypeOf(catalog.entries[0]!.trustManifest).toEqualTypeOf<
+      AICatalogTrustManifest | undefined
+    >();
+    // @ts-expect-error the trust manifest is read-only
+    catalog.entries[0]!.trustManifest!.identity = 'https://evil.example';
+    // @ts-expect-error a trust manifest needs its identity
+    generateAICatalog({ entries: [{ ...entry, trustManifest: { identityType: 'https' } }] });
+    generateAICatalog({
+      entries: [
+        {
+          ...entry,
+          trustManifest: {
+            identity: 'https://example.com',
+            // @ts-expect-error an attestation needs its uri
+            attestations: [{ type: 'SOC2' }],
+          },
+        },
+      ],
+    });
+    generateAICatalog({
+      // @ts-expect-error signatures are not supported
+      entries: [{ ...entry, trustManifest: { identity: 'https://example.com', signature: 'x' } }],
+    });
+  });
+
   test('rejects generated fields and members outside the linked-card subset', () => {
     // @ts-expect-error specVersion is generated
     generateAICatalog({ entries: [entry], specVersion: '0.9' });
@@ -107,8 +149,8 @@ describe('generateAICatalog types', () => {
     generateAICatalog({ entries: [{ ...entry, type: 'application/mcp-server-card+json' }] });
     // @ts-expect-error no inline documents
     generateAICatalog({ entries: [{ identifier: entry.identifier, data: {} }] });
-    // @ts-expect-error no trust manifests
-    generateAICatalog({ entries: [{ ...entry, trustManifest: {} }] });
+    // @ts-expect-error no AI Catalog trustManifests, the contributor-keyed list
+    generateAICatalog({ entries: [{ ...entry, trustManifests: [] }] });
     generateAICatalog({
       // @ts-expect-error an entry needs its url
       entries: [{ identifier: entry.identifier, displayName: entry.displayName }],

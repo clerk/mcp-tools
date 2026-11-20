@@ -2,7 +2,7 @@
 // pinned at Agent-Card/ai-catalog@19208af (#141, the v0.9 release candidate). `./server` re-exports its public names, so
 // it must not import `./server`. This module is not a package entry point.
 import { assertKnownKeys, deepFreeze, failFor, isPlainObject } from './discovery-options';
-import { isStaticHttpUrl } from './server-card';
+import { isStaticHttpUrl, isUri } from './server-card';
 
 /**
  * The media type of the document an AI Catalog entry links to: an MCP Server Card.
@@ -32,6 +32,11 @@ export type AICatalogEntryOptions = {
    */
   url: string;
   /**
+   * Who stands behind the server, as an Agentic Resource Discovery (ARD) v0.91 trust manifest. Omit it to publish no
+   * trust data. It is emitted as given.
+   */
+  trustManifest?: AICatalogTrustManifest | undefined;
+  /**
    * Generated: every entry links a Server Card, `application/mcp-server-card+json`.
    */
   type?: never;
@@ -39,6 +44,51 @@ export type AICatalogEntryOptions = {
    * Not supported: an entry links its card by `url` and never includes it inline.
    */
   data?: never;
+};
+
+/**
+ * The trust manifest of an AI Catalog entry, the subset of the Agentic Resource Discovery (ARD) v0.91 `trustManifest`
+ * this builder supports: an identity and the attestations that back it. Trust schemas, provenance, and signatures are
+ * not supported.
+ * @see https://agenticresourcediscovery.org/spec
+ */
+export type AICatalogTrustManifest = {
+  /**
+   * The publisher's identity, an absolute URI such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID.
+   * ARD requires its trust domain to match the publisher in the entry's `identifier`, as `example.com` in
+   * `urn:air:example.com:weather:mcp`.
+   */
+  readonly identity: string;
+  /**
+   * A hint for the format of `identity`, such as `https`, `did`, or `spiffe`. ARD leaves its values open.
+   */
+  readonly identityType?: string | undefined;
+  /**
+   * Claims about the server, each a document at `uri`, such as a compliance report.
+   */
+  readonly attestations?: readonly AICatalogAttestation[] | undefined;
+};
+
+/**
+ * One attestation of a trust manifest: a claim of a given type, backed by the document at `uri`.
+ */
+export type AICatalogAttestation = {
+  /**
+   * The kind of claim, such as `SOC2-Type2`.
+   */
+  readonly type: string;
+  /**
+   * The absolute URI of the attestation document.
+   */
+  readonly uri: string;
+  /**
+   * A digest of the attestation document, such as `sha256:...`.
+   */
+  readonly digest?: string | undefined;
+  /**
+   * The media type of the attestation document, such as `application/pdf`.
+   */
+  readonly mediaType?: string | undefined;
 };
 
 /**
@@ -63,6 +113,7 @@ export type AICatalogEntry = {
   readonly displayName: string;
   readonly type: typeof SERVER_CARD_TYPE;
   readonly url: string;
+  readonly trustManifest?: AICatalogTrustManifest;
 };
 
 /**
@@ -77,8 +128,8 @@ export type AICatalog = {
  * Generates an AI Catalog that links to MCP Server Cards, the document a client reads at
  * `/.well-known/ai-catalog.json` to find a domain's MCP servers. It supports a subset of the AI Catalog
  * specification: a minimal (Level 1) catalog whose entries each link one Server Card by a logical identifier, a display
- * name, and the card's URL. Inline documents, other artifact types, host information, trust manifests, signatures, and extensions
- * are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
+ * name, and the card's URL, with an optional ARD trust manifest. Inline documents, other artifact types, host information,
+ * AI Catalog `trustManifests`, signatures, and extensions are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
  * @see https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md
  * @param options - See `AICatalogOptions`
  * @returns The catalog, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the catalog
@@ -102,7 +153,7 @@ export function generateAICatalog(options: AICatalogOptions): AICatalog {
 
 const catalogKeys = new Set(['entries']);
 const generatedCatalogKeys = new Set(['specVersion']);
-const entryKeys = new Set(['identifier', 'displayName', 'url']);
+const entryKeys = new Set(['identifier', 'displayName', 'url', 'trustManifest']);
 const generatedEntryKeys = new Set(['type']);
 
 /**
@@ -144,9 +195,9 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       generatedMessage: () =>
         `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
       unknownMessage: (key) =>
-        `${at} does not take ${key}. An entry supports identifier, displayName, and url only: inline documents, other artifact types, versions, trust manifests, and extensions are not supported`,
+        `${at} does not take ${key}. An entry supports identifier, displayName, url, and trustManifest only: inline documents, other artifact types, versions, AI Catalog trustManifests, and extensions are not supported`,
     });
-    const { identifier, displayName, url } = entry;
+    const { identifier, displayName, url, trustManifest } = entry;
     if (!isIdentifier(identifier)) {
       fail(
         `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:weather:mcp'. It names the server and is not the URL of its card`,
@@ -168,11 +219,19 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
         `${at}.url must be an absolute https URL, or http on localhost, 127.0.0.1, or [::1] for local development, without credentials, a fragment, or spaces`,
       );
     }
+    if (trustManifest !== undefined && !isTrustManifest(trustManifest)) {
+      fail(
+        `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity, such as 'https://example.com', and attestations a list of { type, uri, digest?, mediaType? } with an absolute URI uri. Trust schemas, provenance, and signatures are not supported`,
+      );
+    }
     return {
       identifier: identifier as string,
       displayName: displayName as string,
       type: SERVER_CARD_TYPE,
       url: url as string,
+      ...(trustManifest === undefined
+        ? {}
+        : { trustManifest: JSON.parse(JSON.stringify(trustManifest)) as AICatalogTrustManifest }),
     };
   });
 
@@ -189,6 +248,43 @@ function isCardUrl(value: unknown): value is string {
   if (value.startsWith('https://')) return true;
   const rawHostname = /^http:\/\/(?::?@)?(\[[^\]]+\]|[^:/?#]+)/.exec(value)?.[1];
   return rawHostname !== undefined && LOOPBACK_HOSTS.has(rawHostname.toLowerCase());
+}
+
+const trustManifestKeys = new Set(['identity', 'identityType', 'attestations']);
+const attestationKeys = new Set(['type', 'uri', 'digest', 'mediaType']);
+
+// The ARD v0.91 entry schema's TrustManifest, of which only identity is required. Its other members (trustSchema,
+// provenance, signature) are rejected rather than emitted unchecked
+function isTrustManifest(value: unknown): boolean {
+  if (!isPlainObject(value) || !Object.keys(value).every((key) => trustManifestKeys.has(key))) {
+    return false;
+  }
+  const { identity, identityType, attestations } = value;
+  return (
+    isUri(identity) &&
+    (identityType === undefined || isToken(identityType)) &&
+    (attestations === undefined ||
+      (Array.isArray(attestations) && Array.from(attestations).every(isAttestation)))
+  );
+}
+
+// The schema's attestation item: a type and a uri are required, a digest and mediaType are optional text
+function isAttestation(value: unknown): boolean {
+  if (!isPlainObject(value) || !Object.keys(value).every((key) => attestationKeys.has(key))) {
+    return false;
+  }
+  const { type, uri, digest, mediaType } = value;
+  return (
+    isDisplayName(type) &&
+    isUri(uri) &&
+    (digest === undefined || isToken(digest)) &&
+    (mediaType === undefined || isDisplayName(mediaType))
+  );
+}
+
+// Open text that names a format or carries a value, so it may not be empty or hold whitespace or control characters
+function isToken(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !/[\s\p{Cc}]/u.test(value);
 }
 
 // Text in the specification, required by ARD: rejected only when it shows nothing, being empty or whitespace, or

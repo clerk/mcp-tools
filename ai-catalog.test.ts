@@ -18,6 +18,19 @@ const weather = {
 const CARD_TYPE = 'application/mcp-server-card+json';
 const loopbackAliases = ['127.1', '2130706433', '0x7f.0.0.1', '[0:0:0:0:0:0:0:1]'];
 
+const trustManifest = {
+  identity: 'https://example.com',
+  identityType: 'https',
+  attestations: [
+    {
+      type: 'SOC2-Type2',
+      uri: 'https://example.com/compliance/soc2.pdf',
+      digest: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+      mediaType: 'application/pdf',
+    },
+  ],
+};
+
 describe('generateAICatalog', () => {
   // The Single Server example of ext-server-card@526201b docs/discovery.md, AI Catalog
   test('links one Server Card by its logical identifier and URL', () => {
@@ -146,10 +159,67 @@ describe('generateAICatalog contract', () => {
     ).not.toEqual([]);
   });
 
+  // ARD v0.91, 4.5 Trust and Verification: an entry may carry a trustManifest, which needs only an identity
+  test('carries an entry trustManifest as given, and none when it is omitted', () => {
+    expect(
+      generateAICatalog({
+        entries: [
+          { ...weather, trustManifest },
+          {
+            identifier: 'urn:air:example.com:search:mcp',
+            displayName: 'Search',
+            url: 'https://example.com/search/server-card',
+            trustManifest: { identity: 'did:web:example.com' },
+          },
+          {
+            identifier: 'urn:air:example.com:docs:mcp',
+            displayName: 'Docs',
+            url: 'https://example.com/docs/server-card',
+          },
+        ],
+      }),
+    ).toEqual({
+      specVersion: '0.9',
+      entries: [
+        {
+          identifier: 'urn:air:example.com:weather:mcp',
+          displayName: 'Weather',
+          type: CARD_TYPE,
+          url: 'https://example.com/mcp/server-card',
+          trustManifest: {
+            identity: 'https://example.com',
+            identityType: 'https',
+            attestations: [
+              {
+                type: 'SOC2-Type2',
+                uri: 'https://example.com/compliance/soc2.pdf',
+                digest: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+                mediaType: 'application/pdf',
+              },
+            ],
+          },
+        },
+        {
+          identifier: 'urn:air:example.com:search:mcp',
+          displayName: 'Search',
+          type: CARD_TYPE,
+          url: 'https://example.com/search/server-card',
+          trustManifest: { identity: 'did:web:example.com' },
+        },
+        {
+          identifier: 'urn:air:example.com:docs:mcp',
+          displayName: 'Docs',
+          type: CARD_TYPE,
+          url: 'https://example.com/docs/server-card',
+        },
+      ],
+    });
+  });
+
   test('generates a catalog the pinned AI Catalog contract accepts, linking cards on other hosts too', () => {
     const catalog = generateAICatalog({
       entries: [
-        weather,
+        { ...weather, trustManifest },
         {
           identifier: 'urn:air:example.com:search:mcp',
           displayName: 'Search',
@@ -246,6 +316,63 @@ describe('generateAICatalog contract', () => {
     ],
     ['an empty displayName', { ...valid, entries: [{ ...entry, displayName: '' }] }],
     ['a whitespace displayName', { ...valid, entries: [{ ...entry, displayName: ' ' }] }],
+    // ARD v0.91 entry schema, TrustManifest: identity is required, and each attestation needs a type and a uri
+    [
+      'a trustManifest without an identity',
+      { ...valid, entries: [{ ...entry, trustManifest: {} }] },
+    ],
+    [
+      'a trustManifest with a numeric identityType',
+      {
+        ...valid,
+        entries: [
+          { ...entry, trustManifest: { identity: 'https://example.com', identityType: 1 } },
+        ],
+      },
+    ],
+    [
+      'attestations that are not a list',
+      { ...valid, entries: [{ ...entry, trustManifest: { ...trustManifest, attestations: {} } }] },
+    ],
+    [
+      'an attestation without a uri',
+      {
+        ...valid,
+        entries: [
+          { ...entry, trustManifest: { ...trustManifest, attestations: [{ type: 'SOC2-Type2' }] } },
+        ],
+      },
+    ],
+    [
+      'an attestation with a numeric mediaType',
+      {
+        ...valid,
+        entries: [
+          {
+            ...entry,
+            trustManifest: {
+              ...trustManifest,
+              attestations: [{ type: 'SOC2-Type2', uri: 'https://example.com/soc2', mediaType: 1 }],
+            },
+          },
+        ],
+      },
+    ],
+    [
+      'a trustManifest before the url',
+      {
+        ...valid,
+        entries: [
+          {
+            identifier: entry.identifier,
+            displayName: entry.displayName,
+            type: entry.type,
+            trustManifest,
+            url: entry.url,
+          },
+        ],
+      },
+    ],
   ])('the linked-card check rejects %s', (_case, document) => {
     expect(linkedCardCatalogErrors(document)).not.toEqual([]);
   });
@@ -307,11 +434,53 @@ describe('generateAICatalog options', () => {
       { entries: [{ identifier: weather.identifier, data: {} }] },
       'entries[0] does not take data',
     ],
-    [
-      'a trust manifest',
-      { entries: [{ ...weather, trustManifest: {} }] },
-      'entries[0] does not take trustManifest',
-    ],
+    ...(
+      [
+        ['a trust manifest without an identity', {}],
+        ['a trust manifest that is a list', [trustManifest]],
+        ['a trust manifest identity that is not a URI', { identity: 'example.com' }],
+        ['a trust manifest identity with a space', { identity: 'https://example.com/a b' }],
+        ['a numeric identityType', { identity: 'https://example.com', identityType: 1 }],
+        ['an empty identityType', { identity: 'https://example.com', identityType: '' }],
+        ['attestations that are not a list', { ...trustManifest, attestations: {} }],
+        [
+          'a sparse attestation list',
+          { ...trustManifest, attestations: Object.assign([], { length: 1 }) },
+        ],
+        [
+          'an attestation without a uri',
+          { ...trustManifest, attestations: [{ type: 'SOC2-Type2' }] },
+        ],
+        [
+          'an attestation with a relative uri',
+          { ...trustManifest, attestations: [{ type: 'SOC2-Type2', uri: '/soc2.pdf' }] },
+        ],
+        [
+          'an attestation with an empty type',
+          { ...trustManifest, attestations: [{ type: ' ', uri: 'https://example.com/soc2' }] },
+        ],
+        [
+          'an attestation with a numeric digest',
+          {
+            ...trustManifest,
+            attestations: [{ type: 'SOC2-Type2', uri: 'https://example.com/soc2', digest: 1 }],
+          },
+        ],
+        [
+          'an attestation with an unsupported key',
+          {
+            ...trustManifest,
+            attestations: [{ type: 'SOC2-Type2', uri: 'https://example.com/soc2', size: 1 }],
+          },
+        ],
+        ['a trust manifest signature', { ...trustManifest, signature: 'eyJ' }],
+        ['a trust schema', { ...trustManifest, trustSchema: {} }],
+      ] as const
+    ).map(([name, manifest]): [string, unknown, string] => [
+      name,
+      { entries: [{ ...weather, trustManifest: manifest }] },
+      'entries[0].trustManifest must be',
+    ]),
     [
       'entry extensions',
       { entries: [{ ...weather, extensions: {} }] },

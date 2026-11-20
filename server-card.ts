@@ -375,7 +375,7 @@ const URI_PATTERN = new RegExp(
   `^[a-zA-Z][a-zA-Z0-9+.-]*:(?://[${PCHAR}\\[\\]]*)?[${PCHAR}/]*(?:\\?[${PCHAR}/?]*)?(?:#[${PCHAR}/?]*)?$`,
 );
 
-function isUri(value: unknown): value is string {
+export function isUri(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     URI_PATTERN.test(value) &&

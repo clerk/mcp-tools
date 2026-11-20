@@ -384,9 +384,11 @@ export {
 } from './server-card';
 export {
   type AICatalog,
+  type AICatalogAttestation,
   type AICatalogEntry,
   type AICatalogEntryOptions,
   type AICatalogOptions,
+  type AICatalogTrustManifest,
   generateAICatalog,
 } from './ai-catalog';
 

@@ -26,9 +26,11 @@ const SERVER: Surface = {
   ],
   types: [
     'AICatalog',
+    'AICatalogAttestation',
     'AICatalogEntry',
     'AICatalogEntryOptions',
     'AICatalogOptions',
+    'AICatalogTrustManifest',
     'ClerkAuthInfo',
     'ClerkOAuthAuth',
     'ClerkOAuthClient',

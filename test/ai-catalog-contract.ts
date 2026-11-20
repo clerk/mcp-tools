@@ -70,10 +70,39 @@ export function aiCatalogErrors(document: unknown): string[] {
   return errors;
 }
 
+// The TrustManifest of the ARD v0.91 entry schema (ard-entry.schema.json): identity is required, identityType is open
+// text, and each attestation needs a type and a uri, with optional mediaType and digest text
+function trustManifestErrors(manifest: unknown, entryAt: string): string[] {
+  const at = `${entryAt}.trustManifest`;
+  if (!isObject(manifest)) return [`${at} is not a map`];
+  const errors: string[] = [];
+  if (!isText(manifest.identity) || !URL.canParse(manifest.identity as string))
+    errors.push(`${at}.identity is not a URI`);
+  if (manifest.identityType !== undefined && !isText(manifest.identityType))
+    errors.push(`${at}.identityType is not text`);
+  if (manifest.attestations === undefined) return errors;
+  if (!Array.isArray(manifest.attestations)) return [...errors, `${at}.attestations is not a list`];
+  Array.from(manifest.attestations).forEach((attestation: unknown, index) => {
+    const item = `${at}.attestations[${index}]`;
+    if (!isObject(attestation)) return errors.push(`${item} is not a map`);
+    if (!isText(attestation.type)) errors.push(`${item}.type is not text`);
+    if (!isText(attestation.uri) || !URL.canParse(attestation.uri as string))
+      errors.push(`${item}.uri is not a URI`);
+    for (const key of ['mediaType', 'digest']) {
+      if (attestation[key] !== undefined && !isText(attestation[key]))
+        errors.push(`${item}.${key} is not text`);
+    }
+    return undefined;
+  });
+  return errors;
+}
+
 /**
  * Where `document` falls outside the linked-Server-Card subset `generateAICatalog` produces, on top of
  * `aiCatalogErrors`: v0.9 of the AI Catalog specification, and entries that only link a Server Card by a logical identifier, a
- * display name, and its URL. The display name is optional in the AI Catalog but required by ARD v0.91 ("4.2 Entry Terms").
+ * display name, and its URL, with an optional trust manifest. The display name is optional in the AI Catalog but required
+ * by ARD v0.91 ("4.2 Entry Terms"), and the trust manifest is ARD's ("4.5 Trust and Verification"), checked against the
+ * `TrustManifest` of its entry schema.
  */
 export function linkedCardCatalogErrors(document: unknown): string[] {
   const errors = aiCatalogErrors(document);
@@ -85,11 +114,17 @@ export function linkedCardCatalogErrors(document: unknown): string[] {
   }
   catalog.entries.forEach((entry, index) => {
     const at = `entries[${index}]`;
-    if (Object.keys(entry).join() !== 'identifier,displayName,type,url') {
+    const keys = Object.keys(entry).join();
+    if (
+      keys !== 'identifier,displayName,type,url' &&
+      keys !== 'identifier,displayName,type,url,trustManifest'
+    ) {
       errors.push(
-        `${at} has ${Object.keys(entry).join()}, not just identifier, displayName, type, and url`,
+        `${at} has ${keys}, not just identifier, displayName, type, url, and an optional trustManifest`,
       );
     }
+    if (entry.trustManifest !== undefined)
+      errors.push(...trustManifestErrors(entry.trustManifest, at));
     if (!isText(entry.displayName) || (entry.displayName as string).trim() === '')
       errors.push(`${at}.displayName is not a non-empty name`);
     // ext-server-card discovery.md, Server Card Entries: type MUST be the Server Card media type

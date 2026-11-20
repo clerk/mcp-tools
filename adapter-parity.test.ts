@@ -2110,6 +2110,44 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     expect(revalidated.text).toBe('');
   });
 
+  // ARD v0.91, 4.5 Trust and Verification: the trust manifest is served as given, next to an entry without one
+  test('serves an entry trustManifest as given', async () => {
+    const trustManifest = {
+      identity: 'https://example.com',
+      identityType: 'https',
+      attestations: [{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }],
+    };
+    const res = await serve(
+      mount({ entries: [{ ...catalogEntries[0]!, trustManifest }, catalogEntries[1]!] }),
+      CATALOG_PATH,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      specVersion: '0.9',
+      entries: [
+        {
+          identifier: 'urn:air:example.com:weather:mcp',
+          displayName: 'Weather',
+          type: CARD_TYPE,
+          url: 'https://public.example.com/mcp/server-card',
+          trustManifest: {
+            identity: 'https://example.com',
+            identityType: 'https',
+            attestations: [{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }],
+          },
+        },
+        {
+          identifier: 'urn:air:saas.example:search:mcp',
+          displayName: 'Search',
+          type: CARD_TYPE,
+          url: 'https://cards.saas.example/search/server-card',
+        },
+      ],
+    });
+    expect(linkedCardCatalogErrors(res.body)).toEqual([]);
+  });
+
   test('tags each catalog by its content', async () => {
     const same = await serve(
       mount({ entries: catalogEntries.map((entry) => ({ ...entry })) }),
@@ -2209,6 +2247,11 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
         ],
       },
       'aiCatalogHandler entries[0].displayName must be',
+    ],
+    [
+      'a trustManifest without an identity',
+      { entries: [{ ...catalogEntries[0], trustManifest: { identityType: 'https' } }] },
+      'aiCatalogHandler entries[0].trustManifest must be',
     ],
   ])('throws at setup for %s', (_case, invalid, message) => {
     expect(() => mount(invalid as never)).toThrow(`Clerk error: ${message}`);
