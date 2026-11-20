@@ -248,13 +248,7 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
-    if (
-      Array.isArray(options.resourceUrl) &&
-      req.app.get('trust proxy') &&
-      req.originalUrl.startsWith('/')
-    ) {
-      varyOnForwardedOrigin(res);
-    }
+    varyOnForwardedOrigin(req, res, typeof options.resourceUrl !== 'string');
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
@@ -335,7 +329,7 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions) {
 
 function discoveryHandler(
   respond: (request: DiscoveryRequest) => DiscoveryAnswer,
-  varyForForwardedOrigin = false,
+  dependsOnRequestOrigin = false,
 ) {
   return (req: express.Request, res: express.Response): void => {
     const { status, headers, body } = respond({
@@ -347,9 +341,7 @@ function discoveryHandler(
     });
     // `setHeader`, not `set`, which would add `; charset=utf-8` to `application/json`, and `end`, not `send` or `json`,
     // which add an ETag of their own and answer a 304 by Express's own freshness rules
-    if (varyForForwardedOrigin && req.app.get('trust proxy') && req.originalUrl.startsWith('/')) {
-      varyOnForwardedOrigin(res);
-    }
+    varyOnForwardedOrigin(req, res, dependsOnRequestOrigin);
     const exposeHeaders = res.getHeader('access-control-expose-headers');
     const mergedExposeHeaders =
       typeof exposeHeaders === 'string' || Array.isArray(exposeHeaders)
@@ -374,16 +366,21 @@ function discoveryHandler(
   };
 }
 
-function varyOnForwardedOrigin(res: express.Response): void {
-  const vary = res.getHeader('vary');
-  const values = Array.isArray(vary) ? vary : typeof vary === 'string' ? vary.split(',') : [];
-  if (values.some((value) => typeof value === 'string' && value.trim() === '*')) return;
-  const fields = values.filter((value): value is string => typeof value === 'string');
-  for (const name of ['X-Forwarded-Host', 'X-Forwarded-Proto']) {
-    if (!fields.some((field) => field.trim().toLowerCase() === name.toLowerCase()))
-      fields.push(name);
+function varyOnForwardedOrigin(
+  req: express.Request,
+  res: express.Response,
+  dependsOnRequestOrigin: boolean,
+): void {
+  if (
+    !dependsOnRequestOrigin ||
+    !req.originalUrl.startsWith('/') ||
+    !req.app.get('trust proxy fn')(req.socket.remoteAddress, 0)
+  ) {
+    return;
   }
-  res.setHeader('Vary', fields.join(', '));
+  // Include absent headers too: either can select another origin (RFC 9110 section 12.5.5).
+  res.vary('X-Forwarded-Host');
+  res.vary('X-Forwarded-Proto');
 }
 
 function sendMetadata(res: express.Response, { status, headers, body }: MetadataAnswer) {

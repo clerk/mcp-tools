@@ -290,9 +290,11 @@ app.all(
 );
 ```
 
+Without `resourceUrl`, or with a list of resource URLs, an origin-form request whose immediate peer is trusted by Express's `trust proxy` policy also gets `Vary: X-Forwarded-Host, X-Forwarded-Proto`, merged with any existing `Vary`, so caches distinguish the origins those headers select. This applies even when either header is absent. A fixed `resourceUrl`, an absolute-form request-target, or an untrusted peer does not add these `Vary` fields.
+
 Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.all` or `app.use`, not `app.get`), each answers the CORS preflight with a `200` and those CORS headers.
 
-For origin-form requests behind a trusted proxy, when `resourceUrl` is a list, `protectedResourceMetadataHandler` and `serverCardHandler` select a response using the forwarded public host and scheme. They set `Vary: X-Forwarded-Host, X-Forwarded-Proto`; a shared cache must honor those fields and key on the public origin, not only the internal host. This follows HTTP's `Vary` selection rules (RFC 9110 §12.5.5).
+`serverCardHandler` follows the same rule for a list of `resourceUrl`s, the only case where its card depends on the request's origin. For origin-form requests from a trusted proxy, these handlers select a response using the forwarded public host and scheme and set `Vary: X-Forwarded-Host, X-Forwarded-Proto`; a shared cache must honor those fields and key on the public origin, not only the internal host. This follows HTTP's `Vary` selection rules (RFC 9110 §12.5.5).
 
 ## Authorization Server Metadata
 

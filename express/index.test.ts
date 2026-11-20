@@ -650,6 +650,159 @@ describe('protectedResourceMetadataHandler', () => {
     vi.unstubAllEnvs();
   });
 
+  test.each([
+    [
+      'both headers',
+      'X-Forwarded-Host: forwarded.example\r\nX-Forwarded-Proto: https\r\n',
+      'https://forwarded.example/mcp',
+    ],
+    ['host only', 'X-Forwarded-Host: forwarded.example\r\n', 'http://forwarded.example/mcp'],
+    ['scheme only', 'X-Forwarded-Proto: https\r\n', 'https://header.example/mcp'],
+    ['neither header', '', 'http://header.example/mcp'],
+  ])(
+    'varies derived metadata on both forwarded headers with %s present',
+    async (_label, headers, resource) => {
+      const response = await sendRawTo(
+        protectedResourceMetadataHandler(),
+        `GET /.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: header.example\r\n${headers}Connection: close\r\n\r\n`,
+        (app, handler) => {
+          app.set('trust proxy', true);
+          return app.all('/.well-known/oauth-protected-resource/mcp', handler);
+        },
+      );
+
+      expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+      expect(JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4))).toMatchObject({
+        resource,
+      });
+      expect(response).toContain('Cache-Control: max-age=3600');
+      expect(response).toContain('Vary: X-Forwarded-Host, X-Forwarded-Proto\r\n');
+    },
+  );
+
+  test.each(['http', 'https'])(
+    'varies listed metadata selected by forwarded %s origin',
+    async (protocol) => {
+      const response = await sendRawTo(
+        protectedResourceMetadataHandler({
+          resourceUrl: [
+            'http://header.example/mcp',
+            'http://forwarded.example/mcp',
+            'https://forwarded.example/mcp',
+          ],
+        }),
+        `GET /.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: header.example\r\nX-Forwarded-Host: forwarded.example\r\nX-Forwarded-Proto: ${protocol}\r\nConnection: close\r\n\r\n`,
+        (app, handler) => {
+          app.set('trust proxy', 1);
+          return app.all('/.well-known/oauth-protected-resource/mcp', handler);
+        },
+      );
+
+      expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+      expect(JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4))).toMatchObject({
+        resource: `${protocol}://forwarded.example/mcp`,
+      });
+      expect(response).toContain('Cache-Control: max-age=3600');
+      expect(response).toContain('Vary: X-Forwarded-Host, X-Forwarded-Proto\r\n');
+    },
+  );
+
+  test.each([
+    ['Accept-Encoding', 'Accept-Encoding, X-Forwarded-Host, X-Forwarded-Proto'],
+    ['X-Forwarded-Host, Accept-Encoding', 'X-Forwarded-Host, Accept-Encoding, X-Forwarded-Proto'],
+    ['*', '*'],
+  ])('preserves existing Vary %s', async (existing, expected) => {
+    const app = express();
+    app.set('trust proxy', 'loopback');
+    app.use((_req, res, next) => {
+      res.vary(existing);
+      next();
+    });
+    app.all('/.well-known/oauth-protected-resource/mcp', protectedResourceMetadataHandler());
+
+    await withListening(app, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`, {
+        headers: { 'X-Forwarded-Host': 'forwarded.example', 'X-Forwarded-Proto': 'https' },
+        signal: AbortSignal.timeout(2000),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ resource: 'https://forwarded.example/mcp' });
+      expect(res.headers.get('vary')).toBe(expected);
+    });
+  });
+
+  test.each([
+    {
+      label: 'fixed resourceUrl',
+      trustProxy: true,
+      configured: 'https://configured.example/mcp',
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'https://configured.example/mcp',
+    },
+    {
+      label: 'trust proxy off',
+      trustProxy: false,
+      configured: undefined,
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'http://header.example/mcp',
+    },
+    {
+      label: 'untrusted immediate peer',
+      trustProxy: () => false,
+      configured: undefined,
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'http://header.example/mcp',
+    },
+    {
+      label: 'absolute-form target',
+      trustProxy: true,
+      configured: undefined,
+      target: 'https://target.example/.well-known/oauth-protected-resource/mcp',
+      resource: 'https://target.example/mcp',
+    },
+    {
+      label: 'listed URLs with trust proxy off',
+      trustProxy: false,
+      configured: ['http://header.example/mcp', 'https://forwarded.example/mcp'],
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'http://header.example/mcp',
+    },
+    {
+      label: 'listed URLs with an untrusted immediate peer',
+      trustProxy: () => false,
+      configured: ['http://header.example/mcp', 'https://forwarded.example/mcp'],
+      target: '/.well-known/oauth-protected-resource/mcp',
+      resource: 'http://header.example/mcp',
+    },
+    {
+      label: 'listed URLs with an absolute-form target',
+      trustProxy: true,
+      configured: ['https://target.example/mcp', 'https://forwarded.example/mcp'],
+      target: 'https://target.example/.well-known/oauth-protected-resource/mcp',
+      resource: 'https://target.example/mcp',
+    },
+  ])(
+    'does not add forwarded Vary with $label',
+    async ({ trustProxy, configured, target, resource }) => {
+      const response = await sendRawTo(
+        protectedResourceMetadataHandler({ resourceUrl: configured }),
+        `GET ${target} HTTP/1.1\r\nHost: header.example\r\nX-Forwarded-Host: forwarded.example\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n`,
+        (app, handler) => {
+          app.set('trust proxy', trustProxy);
+          return app.all('/.well-known/oauth-protected-resource/mcp', handler);
+        },
+      );
+
+      expect(response.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+      expect(JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4))).toMatchObject({
+        resource,
+      });
+      expect(response).toContain('Cache-Control: max-age=3600');
+      expect(response).not.toMatch(/\r\nVary:/i);
+    },
+  );
+
   test('uses the absolute-form authority for metadata despite a conflicting Host', async () => {
     const response = await sendRawTo(
       protectedResourceMetadataHandler(),
