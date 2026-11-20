@@ -520,14 +520,26 @@ function isBound(value: { issuer?: string }): value is { issuer: string } {
 }
 
 /**
- * Compares issuers the way the SDK does, ignoring a trailing slash.
+ * Compares issuers the way the SDK does: as parsed URLs when both parse, so
+ * the spelling of scheme, host or default port does not matter, and ignoring
+ * a trailing slash.
  */
-function issuersMatch(x: string, y: string) {
+function issuersMatch(a: string, b: string) {
+  const [x, y] = canParseUrl(a) && canParseUrl(b) ? [new URL(a).href, new URL(b).href] : [a, b];
   return (
     x === y ||
     (x.endsWith('/') && x.slice(0, -1) === y) ||
     (y.endsWith('/') && y.slice(0, -1) === x)
   );
+}
+
+function canParseUrl(value: string) {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

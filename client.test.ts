@@ -268,6 +268,24 @@ describe('OAuth credential persistence', () => {
     expect(await reloaded.authProvider.tokens()).toMatchObject({ issuer: 'https://a.example/' });
   });
 
+  test('saves compare issuers as URLs, as the SDK does', async () => {
+    const store = createStore();
+    await store.write('session_bound', {
+      ...clientParams,
+      oauthClientInformation: { ...clientInformation, issuer: 'https://AUTH.example:443/' },
+    });
+    const resumed = await getMcpClientBySessionId({ sessionId: 'bound', store });
+    await resumed.authProvider.saveTokens({ ...tokens, issuer: 'https://auth.example' });
+    expect(await store.read('session_bound')).toMatchObject({
+      oauthTokens: { issuer: 'https://auth.example' },
+    });
+    await expect(
+      resumed.authProvider.saveTokens({ ...tokens, issuer: 'https://auth.example:8443/' }),
+    ).rejects.toThrow(
+      'is bound to authorization server https://AUTH.example:443/ and does not save tokens for https://auth.example:8443/',
+    );
+  });
+
   test('SDK rejects credentials bound to another issuer before exchanging a code', async () => {
     const store = createStore();
     await store.write('session_bound', {
