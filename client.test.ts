@@ -3,8 +3,9 @@ import type {
   OAuthClientInformationMixed,
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
+  completeOAuth,
   createDynamicallyRegisteredMcpClient,
   createKnownCredentialsMcpClient,
   getMcpClientBySessionId,
@@ -110,6 +111,11 @@ function authorizationServerFetch(url: string) {
   return { authorizationServer, fetchFn };
 }
 
+/** The error a resumed session gives for client credentials not bound to an issuer. */
+function notBound(sessionId: string) {
+  return `Session "${sessionId}" has OAuth client credentials that are not bound to an authorization server`;
+}
+
 /** The requests that carry credentials, as `METHOD url`. */
 function credentialRequests(fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) {
   return fetchFn.mock.calls
@@ -118,32 +124,46 @@ function credentialRequests(fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) {
 }
 
 describe('OAuth credential persistence', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   test.each(['known', 'dynamic'] as const)(
     '%s client retains complete SDK credentials',
     async (kind) => {
       const store = createStore();
       const options = { ...clientParams, store, redirect: vi.fn() };
-      const initial =
-        kind === 'known'
-          ? await createKnownCredentialsMcpClient({
-              ...options,
-              clientId: 'client-id',
-              clientSecret: 'client-secret',
-            })
-          : await createDynamicallyRegisteredMcpClient(options);
+      const { sessionId, expected } = await (async () => {
+        if (kind === 'dynamic') {
+          const initial = await createDynamicallyRegisteredMcpClient(options);
+          await initial.authProvider.saveClientInformation!(clientInformation);
+          return { sessionId: initial.sessionId, expected: clientInformation };
+        }
+        // Known credentials are bound when authorization starts.
+        const initial = await createKnownCredentialsMcpClient({
+          ...options,
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+        });
+        const { fetchFn } = authorizationServerFetch(issuer);
+        await expect(
+          auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+        ).resolves.toBe('REDIRECT');
+        return {
+          sessionId: initial.sessionId,
+          expected: { client_id: 'client-id', client_secret: 'client-secret', issuer },
+        };
+      })();
 
-      await initial.authProvider.saveClientInformation!(clientInformation);
-      expect(await initial.authProvider.clientInformation()).toEqual(clientInformation);
-
-      const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store });
-      expect(await resumed.authProvider.clientInformation()).toEqual(clientInformation);
+      const resumed = await getMcpClientBySessionId({ sessionId, store });
+      expect(await resumed.authProvider.clientInformation()).toEqual(expected);
       await resumed.authProvider.saveTokens(tokens);
       expect(await resumed.authProvider.tokens()).toEqual(tokens);
       // Saving tokens must not erase the issuer saved immediately before them.
-      expect(await resumed.authProvider.clientInformation()).toEqual(clientInformation);
+      expect(await resumed.authProvider.clientInformation()).toEqual(expected);
 
-      const reloaded = await getMcpClientBySessionId({ sessionId: initial.sessionId, store });
-      expect(await reloaded.authProvider.clientInformation()).toEqual(clientInformation);
+      const reloaded = await getMcpClientBySessionId({ sessionId, store });
+      expect(await reloaded.authProvider.clientInformation()).toEqual(expected);
       expect(await reloaded.authProvider.tokens()).toEqual(tokens);
       expect(reloaded.clientData).toMatchObject({
         clientId: 'client-id',
@@ -168,7 +188,7 @@ describe('OAuth credential persistence', () => {
     expect(await reloaded.authProvider.tokens()).toEqual(tokens);
   });
 
-  test('legacy sessions remain readable and sequential saves merge the latest session', async () => {
+  test('legacy sessions present only their access token and sequential saves merge the latest session', async () => {
     const store = createStore();
     const legacy = {
       ...clientParams,
@@ -179,21 +199,17 @@ describe('OAuth credential persistence', () => {
     };
     await store.write('session_legacy', legacy);
     const resumed = await getMcpClientBySessionId({ sessionId: 'legacy', store });
-    expect(await resumed.authProvider.clientInformation()).toEqual({
-      client_id: 'legacy-client',
-      client_secret: 'legacy-secret',
-    });
+    expect(resumed.authProvider.saveClientInformation).toBeUndefined();
+    await expect(resumed.authProvider.clientInformation()).rejects.toThrow(notBound('legacy'));
     expect(await resumed.authProvider.tokens()).toEqual({
       access_token: 'legacy-access',
       token_type: 'Bearer',
     });
 
     await store.write('session_legacy', { ...legacy, authComplete: true });
-    await resumed.authProvider.saveClientInformation!(clientInformation);
     await resumed.authProvider.saveTokens(tokens);
     expect(await store.read('session_legacy')).toMatchObject({
       authComplete: true,
-      oauthClientInformation: clientInformation,
       oauthTokens: tokens,
     });
   });
@@ -205,40 +221,45 @@ describe('OAuth credential persistence', () => {
     expect(await resumed.authProvider.clientInformation()).toBeUndefined();
   });
 
-  test('SDK code exchange binds legacy credentials before saving tokens', async () => {
+  test('SDK code exchange uses known credentials bound at redirect', async () => {
     const store = createStore();
+    const { fetchFn } = authorizationServerFetch('https://a.example/');
     const initial = await createKnownCredentialsMcpClient({
       ...clientParams,
       store,
       redirect: vi.fn(),
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
+      clientId: 'user-client',
+      clientSecret: 'user-secret',
     });
-    const state = await initial.authProvider.state!();
-    await initial.authProvider.saveCodeVerifier('verifier');
-    const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
-        access_token: 'access-token',
-        refresh_token: 'refresh-token',
-        token_type: 'Bearer',
-      }),
-    );
-
     await expect(
-      auth(
-        { ...resumed.authProvider, discoveryState },
-        {
-          serverUrl: clientParams.mcpEndpoint,
-          authorizationCode: 'code',
-          fetchFn,
-        },
-      ),
+      auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).resolves.toBe('REDIRECT');
+    // Bound before the user is sent to the authorization server, with nothing posted.
+    expect(await store.read(`session_${initial.sessionId}`)).toMatchObject({
+      oauthClientInformation: {
+        client_id: 'user-client',
+        client_secret: 'user-secret',
+        issuer: 'https://a.example/',
+      },
+    });
+    expect(credentialRequests(fetchFn)).toEqual([]);
+
+    const state = await initial.authProvider.state!();
+    const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
+    await expect(
+      auth(resumed.authProvider, {
+        serverUrl: clientParams.mcpEndpoint,
+        authorizationCode: 'code',
+        fetchFn,
+      }),
     ).resolves.toBe('AUTHORIZED');
+    expect(credentialRequests(fetchFn)).toEqual(['POST https://a.example/token']);
     const reloaded = await getMcpClientBySessionId({ sessionId: initial.sessionId, store });
-    expect(await reloaded.authProvider.clientInformation()).toMatchObject({ issuer });
-    expect(await reloaded.authProvider.tokens()).toMatchObject({ issuer });
-    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(await reloaded.authProvider.clientInformation()).toMatchObject({
+      client_id: 'user-client',
+      issuer: 'https://a.example/',
+    });
+    expect(await reloaded.authProvider.tokens()).toMatchObject({ issuer: 'https://a.example/' });
   });
 
   test('SDK rejects credentials bound to another issuer before exchanging a code', async () => {
@@ -341,7 +362,7 @@ describe('OAuth credential persistence', () => {
     },
   );
 
-  test('a pre-upgrade session does not send its refresh token or client secret to an unverified issuer', async () => {
+  test('a pre-upgrade session that gets a 401 sends no refresh token or client secret', async () => {
     const store = createStore();
     const legacy = {
       ...clientParams,
@@ -356,9 +377,182 @@ describe('OAuth credential persistence', () => {
 
     await expect(
       auth(resumed.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
-    ).rejects.toThrow('Unexpected call to AuthProvider method "saveCodeVerifier"');
+    ).rejects.toThrow(notBound('legacy'));
     expect(credentialRequests(fetchFn)).toEqual([]);
     expect(await store.read('session_legacy')).toEqual(legacy);
+  });
+
+  test.each([
+    ['in flight during the upgrade', false],
+    ['completed, with its callback replayed', true],
+  ] as const)('a pre-upgrade session %s exchanges no code', async (_name, authComplete) => {
+    const store = createStore();
+    const legacy = {
+      ...clientParams,
+      clientId: 'user-client',
+      clientSecret: 'user-secret',
+      ...(authComplete
+        ? { accessToken: 'legacy-access', refreshToken: 'legacy-refresh', authComplete }
+        : {}),
+    };
+    await store.write('session_legacy', legacy);
+    await store.write('state_legacy-state', 'legacy');
+    await store.write('pkce_verifier_legacy-state', 'verifier');
+    const { fetchFn } = authorizationServerFetch('https://b.example/');
+    vi.stubGlobal('fetch', fetchFn);
+
+    await expect(completeOAuth({ state: 'legacy-state', code: 'code', store })).rejects.toThrow(
+      notBound('legacy'),
+    );
+    expect(credentialRequests(fetchFn)).toEqual([]);
+    expect(await store.read('session_legacy')).toEqual(legacy);
+  });
+
+  test.each(['known', 'dynamic'] as const)(
+    'a %s session does not exchange its code at an authorization server named after the redirect',
+    async (kind) => {
+      const store = createStore();
+      const { authorizationServer, fetchFn } = authorizationServerFetch('https://a.example/');
+      const options = { ...clientParams, store, redirect: vi.fn() };
+      const initial =
+        kind === 'known'
+          ? await createKnownCredentialsMcpClient({
+              ...options,
+              clientId: 'user-client',
+              clientSecret: 'user-secret',
+            })
+          : await createDynamicallyRegisteredMcpClient(options);
+      await expect(
+        auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+      ).resolves.toBe('REDIRECT');
+      const bound = await store.read(`session_${initial.sessionId}`);
+
+      authorizationServer.url = 'https://b.example/';
+      fetchFn.mockClear();
+      const state = await initial.authProvider.state!();
+      const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
+      // The callback, and the initializer starting another authorization.
+      for (const [provider, authorizationCode] of [
+        [resumed.authProvider, 'code'],
+        [initial.authProvider, undefined],
+      ] as const) {
+        await expect(
+          auth(provider, { serverUrl: clientParams.mcpEndpoint, authorizationCode, fetchFn }),
+        ).rejects.toThrow(
+          'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
+        );
+      }
+      expect(credentialRequests(fetchFn)).toEqual([]);
+      expect(await store.read(`session_${initial.sessionId}`)).toEqual(bound);
+    },
+  );
+
+  test('a replayed callback for a completed session exchanges no code at another authorization server', async () => {
+    const store = createStore();
+    const { authorizationServer, fetchFn } = authorizationServerFetch('https://a.example/');
+    vi.stubGlobal('fetch', fetchFn);
+    const initial = await createKnownCredentialsMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+      clientId: 'user-client',
+      clientSecret: 'user-secret',
+    });
+    await expect(
+      auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).resolves.toBe('REDIRECT');
+    const state = await initial.authProvider.state!();
+    await completeOAuth({ state, code: 'code', store });
+    const completed = await store.read(`session_${initial.sessionId}`);
+    expect(completed).toMatchObject({ authComplete: true, accessToken: 'access-from-a.example' });
+
+    authorizationServer.url = 'https://b.example/';
+    fetchFn.mockClear();
+    await expect(completeOAuth({ state, code: 'replayed', store })).rejects.toThrow(
+      'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
+    );
+    expect(credentialRequests(fetchFn)).toEqual([]);
+    expect(await store.read(`session_${initial.sessionId}`)).toEqual(completed);
+  });
+
+  test('a provider created before the session was bound presents the binding saved by another', async () => {
+    const store = createStore();
+    const { authorizationServer, fetchFn } = authorizationServerFetch('https://a.example/');
+    const initial = await createKnownCredentialsMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+      clientId: 'user-client',
+      clientSecret: 'user-secret',
+    });
+    const state = await initial.authProvider.state!();
+    // Both providers exist before the first binding.
+    const stale = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
+    await expect(
+      auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).resolves.toBe('REDIRECT');
+    const bound = await store.read(`session_${initial.sessionId}`);
+
+    authorizationServer.url = 'https://b.example/';
+    await expect(
+      auth(stale.authProvider, {
+        serverUrl: clientParams.mcpEndpoint,
+        authorizationCode: 'code',
+        fetchFn,
+      }),
+    ).rejects.toThrow(
+      'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
+    );
+    await expect(
+      stale.authProvider.saveTokens({ ...tokens, issuer: 'https://b.example/' }),
+    ).rejects.toThrow(
+      'is bound to authorization server https://a.example/ and does not save tokens for https://b.example/',
+    );
+    expect(credentialRequests(fetchFn)).toEqual([]);
+    expect(await store.read(`session_${initial.sessionId}`)).toEqual(bound);
+
+    authorizationServer.url = 'https://a.example/';
+    await expect(
+      auth(stale.authProvider, {
+        serverUrl: clientParams.mcpEndpoint,
+        authorizationCode: 'code',
+        fetchFn,
+      }),
+    ).resolves.toBe('AUTHORIZED');
+    expect(credentialRequests(fetchFn)).toEqual(['POST https://a.example/token']);
+  });
+
+  test('a save does not replace client information or tokens bound to another issuer', async () => {
+    const store = createStore();
+    const initial = await createDynamicallyRegisteredMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+    });
+    // Taken while the session is unbound, as a provider holding an outdated copy would.
+    const save = initial.authProvider.saveClientInformation!;
+    const bound = {
+      ...((await store.read(`session_${initial.sessionId}`)) as Record<string, JsonSerializable>),
+      oauthClientInformation: clientInformation,
+      oauthTokens: tokens,
+    } as JsonSerializable;
+    await store.write(`session_${initial.sessionId}`, bound);
+
+    const other = 'https://other-auth.example/';
+    await expect(save({ ...clientInformation, client_id: 'other', issuer: other })).rejects.toThrow(
+      `is bound to authorization server ${issuer} and does not save client information for ${other}`,
+    );
+    await expect(initial.authProvider.saveTokens({ ...tokens, issuer: other })).rejects.toThrow(
+      `is bound to authorization server ${issuer} and does not save tokens for ${other}`,
+    );
+    expect(await store.read(`session_${initial.sessionId}`)).toEqual(bound);
+
+    // The same issuer still saves.
+    await initial.authProvider.saveTokens({ ...tokens, access_token: 'next-access' });
+    expect(await store.read(`session_${initial.sessionId}`)).toMatchObject({
+      accessToken: 'next-access',
+      oauthTokens: { issuer },
+    });
   });
 
   test('a dynamic initializer that registered at one issuer does not register again at another', async () => {

@@ -98,24 +98,29 @@ export async function getMcpClientBySessionId({
       logo_uri: undefined,
       tos_uri: undefined,
     },
-    clientInformation: () => getStoredClientInformation(client),
-    // Absent once the client information is bound to an issuer, so the SDK
-    // rejects another authorization server instead of registering there and
-    // overwriting the stored credentials. This is a getter because the SDK
-    // binds unstamped credentials after the provider is created.
-    get saveClientInformation() {
-      if (client.oauthClientInformation?.issuer) return undefined;
-      return async (newInfo: OAuthClientInformationMixed) => {
-        client = await saveClientInformation(sessionId, store, newInfo);
-      };
+    // Read from the store, so a provider created before another one bound
+    // the session presents the bound client information. Only client
+    // information bound to an issuer is presented: credentials saved by an
+    // earlier version have none, and the SDK would send them, with the
+    // authorization code, to whichever authorization server the MCP server
+    // names. There is no saveClientInformation: a stored session never
+    // registers or rebinds.
+    clientInformation: async () => {
+      client = await getClientData(sessionId, store);
+      const info = getStoredClientInformation(client);
+      if (info && !isBound(info)) {
+        throw new Error(
+          `Session "${sessionId}" has OAuth client credentials that are not bound to an authorization server, so they are not sent to one. Start a new connection with createKnownCredentialsMcpClient or createDynamicallyRegisteredMcpClient.`,
+        );
+      }
+      return info;
     },
     tokens: () => {
       if (client.oauthTokens) return client.oauthTokens;
       if (!client.accessToken) return undefined;
       // Tokens saved by an earlier version have no issuer, and the SDK would
-      // send their refresh token and the client secret to whichever
-      // authorization server the MCP server names, so only the access token
-      // is returned.
+      // send their refresh token to whichever authorization server the MCP
+      // server names, so only the access token is returned.
       return {
         access_token: client.accessToken,
         token_type: 'Bearer',
@@ -258,9 +263,20 @@ export async function createKnownCredentialsMcpClient({
     },
     state: () => state,
     clientInformation: () => getStoredClientInformation(client),
-    // The SDK also saves known credentials after binding them to their issuer.
-    saveClientInformation: async (newInfo) => {
-      client = await saveClientInformation(sessionId, store, newInfo);
+    // The SDK reports the authorization server it discovered before it reads
+    // the client information and builds the authorization request. The known
+    // credentials are bound to it here, so the code exchange sends the code
+    // and client secret to that server only (RFC 9700 section 4.4.2). There
+    // is no saveClientInformation: known credentials never register, so
+    // another authorization server is rejected once they are bound.
+    saveDiscoveryState: async ({ authorizationServerUrl }) => {
+      client = await getClientData(sessionId, store);
+      if (client.oauthClientInformation && isBound(client.oauthClientInformation)) return;
+      client = await saveClientInformation(sessionId, store, {
+        client_id: clientParams.clientId,
+        client_secret: clientParams.clientSecret,
+        issuer: String(authorizationServerUrl),
+      });
     },
     // it's impossible that we have an access token at this point, so we always
     // return undefined
@@ -375,7 +391,12 @@ export async function createDynamicallyRegisteredMcpClient({
     // needed. If dynamic registration is complete, we will have stored the
     // oauth client credentials and will return them here, which the MCP SDK
     // uses to construct the authorization url with the client id.
-    clientInformation: () => getStoredClientInformation(client),
+    // Read from the store, so this provider sees a binding saved elsewhere
+    // and its saveClientInformation getter below is absent accordingly.
+    clientInformation: async () => {
+      client = await getClientData(sessionId, store);
+      return getStoredClientInformation(client);
+    },
     // this is called after a new oauth client is created, so we now have a
     // client id and secret. It is absent once that registration is bound to
     // an issuer, so a later authorization against another server is rejected
@@ -494,13 +515,53 @@ function getStoredClientInformation(
   return { client_id: client.clientId, client_secret: client.clientSecret };
 }
 
+function isBound(value: { issuer?: string }): value is { issuer: string } {
+  return typeof value.issuer === 'string';
+}
+
+/**
+ * Compares issuers the way the SDK does, ignoring a trailing slash.
+ */
+function issuersMatch(x: string, y: string) {
+  return (
+    x === y ||
+    (x.endsWith('/') && x.slice(0, -1) === y) ||
+    (y.endsWith('/') && y.slice(0, -1) === x)
+  );
+}
+
+/**
+ * Throws when the stored session holds a value bound to an issuer other than
+ * the incoming one, so a provider holding an outdated copy of the session
+ * cannot replace a binding another provider saved.
+ */
+function assertSameIssuer(
+  sessionId: string,
+  stored: { issuer?: string } | undefined,
+  incoming: { issuer?: string },
+  name: string,
+) {
+  if (!stored || !isBound(stored)) return;
+  if (isBound(incoming) && issuersMatch(stored.issuer, incoming.issuer)) return;
+  throw new Error(
+    `Session "${sessionId}" is bound to authorization server ${stored.issuer} and does not save ${name} for ${incoming.issuer ?? 'no authorization server'}.`,
+  );
+}
+
 async function saveClientInformation(
   sessionId: string,
   store: McpClientStore,
   clientInformation: OAuthClientInformationMixed,
 ): Promise<McpClientData> {
+  const stored = await getClientData(sessionId, store);
+  assertSameIssuer(
+    sessionId,
+    stored.oauthClientInformation,
+    clientInformation,
+    'client information',
+  );
   const client = {
-    ...(await getClientData(sessionId, store)),
+    ...stored,
     clientId: clientInformation.client_id,
     clientSecret: clientInformation.client_secret,
     oauthClientInformation: clientInformation,
@@ -514,8 +575,11 @@ async function saveClientTokens(
   store: McpClientStore,
   tokens: OAuthTokens,
 ): Promise<McpClientData> {
+  const stored = await getClientData(sessionId, store);
+  assertSameIssuer(sessionId, stored.oauthClientInformation, tokens, 'tokens');
+  assertSameIssuer(sessionId, stored.oauthTokens, tokens, 'tokens');
   const client = {
-    ...(await getClientData(sessionId, store)),
+    ...stored,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     oauthTokens: tokens,
