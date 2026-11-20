@@ -218,7 +218,11 @@ describe('generateServerCard', () => {
 
   // Controls on constraints the schema itself enforces, so a validator that accepted everything would fail them
   test.each([
-    ['a missing $schema', ({ $schema: _, ...card }: Record<string, unknown>) => card],
+    [
+      'a missing $schema',
+      (card: Record<string, unknown>) =>
+        Object.fromEntries(Object.entries(card).filter(([key]) => key !== '$schema')),
+    ],
     [
       'a dated $schema',
       (card: Record<string, unknown>) => ({
@@ -228,7 +232,11 @@ describe('generateServerCard', () => {
       }),
     ],
     ['a name without a slash', (card: Record<string, unknown>) => ({ ...card, name: 'weather' })],
-    ['a missing name', ({ name: _, ...card }: Record<string, unknown>) => card],
+    [
+      'a missing name',
+      (card: Record<string, unknown>) =>
+        Object.fromEntries(Object.entries(card).filter(([key]) => key !== 'name')),
+    ],
     [
       'a long description',
       (card: Record<string, unknown>) => ({ ...card, description: 'x'.repeat(101) }),
