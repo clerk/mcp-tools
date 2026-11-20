@@ -640,10 +640,18 @@ type JsonSerializable =
 interface McpClientStore {
   write: (key: string, data: JsonSerializable) => Promise<void>;
   read: (key: string) => Promise<JsonSerializable>;
+  // Optional: atomically write `value` only if `key` still holds `expected`
+  compareAndSet?: (
+    key: string,
+    expected: JsonSerializable,
+    value: JsonSerializable,
+  ) => Promise<boolean>;
 }
 ```
 
 The built-in stores have a few extra methods that may be useful, but only `read` and `write` are required for this to work.
+
+Implement `compareAndSet` if your backend can update a key atomically. It receives the value `read` returned as `expected`, writes `value` only if the key still holds it, and resolves whether it wrote. The client then saves each session only if it is unchanged since the save read it, and otherwise reads it and checks its authorization server binding again. Without `compareAndSet`, a save reads the session and then writes it, so two overlapping saves of the same session, such as two OAuth callbacks in separate processes, can still race: both can pass the binding check, and the later write replaces the earlier one. The Redis, Postgres, and SQLite stores implement it; the file system store, meant for development, does not.
 
 ### Reference docs
 
