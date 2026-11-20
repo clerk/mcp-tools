@@ -878,7 +878,8 @@ describe('publicAccess', () => {
     await expect(withoutToken(publicAccess, body)).resolves.toMatchObject(challenged);
   });
 
-  const openNotifications = [
+  // Notifications about work in a session, which are not checked against the caller
+  const sessionNotifications = [
     {
       jsonrpc: '2.0',
       method: 'notifications/cancelled',
@@ -893,33 +894,25 @@ describe('publicAccess', () => {
   ];
 
   test.each([
-    { methods: true },
-    { methods: ['ping'] },
-    { tools: ['search_docs'] },
-    { resources: ['docs://index'] },
-    { prompts: true },
+    [undefined, {}],
+    [{ methods: true }, {}],
+    [{ methods: ['ping'] }, {}],
+    [{ tools: ['search_docs'] }, {}],
+    [{ resources: ['docs://index'] }, {}],
+    [{ methods: true, tools: ['search_docs'], resources: true, prompts: true }, {}],
+    [{}, { discoverable: false }],
+    [{ methods: true }, { discoverable: false }],
   ] as const)(
-    'opens the cancelled, progress, and roots notifications when %j opens something',
-    async (publicAccess) => {
-      for (const notification of openNotifications) {
-        await expect(withoutToken(publicAccess, notification)).resolves.toEqual(open);
+    'challenges the cancelled, progress, and roots notifications whatever %j and %j open',
+    async (publicAccess, options) => {
+      for (const notification of sessionNotifications) {
+        await expect(withoutToken(publicAccess, notification, options)).resolves.toMatchObject(
+          challenged,
+        );
       }
-      await expect(withoutToken(publicAccess, openNotifications)).resolves.toEqual(open);
-    },
-  );
-
-  test.each([
-    {},
-    { methods: false },
-    { methods: [], tools: [], resources: [], prompts: false },
-  ] as const)(
-    'keeps the cancelled, progress, and roots notifications closed when %j, not discoverable, opens nothing',
-    async (publicAccess) => {
-      for (const notification of openNotifications) {
-        await expect(
-          withoutToken(publicAccess, notification, { discoverable: false }),
-        ).resolves.toMatchObject(challenged);
-      }
+      await expect(
+        withoutToken(publicAccess, [rpc('ping'), sessionNotifications[0]], options),
+      ).resolves.toMatchObject(challenged);
     },
   );
 

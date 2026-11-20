@@ -262,7 +262,7 @@ app.all(
 );
 ```
 
-`req.auth` is `undefined` for a request that `discoverable` or `publicAccess` let through. Set `discoverable: false` to require a token for every request, which also lets `mcpAuth` run without `express.json()`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+`req.auth` is `undefined` for a request that `discoverable` or `publicAccess` let through. Set `discoverable: false` to require a token for every request, except the methods a `publicAccess.methods` setting opens. With `discoverable: false` and no `publicAccess.methods`, `mcpAuth` never reads the body, so it also runs without `express.json()`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
 
 ## Protected Resource Metadata
 

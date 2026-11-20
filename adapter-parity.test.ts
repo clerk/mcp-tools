@@ -1275,6 +1275,32 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     },
   );
 
+  // They are not checked against the caller, so on a stateful server they could reach another user's session
+  test.each([
+    ['by default', {}],
+    [
+      'with every method and call open',
+      { publicAccess: { methods: true, tools: ['search_docs'], resources: true, prompts: true } },
+    ],
+  ])(
+    'challenges the cancelled, progress, and roots notifications without a token %s',
+    async (_case, options) => {
+      for (const body of [
+        { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } },
+        {
+          jsonrpc: '2.0',
+          method: 'notifications/progress',
+          params: { progressToken: 'a', progress: 1 },
+        },
+        { jsonrpc: '2.0', method: 'notifications/roots/list_changed' },
+      ]) {
+        const res = await send(options, { body });
+        expect(res.status, JSON.stringify(body)).toBe(401);
+        expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+      }
+    },
+  );
+
   test('opens the calls publicAccess names alongside the default', async () => {
     const options = { publicAccess: { tools: ['search_docs'] } };
 
