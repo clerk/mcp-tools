@@ -1,6 +1,6 @@
 // Scope helpers for the MCP step-up scope challenge. Only `requireAdditionalScopes` is public, re-exported from
 // `@clerk/mcp-tools/server`. This module is not a package entry point.
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from './mcp-types';
 
 // Assignable to the SDK 2.1+ `ScopeChallengeHandler`, which this package cannot import: SDK 2.x is not a dependency.
 type ScopeChallengeHandler = (context: {
@@ -65,17 +65,19 @@ export function missingScopes(required: readonly string[], authInfo: AuthInfo): 
 
 /**
  * The scopes to challenge for when `authInfo` lacks some of `required`, and `undefined` otherwise: the granted ones
- * followed by the missing ones, so the new grant keeps the old access.
+ * followed by the missing ones of `listed`, each once, so the new grant keeps the old access. `required` alone decides
+ * whether there is a challenge; `listed`, which defaults to `required`, decides what it asks for, so the middleware can
+ * also ask for the `challengeScopes` its tools step up to and the client reauthorizes once.
  */
-function challengeScopes(
+export function challengeScopes(
   required: readonly string[],
   authInfo: AuthInfo,
+  listed: readonly string[] = required,
 ): [string, ...string[]] | undefined {
-  const missing = missingScopes(required, authInfo);
-  if (missing.length === 0) return undefined;
+  if (missingScopes(required, authInfo).length === 0) return undefined;
   // A malformed granted scope is dropped: it would break the quoted header, and the SDK throws on the whole challenge.
   const granted = grantedScopes(authInfo).filter(isScopeToken);
-  return [...new Set([...granted, ...missing])] as [string, ...string[]];
+  return [...new Set([...granted, ...missingScopes(listed, authInfo)])] as [string, ...string[]];
 }
 
 /**

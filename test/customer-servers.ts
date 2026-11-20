@@ -7,8 +7,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 
-import { createBrowserSessionTool } from '../create-browser-session';
-import { requireAdditionalScopes } from '../server';
+import { createBrowserSessionTool } from '../tools';
+import { requireAdditionalScopes, toClerkAuthInfo } from '../server';
+import { clerkAuthenticated, oauthMetadata } from './mcp-harness';
 
 export const REQUIRED_SCOPES = ['email', 'user:org:read'] as const;
 
@@ -28,16 +29,18 @@ export type CustomerServerKind = 'v1-route' | 'v2-registration' | 'v2-own-tool';
 
 type Listener = (req: IncomingMessage, res: ServerResponse) => void;
 
-// Stands in for `verifyClerkToken` after the customer's token check.
+// The customer's already verified Clerk auth object, converted without forging or copying its provenance.
 function verify(token: string | undefined): AuthInfo | undefined {
   const match = Object.values(TOKENS).find((entry) => entry.token === token);
   if (!match) return undefined;
-  return {
-    token: match.token,
-    clientId: 'client_1',
-    scopes: match.scopes,
-    extra: { userId: 'user_1', verifiedBy: 'clerk' },
-  };
+  return toClerkAuthInfo(
+    {
+      ...clerkAuthenticated(match.scopes).toAuth(),
+      clientId: 'client_1',
+      userId: 'user_1',
+    },
+    match.token,
+  );
 }
 
 function bearer(req: Request) {
@@ -58,24 +61,8 @@ function resourceMetadataUrl(origin: string) {
 }
 
 function metadata(origin: string, path: string): Response | undefined {
-  if (path === '/.well-known/oauth-protected-resource/mcp') {
-    return Response.json({
-      resource: `${origin}/mcp`,
-      authorization_servers: [origin],
-      // Differs from the challenge's `scope`, so a client that ignored it would ask for this list instead.
-      scopes_supported: ['profile', 'offline_access', ...REQUIRED_SCOPES],
-    });
-  }
-  if (path === '/.well-known/oauth-authorization-server') {
-    return Response.json({
-      issuer: origin,
-      authorization_endpoint: `${origin}/authorize`,
-      token_endpoint: `${origin}/token`,
-      response_types_supported: ['code'],
-      code_challenge_methods_supported: ['S256'],
-    });
-  }
-  return undefined;
+  // Differs from the challenge's `scope`, so a client that ignored it would ask for this list instead.
+  return oauthMetadata(origin, path, ['profile', 'offline_access', ...REQUIRED_SCOPES]);
 }
 
 function unauthorized(origin: string) {
@@ -148,7 +135,7 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
       if (!authInfo) return unauthorized(origin);
       // The tool's registration option makes the SDK send the step-up challenge.
       return mcpHandler.fetch(req, {
-        authInfo: { ...authInfo, resourceMetadataUrl: resourceMetadataUrl(origin) },
+        authInfo: Object.assign(authInfo, { resourceMetadataUrl: resourceMetadataUrl(origin) }),
       });
     });
   },
@@ -171,7 +158,7 @@ const apps: Record<CustomerServerKind, (origin: string, fetchImpl: typeof fetch)
       const authInfo = verify(bearer(req));
       if (!authInfo) return unauthorized(origin);
       return mcpHandler.fetch(req, {
-        authInfo: { ...authInfo, resourceMetadataUrl: resourceMetadataUrl(origin) },
+        authInfo: Object.assign(authInfo, { resourceMetadataUrl: resourceMetadataUrl(origin) }),
       });
     });
   },

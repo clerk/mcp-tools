@@ -22,58 +22,71 @@
   },
   "files": [
     "dist",
+    "express/README.md",
     "hono/README.md",
+    "next/README.md",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
   "type": "module",
-  "main": "dist/",
   "exports": {
     "./client": {
+      "types": "./dist/client.d.mts",
       "import": "./dist/client.mjs",
-      "types": "./dist/client.d.mts"
+      "default": "./dist/client.mjs"
     },
-    "./feedback": {
-      "import": "./dist/feedback.mjs",
-      "types": "./dist/feedback.d.mts"
-    },
-    "./create-browser-session": {
-      "import": "./dist/create-browser-session.mjs",
-      "types": "./dist/create-browser-session.d.mts"
+    "./tools": {
+      "types": "./dist/tools.d.mts",
+      "import": "./dist/tools.mjs",
+      "default": "./dist/tools.mjs"
     },
     "./server": {
+      "types": "./dist/server.d.mts",
       "import": "./dist/server.mjs",
-      "types": "./dist/server.d.mts"
+      "default": "./dist/server.mjs"
     },
     "./next": {
+      "types": "./dist/next/index.d.mts",
       "import": "./dist/next/index.mjs",
-      "types": "./dist/next/index.d.mts"
+      "default": "./dist/next/index.mjs"
+    },
+    "./next/client": {
+      "types": "./dist/next/client.d.mts",
+      "import": "./dist/next/client.mjs",
+      "default": "./dist/next/client.mjs"
     },
     "./express": {
+      "types": "./dist/express/index.d.mts",
       "import": "./dist/express/index.mjs",
-      "types": "./dist/express/index.d.mts"
+      "default": "./dist/express/index.mjs"
     },
     "./hono": {
+      "types": "./dist/hono/index.d.mts",
       "import": "./dist/hono/index.mjs",
-      "types": "./dist/hono/index.d.mts"
+      "default": "./dist/hono/index.mjs"
     },
-    "./stores": "./dist/stores",
     "./stores/fs": {
+      "types": "./dist/stores/fs.d.mts",
       "import": "./dist/stores/fs.mjs",
-      "types": "./dist/stores/fs.d.mts"
+      "default": "./dist/stores/fs.mjs"
     },
     "./stores/redis": {
+      "types": "./dist/stores/redis.d.mts",
       "import": "./dist/stores/redis.mjs",
-      "types": "./dist/stores/redis.d.mts"
+      "default": "./dist/stores/redis.mjs"
     },
     "./stores/postgres": {
+      "types": "./dist/stores/postgres.d.mts",
       "import": "./dist/stores/postgres.mjs",
-      "types": "./dist/stores/postgres.d.mts"
+      "default": "./dist/stores/postgres.mjs"
     },
     "./stores/sqlite": {
+      "types": "./dist/stores/sqlite.d.mts",
       "import": "./dist/stores/sqlite.mjs",
-      "types": "./dist/stores/sqlite.d.mts"
-    }
+      "default": "./dist/stores/sqlite.mjs"
+    },
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
@@ -91,17 +104,15 @@
     "fmt:check": "oxfmt --check",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "version-packages": "changeset version && pnpm install --lockfile-only --engine-strict=false"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.4",
-    "@clerk/backend": "^3.2.13",
-    "@clerk/express": "^2.1.5",
-    "@clerk/hono": "^0.1.15",
-    "@clerk/nextjs": "^7.2.3",
+    "@clerk/backend": "^3.19.0",
+    "@clerk/express": "^2.1.70",
+    "@clerk/nextjs": "^7.9.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server": "2.4.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
@@ -110,6 +121,7 @@
     "better-sqlite3": "^11.10.0",
     "express": "^5",
     "hono": "^4.12.14",
+    "mcp-handler": "^2.3.1",
     "next": "^15.5.15",
     "oxfmt": "^0.45.0",
     "oxlint": "^1.60.0",
@@ -121,25 +133,37 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
-    "@clerk/express": "^2.1.5",
-    "@clerk/hono": "^0.1.0",
-    "@clerk/nextjs": "^7.2.3",
+    "@clerk/backend": "^3.19.0",
+    "@clerk/express": "^2.1.70",
+    "@clerk/nextjs": "^7.9.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.1.0",
     "better-sqlite3": "^8.7.0",
     "express": "^5.0.0",
     "hono": "^4.0.0",
+    "mcp-handler": "^2.0.0",
     "next": "^15.2.8 || ^15.3.8 || ^15.4.10 || ^15.5.9 || ^15.6.0-0 || ^16.0.10 || ^16.1.0-0",
     "pg": "^8.11.0",
     "redis": "^4.0.0",
     "zod": "^3.25 || ^4.0"
   },
   "peerDependenciesMeta": {
+    "@clerk/backend": {
+      "optional": true
+    },
     "@clerk/express": {
       "optional": true
     },
-    "@clerk/hono": {
+    "@clerk/nextjs": {
       "optional": true
     },
-    "@clerk/nextjs": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@modelcontextprotocol/server": {
+      "optional": true
+    },
+    "mcp-handler": {
       "optional": true
     },
     "express": {
@@ -158,6 +182,9 @@
       "optional": true
     },
     "better-sqlite3": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   },

@@ -1,0 +1,12 @@
+# CodeQL configuration merged into code scanning's default setup. It applies once the repository property
+# `github-codeql-config-file` is set to `./.github/codeql/codeql-config.yml` (an organization or repository admin sets
+# it; see https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/manage-your-configuration/edit-default-setup).
+#
+# Test files serve throwaway local Express and Hono apps, which trip `js/missing-rate-limiting` and similar queries
+# meant for deployed servers. Only tests and their helpers are ignored, so every published source file is still scanned.
+name: mcp-tools CodeQL config
+
+paths-ignore:
+  - '**/*.test.ts'
+  - '**/*.test-d.ts'
+  - 'test/**'

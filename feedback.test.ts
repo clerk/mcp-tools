@@ -3,8 +3,14 @@ import type { RequestInfo } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { submitFeedback, submitFeedbackTool, type SubmitFeedbackToolOptions } from './feedback';
-import { connectTool, sentBody } from './test/mcp-harness';
+import {
+  ERROR_CODE_META_KEY,
+  submitFeedback,
+  submitFeedbackTool,
+  type SubmitFeedbackToolOptions,
+} from './tools';
+import { clerkAuthenticated, connectTool, sentBody } from './test/mcp-harness';
+import { toClerkAuthInfo } from './server';
 
 const input = {
   kind: 'broken' as const,
@@ -335,15 +341,17 @@ describe('submitFeedbackTool', () => {
     });
   });
 
-  test('attaches the Clerk user and OAuth client from verifyClerkToken auth', async () => {
+  test('attaches the Clerk user and OAuth client from toClerkAuthInfo auth info', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => storedResponse());
     const client = await connect(fetchImpl, {
-      authInfo: {
-        token: 'oat_test',
-        clientId: 'client_123',
-        scopes: ['profile'],
-        extra: { userId: 'user_123', verifiedBy: 'clerk' },
-      },
+      authInfo: toClerkAuthInfo(
+        {
+          ...clerkAuthenticated(['profile']).toAuth(),
+          userId: 'user_123',
+          clientId: 'client_123',
+        },
+        'oat_test',
+      ),
     });
 
     await client.callTool({ name: 'submit_feedback', arguments: input });
@@ -361,7 +369,7 @@ describe('submitFeedbackTool', () => {
         token: 'external',
         clientId: 'external-client',
         scopes: [],
-        extra: { userId: 'user_01HEXTERNALPROVIDER' },
+        extra: { userId: 'user_01HEXTERNALPROVIDER', verifiedBy: 'clerk' },
       },
     });
 
@@ -386,6 +394,7 @@ describe('submitFeedbackTool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback limit reached for now.');
     expect(JSON.stringify(result.content)).toContain('Do not retry');
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'rate_limited' });
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('could not store feedback (status 429)'),
     );
@@ -401,6 +410,7 @@ describe('submitFeedbackTool', () => {
 
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback could not be sent.');
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'rejected' });
   });
 
   test('never logs the error message of a failed request', async () => {
@@ -428,6 +438,7 @@ describe('submitFeedbackTool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Feedback may not have been received.');
     expect(JSON.stringify(result.content)).toContain('continue with the task');
+    expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'unconfirmed' });
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('could not confirm the feedback was stored (TimeoutError)'),
     );
@@ -472,12 +483,14 @@ describe('submitFeedbackTool', () => {
 });
 
 describe('submitFeedbackTool on MCP SDK v2', () => {
-  const clerkAuthInfo: AuthInfo = {
-    token: 'oat_test',
-    clientId: 'client_123',
-    scopes: ['profile'],
-    extra: { userId: 'user_123', verifiedBy: 'clerk' },
-  };
+  const clerkAuthInfo = toClerkAuthInfo(
+    {
+      ...clerkAuthenticated(['profile']).toAuth(),
+      userId: 'user_123',
+      clientId: 'client_123',
+    },
+    'oat_test',
+  )!;
 
   function callTool(
     fetchImpl: typeof fetch,
