@@ -123,21 +123,34 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
   const initPromise = (async () => {
     await client.connect();
 
-    // Create table if it doesn't exist
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS ${tableName} (
-        key VARCHAR(255) PRIMARY KEY,
-        value JSONB NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      )
-    `);
+    // CREATE ... IF NOT EXISTS can still fail when stores start together on a
+    // new table, so each one takes a lock for the table name and creates it
+    // in a transaction, one at a time
+    await client.query('BEGIN');
+    try {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tableName]);
 
-    // Create index on created_at for potential cleanup queries
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at
-      ON ${tableName} (created_at)
-    `);
+      // Create table if it doesn't exist
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS ${tableName} (
+          key VARCHAR(255) PRIMARY KEY,
+          value JSONB NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+      `);
+
+      // Create index on created_at for potential cleanup queries
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at
+        ON ${tableName} (created_at)
+      `);
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    }
   })();
 
   const store = {
@@ -157,23 +170,17 @@ export function createPostgresStore(config: PostgresStoreConfig = {}) {
     read: async (k: string): Promise<JsonSerializable> => {
       await initPromise; // Ensure connected and table exists
 
-      const query = `SELECT value FROM ${tableName} WHERE key = $1`;
+      // Read the JSON text rather than pg's decoded JSONB, so a stored string
+      // is parsed once and comes back as the string that was written
+      const query = `SELECT value::text AS value FROM ${tableName} WHERE key = $1`;
       const result = await client.query(query, [k]);
 
       if (result.rows.length === 0) {
         return null;
       }
 
-      const value = result.rows[0].value;
-
-      // If it's already a JavaScript object (JSONB does this automatically), return it
-      if (typeof value === 'object') {
-        return value;
-      }
-
-      // Otherwise parse as JSON string
       try {
-        return JSON.parse(value);
+        return JSON.parse(result.rows[0].value);
       } catch {
         throw new Error(`Failed to parse stored value for key "${k}": Invalid JSON`);
       }
