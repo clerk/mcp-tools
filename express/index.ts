@@ -363,8 +363,14 @@ function discoveryHandler(
       mergedExposeHeaders.push('ETag');
     }
     res.status(status);
-    // An answer without a validator, such as an error, keeps none an earlier middleware set
+    // An answer without a validator, such as an error, keeps none an earlier middleware set. No earlier length survives
+    // either: a body is sent with its own, a HEAD answer carries the GET's, and another bodyless answer has none.
+    // `removeHeader` only when one was set, since it also stops Node framing a body by its length.
     if (headers.ETag === undefined) res.removeHeader('etag');
+    if (body !== null) res.setHeader('content-length', Buffer.byteLength(body));
+    else if (headers['Content-Length'] === undefined && res.hasHeader('content-length')) {
+      res.removeHeader('content-length');
+    }
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
     if (mergedExposeHeaders) {
       res.setHeader('access-control-expose-headers', mergedExposeHeaders.join(', '));

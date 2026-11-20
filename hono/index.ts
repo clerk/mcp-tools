@@ -290,7 +290,12 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
     else c.res.headers.set('etag', answer.headers.ETag);
     const cacheControl = answer.headers['Cache-Control'];
     if (cacheControl !== undefined) c.res.headers.set('cache-control', cacheControl);
-    // `c.body`, not `c.json` or a new Response, keeps the media type and the headers earlier middleware set
+    // An earlier length would misframe the body, so only a HEAD answer's own, the GET's, is sent; the runtime measures
+    // any body
+    const contentLength = answer.headers['Content-Length'];
+    if (contentLength === undefined) c.res.headers.delete('content-length');
+    else c.res.headers.set('content-length', contentLength);
+    // `c.body`, not `c.json` or a new Response, keeps the media type and the other headers earlier middleware set
     if (answer.body === null) return c.body(null, answer.status, answer.headers);
     return c.body(answer.body, answer.status as 200 | 400 | 405 | 412 | 421, answer.headers);
   };

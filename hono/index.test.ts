@@ -259,6 +259,34 @@ describe.each([
     expect(error.headers.get('cache-control')).toBe('no-store');
   });
 
+  test('sends the length of its own content over a Content-Length earlier middleware set', async () => {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      c.header('Content-Length', '4');
+      await next();
+    });
+    app.all(path, handler());
+
+    const res = await app.request(`http://myapp.com${path}`);
+    const body = await res.text();
+    const length = String(Buffer.byteLength(body));
+    const head = await app.request(`http://myapp.com${path}`, { method: 'HEAD' });
+    const notModified = await app.request(`http://myapp.com${path}`, {
+      headers: { 'if-none-match': res.headers.get('etag')! },
+    });
+    const error = await app.request(`http://myapp.com${path}`, { method: 'POST' });
+
+    expect(JSON.parse(body)).toEqual(expect.any(Object));
+    expect([null, length]).toContain(res.headers.get('content-length'));
+    expect(head.headers.get('content-length')).toBe(length);
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('content-length')).toBeNull();
+    expect(error.status).toBe(405);
+    expect([null, String(Buffer.byteLength(await error.text()))]).toContain(
+      error.headers.get('content-length'),
+    );
+  });
+
   test('answers HEAD without a body when mounted with app.get', async () => {
     const app = new Hono();
     app.get(path, handler());

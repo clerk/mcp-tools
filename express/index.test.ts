@@ -1242,6 +1242,43 @@ describe.each([
     expect(error.headers.get('cache-control')).toBe('no-store');
   });
 
+  test('sends the length of its own content over a Content-Length earlier middleware set', async () => {
+    const app = express();
+    app.use((_req, res, next) => {
+      res.setHeader('content-length', '4');
+      next();
+    });
+    app.all(path, handler());
+
+    const [res, body, head, notModified, error, errorBody] = await withListening(
+      app,
+      async (baseUrl) => {
+        const first = await fetch(`${baseUrl}${path}`);
+        const text = await first.text();
+        const failed = await fetch(`${baseUrl}${path}`, { method: 'POST' });
+        return [
+          first,
+          text,
+          await fetch(`${baseUrl}${path}`, { method: 'HEAD' }),
+          await fetch(`${baseUrl}${path}`, {
+            headers: { 'if-none-match': first.headers.get('etag')! },
+          }),
+          failed,
+          await failed.text(),
+        ] as const;
+      },
+    );
+    const length = String(Buffer.byteLength(body));
+
+    expect(JSON.parse(body)).toEqual(expect.any(Object));
+    expect(res.headers.get('content-length')).toBe(length);
+    expect(head.headers.get('content-length')).toBe(length);
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('content-length')).toBeNull();
+    expect(error.status).toBe(405);
+    expect(error.headers.get('content-length')).toBe(String(Buffer.byteLength(errorBody)));
+  });
+
   test('answers HEAD without a body when mounted with app.get', async () => {
     const app = express();
     app.get(path, handler());
