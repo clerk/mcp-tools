@@ -1161,13 +1161,19 @@ describe('createBrowserSessionTool', () => {
       ]);
     });
 
-    test('leaves a Clerk key shaped code out of the cause', async () => {
-      const { result } = await callWithOrg(async () => {
-        throw new OrganizationLookupError('sk_test_123', 'Reconnect.');
-      });
-      expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
-      expect(textOf(result)).toBe('Reconnect.');
-    });
+    test.each(['sk_test_123', 'pk_live_abc', 'exchange.sk_live_abc'])(
+      'leaves the Clerk key shaped code %s out of the cause and the log',
+      async (code) => {
+        const { result, logs } = await callWithOrg(async () => {
+          throw new OrganizationLookupError(code, 'Reconnect.');
+        });
+        expect(result._meta).toEqual({ [ERROR_CODE_META_KEY]: 'organization_lookup_failed' });
+        expect(textOf(result)).toBe('Reconnect.');
+        expect(logs).toEqual([
+          'Clerk error: createBrowserSession failed (organization_lookup_failed: organizationId threw OrganizationLookupError)',
+        ]);
+      },
+    );
 
     test('treats a BrowserSessionError with an unknown code as a failed lookup', async () => {
       const { result, logs } = await callWithOrg(async () => {
