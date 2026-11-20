@@ -1391,6 +1391,9 @@ test('hono publicAccess throws a setup error when a middleware before it read th
 const CARD_PATH = '/mcp/server-card';
 const CARD_TYPE = 'application/mcp-server-card+json';
 const CATALOG_PATH = '/.well-known/ai-catalog.json';
+// ARD v0.91 section 5.1: `ard.json` is the canonical path, and consumers may also consult its predecessor's
+// `ai-catalog.json` as an equivalent entry source. https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+const ARD_PATH = '/.well-known/ard.json';
 const CATALOG_TYPE = 'application/ai-catalog+json';
 const card = {
   name: 'com.example/weather',
@@ -1413,11 +1416,11 @@ const catalogEntries = [
 
 type DiscoveryHandler = 'serverCardHandler' | 'aiCatalogHandler';
 
-// Each adapter's discovery handler on its path, mounted for every method so OPTIONS and others reach it. The Next.js
-// route is the handler a route file exports for every method.
+// Each adapter's discovery handler on its paths, one handler mounted for every method so OPTIONS and others reach it.
+// The Next.js route is the handler each path's route file exports for every method.
 const discoveryAdapters: [
   Adapter,
-  (handler: DiscoveryHandler, path: string, options: Options) => App,
+  (handler: DiscoveryHandler, path: string | string[], options: Options) => App,
 ][] = [
   [
     'express',
@@ -1434,7 +1437,8 @@ const discoveryAdapters: [
     'hono',
     (handler, path, options) => {
       const app = new Hono();
-      app.all(path, honoAdapter[handler](at(options, origin) as never));
+      const discovery = honoAdapter[handler](at(options, origin) as never);
+      for (const each of [path].flat()) app.all(each, discovery);
       return app.fetch;
     },
   ],
@@ -1453,7 +1457,10 @@ const serverCardApps = discoveryAdapters.map(
 );
 const aiCatalogApps = discoveryAdapters.map(
   ([name, mount]) =>
-    [name, (options: Options) => mount('aiCatalogHandler', CATALOG_PATH, options)] as const,
+    [
+      name,
+      (options: Options) => mount('aiCatalogHandler', [ARD_PATH, CATALOG_PATH], options),
+    ] as const,
 );
 
 // The contract both discovery documents share, with the options that make one and what it should serve
@@ -2065,6 +2072,42 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
       ...discoveryCors,
     });
     expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
+  });
+
+  // The same handler on both paths, as each adapter's README mounts it, answers both from the one catalog it built
+  test('serves byte-identical catalogs with the same caching headers at ard.json and ai-catalog.json', async () => {
+    const app = mount(options);
+    const fetchRaw = async (path: string, headers: Record<string, string> = {}) => {
+      const res =
+        'listen' in app
+          ? await withListening(app, (local) =>
+              fetch(`${local}${path}`, { headers, signal: AbortSignal.timeout(5000) }),
+            )
+          : await app(new Request(`${origin}${path}`, { headers }));
+      return { status: res.status, headers: res.headers, text: await res.text() };
+    };
+    const [ard, catalog] = await Promise.all([fetchRaw(ARD_PATH), fetchRaw(CATALOG_PATH)]);
+
+    expect(ard.status).toBe(200);
+    expect(catalog.status).toBe(200);
+    expect(ard.text).toBe(catalog.text);
+    expect(linkedCardCatalogErrors(JSON.parse(ard.text))).toEqual([]);
+    for (const name of [
+      'content-type',
+      'cache-control',
+      'etag',
+      'vary',
+      ...Object.keys(discoveryCors),
+    ]) {
+      expect(ard.headers.get(name), name).toBe(catalog.headers.get(name));
+    }
+
+    // One path's ETag revalidates the other's copy
+    const revalidated = await fetchRaw(ARD_PATH, {
+      'if-none-match': catalog.headers.get('etag')!,
+    });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.text).toBe('');
   });
 
   test('tags each catalog by its content', async () => {
