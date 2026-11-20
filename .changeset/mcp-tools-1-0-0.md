@@ -1,5 +1,5 @@
 ---
-'@clerk/mcp-tools': minor
+'@clerk/mcp-tools': major
 ---
 
 **Breaking:** the existing APIs are replaced by a consolidated API across every entry point, modeled on the Clerk SDKs. Functions drop the `Clerk` suffix, `mcpAuth`, `withClerkMcpAuth` and the metadata handlers share one options object, and each adapter re-exports `./server`. The old names are removed without deprecated aliases. The complete migration list follows.
