@@ -162,7 +162,7 @@ function discoveryResponder(
   caller: string,
   config: { maxAge: unknown; mediaType: string; build: () => DiscoveryDocuments },
 ) {
-  const maxAge = config.maxAge ?? DEFAULT_MAX_AGE;
+  const maxAge = config.maxAge === undefined ? DEFAULT_MAX_AGE : config.maxAge;
   if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
     failFor(caller)('maxAge must be a whole number of seconds, 0 or more, or left out for 3600');
   }

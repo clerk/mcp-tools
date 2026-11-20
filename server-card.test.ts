@@ -154,6 +154,39 @@ describe('generateServerCard', () => {
     ).toBe(true);
   });
 
+  test.each([
+    'https://user:password@example.com/public',
+    'https://user@example.com/public',
+    'https://:password@example.com/public',
+    'https://us%65r:p%61ss@example.com/public',
+  ])('rejects credentials in every public optional URL: %s', (url) => {
+    for (const [field, options] of [
+      ['websiteUrl', { websiteUrl: url }],
+      ['icons', { icons: [{ src: url }] }],
+      ['repository', { repository: { url, source: 'git' } }],
+    ] as const) {
+      expect(() => generateServerCard({ ...required, ...options })).toThrow(
+        `Clerk error: generateServerCard ${field}`,
+      );
+    }
+  });
+
+  test.each(['https:///example.com/public', 'http:////example.com/public'])(
+    'rejects an empty raw HTTP authority in every URL field: %s',
+    (url) => {
+      for (const options of [
+        { resourceUrl: url },
+        { websiteUrl: url },
+        { icons: [{ src: url }] },
+        { repository: { url, source: 'git' } },
+      ]) {
+        expect(() => generateServerCard({ ...required, ...options })).toThrow(
+          'Clerk error: generateServerCard',
+        );
+      }
+    },
+  );
+
   test('preserves an encoded endpoint exactly in schema-valid serialized output', () => {
     const resourceUrl = 'https://example.com/a%20b?next=%2Fexact&x=1';
     const card = generateServerCard({ ...required, resourceUrl });

@@ -7,8 +7,10 @@
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const isText = (value: unknown) => typeof value === 'string';
+// RFC 3986 sections 2.3 and 3.2.2: reg-name includes unreserved characters (including _) and sub-delims,
+// not only DNS hostname characters. Keep this independent of the builder's URI check.
 const isExactHttpUrl = (value: string): boolean =>
-  /^https?:\/\/(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::\d+)?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/.test(
+  /^https?:\/\/(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._~!$&'()*+,;=%-]+)(?::\d*)?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/.test(
     value,
   ) &&
   !/%(?![a-fA-F0-9]{2})/.test(value) &&

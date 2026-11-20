@@ -335,7 +335,7 @@ app.all(
 
 With a list of `resourceUrl`s, the request's origin is the one Express gives the rest of the app, `req.protocol` and `req.host`, as for `mcpAuth`: behind a proxy, set `trust proxy` so they come from `X-Forwarded-Proto` and `X-Forwarded-Host`, which are ignored otherwise. The browser's `Origin` header plays no part. With a list, a request without a `Host` header that parses gets a `400`, since there is no origin to select by. A single `resourceUrl` never reads the request's URL, so that request still gets the card, as it does from `aiCatalogHandler`.
 
-Headers that earlier middleware set are kept, except the handler's own CORS headers, which replace any that middleware such as `cors` set on `GET` and `HEAD`, so the card stays readable from any origin. A `cors` middleware mounted with `app.use` in front of it answers the `OPTIONS` preflight itself; allow `If-Match` and `If-None-Match` there, or mount the discovery routes before it.
+Express writes the discovery answer's headers over earlier values, including `Cache-Control`, `ETag`, `Content-Type`, and `Access-Control-Allow-Origin`. It merges `ETag` into an earlier `Access-Control-Expose-Headers` value without duplication, preserving `*`. A `cors` middleware mounted with `app.use` in front of it answers the `OPTIONS` preflight itself; allow `If-Match` and `If-None-Match` there, or mount the discovery routes before it.
 
 ### `aiCatalogHandler`
 

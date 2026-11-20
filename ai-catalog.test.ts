@@ -84,6 +84,20 @@ describe('generateAICatalog', () => {
 });
 
 describe('generateAICatalog contract', () => {
+  test.each([
+    'https://my_host.example/card',
+    'https://my~host.example/card',
+    'https://my!host.example/card',
+    'https://ex%61mple.com/card',
+    'https://example.com:/a%20b?next=%2Fexact',
+    'https://[::1]:8443/a%20b',
+  ])('preserves the accepted URL and passes the independent contract: %s', (url) => {
+    const catalog = generateAICatalog({ entries: [{ ...weather, url }] });
+    const serialized = JSON.parse(JSON.stringify(catalog));
+    expect(serialized.entries[0].url).toBe(url);
+    expect(linkedCardCatalogErrors(serialized)).toEqual([]);
+  });
+
   test('generates a catalog the pinned AI Catalog contract accepts, linking cards on other hosts too', () => {
     const catalog = generateAICatalog({
       entries: [
@@ -181,6 +195,8 @@ describe('generateAICatalog contract', () => {
     'https://example.com/{tenant}/card',
     'https://example.com/a%zz',
     'https://example.com/café',
+    'https:///example.com/card',
+    'https:////example.com/card',
   ])('the linked-card contract rejects a repaired or non-ASCII URL: %s', (url) => {
     expect(linkedCardCatalogErrors({ ...valid, entries: [{ ...entry, url }] })).not.toEqual([]);
   });
@@ -328,6 +344,8 @@ describe('generateAICatalog options', () => {
     'https://example.com/{tenant}/card',
     'https://example.com/a%zz',
     'https://example.com/café',
+    'https:///example.com/card',
+    'https:////example.com/card',
   ])('rejects a non-exact URL %s', (url) => {
     expect(() => generateAICatalog({ entries: [{ ...weather, url }] })).toThrow(
       'Clerk error: generateAICatalog entries[0].url must be',

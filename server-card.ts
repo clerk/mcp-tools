@@ -26,7 +26,7 @@ type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string
  */
 export type ServerCardIcon = {
   /**
-   * An http or https URL, or a `data:` URI with the image.
+   * An http or https URL without credentials, or a `data:` URI with the image.
    */
   src: string;
   /**
@@ -48,7 +48,7 @@ export type ServerCardIcon = {
  */
 export type ServerCardRepository = {
   /**
-   * The repository's URL.
+   * The repository's http or https URL, without credentials.
    */
   url: string;
   /**
@@ -95,7 +95,7 @@ export type ServerCardOptions = {
    */
   title?: string | undefined;
   /**
-   * An http or https URL for the server's homepage or documentation.
+   * An http or https URL without credentials for the server's homepage or documentation.
    */
   websiteUrl?: string | undefined;
   /**
@@ -241,16 +241,16 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
     );
   }
   if (websiteUrl !== undefined && !isHttpUrl(websiteUrl)) {
-    fail('websiteUrl must be an absolute http or https URL');
+    fail('websiteUrl must be an absolute http or https URL without credentials');
   }
   if (icons !== undefined && !(Array.isArray(icons) && Array.from(icons).every(isIcon))) {
     fail(
-      "icons must be a list of { src, mimeType?, sizes?, theme? }, each src an http, https, or data: URL and theme 'light' or 'dark'",
+      "icons must be a list of { src, mimeType?, sizes?, theme? }, each src an http, https, or data: URL without credentials and theme 'light' or 'dark'",
     );
   }
   if (repository !== undefined && !isRepository(repository)) {
     fail(
-      'repository must be { url, source, subfolder?, id? } with an http or https url, string fields, and a clean relative subfolder (no URL scheme, absolute path, backslashes, leading or trailing /, empty segments, or . or .. segments)',
+      'repository must be { url, source, subfolder?, id? } with an http or https url without credentials, string fields, and a clean relative subfolder (no URL scheme, absolute path, backslashes, leading or trailing /, empty segments, or . or .. segments)',
     );
   }
   if (_meta !== undefined) assertMeta(fail, _meta);
@@ -374,7 +374,9 @@ function isUri(value: unknown): value is string {
 }
 
 function isHttpUrl(value: unknown): value is string {
-  return isUri(value) && /^https?:\/\//i.test(value);
+  if (!isUri(value) || !/^https?:\/\/[^/?#]+/i.test(value)) return false;
+  const url = new URL(value);
+  return url.username === '' && url.password === '';
 }
 
 // The remote is a URL the client connects to as it is, so it can't look like the extension's `{variable}` templates,

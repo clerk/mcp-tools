@@ -1687,7 +1687,7 @@ describe.each(discoveryApps)('%s conditional requests and caching', (_name, moun
     expect(revalidated.headers.get('cache-control')).toBe('public, no-cache');
   });
 
-  test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '60'])(
+  test.each([null, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '60'])(
     'throws at setup for the maxAge %s',
     (maxAge) => {
       expect(() => mount({ ...doc.options, maxAge })).toThrow(
@@ -1774,6 +1774,31 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
     ).toThrow('serverCardHandler repository');
   });
 
+  test.each([
+    'https://user:password@example.com/public',
+    'https://user@example.com/public',
+    'https://:password@example.com/public',
+    'https://us%65r:p%61ss@example.com/public',
+  ])('rejects public optional URL credentials at setup: %s', (url) => {
+    for (const [field, options] of [
+      ['websiteUrl', { websiteUrl: url }],
+      ['icons', { icons: [{ src: url }] }],
+      ['repository', { repository: { url, source: 'git' } }],
+    ] as const) {
+      expect(() => mount({ ...scalar, ...options })).toThrow(
+        `Clerk error: serverCardHandler ${field}`,
+      );
+    }
+  });
+
+  test('keeps website fragments and encoded paths in the public card', async () => {
+    const websiteUrl = 'https://example.com/a%20b#section';
+    const app = mount({ ...scalar, websiteUrl });
+    const res = await serve(app, CARD_PATH);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ websiteUrl });
+  });
+
   test.each(['description', 'title'])('counts %s by Unicode code points at setup', (key) => {
     expect(() => mount({ ...scalar, [key]: '🌤'.repeat(100) })).not.toThrow();
     expect(() => mount({ ...scalar, [key]: '🌤'.repeat(101) })).toThrow(
@@ -1783,6 +1808,10 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
 
   test.each([
     { resourceUrl: 'HTTPS://example.com/mcp' },
+    { resourceUrl: 'https:///example.com/mcp' },
+    { websiteUrl: 'https:///example.com/public' },
+    { icons: [{ src: 'https:///example.com/icon.png' }] },
+    { repository: { url: 'https:///example.com/repo', source: 'git' } },
     { resourceUrl: 'https:example.com/mcp' },
     { websiteUrl: 'https://example.com/a b' },
     { icons: [{ src: 'https://example.com/a b' }] },
@@ -1901,6 +1930,54 @@ describe.each(serverCardApps)('%s serverCardHandler', (_name, mount) => {
   });
 });
 
+test.each(['append', 'replace'])(
+  'Express snapshots a resourceUrl list before a caller can %s a matching URL',
+  async (mutation) => {
+    const app = express();
+    await withListening(app, async (local) => {
+      const listed = ['https://other.example.dev/mcp'];
+      if (mutation === 'replace') listed.push(`${local}/mcp`);
+      app.all(CARD_PATH, expressAdapter.serverCardHandler({ ...card, resourceUrl: listed }));
+
+      if (mutation === 'append') listed.push(`${local}/mcp`);
+      else listed[1] = 'https://evil.example/mcp';
+
+      const res = await read(
+        await fetch(`${local}${CARD_PATH}`, { signal: AbortSignal.timeout(5000) }),
+        local,
+      );
+      expect(res.status).toBe(mutation === 'append' ? 421 : 200);
+      if (mutation === 'replace') {
+        expect(res.body).toMatchObject({
+          remotes: [{ type: 'streamable-http', url: `${local}/mcp` }],
+        });
+      }
+    });
+  },
+);
+
+describe.each(serverCardApps.filter(([name]) => name !== 'express'))(
+  '%s serverCardHandler URL-list snapshot',
+  (_name, mount) => {
+    test('keeps the listed URLs it was created with when the list changes later', async () => {
+      const lacking = ['https://other.example.dev/mcp'];
+      const lackingApp = mount({ ...card, resourceUrl: lacking });
+      const listed = ['https://other.example.dev/mcp', `${origin}/mcp`];
+      const listedApp = mount({ ...card, resourceUrl: listed });
+
+      lacking.push(`${origin}/mcp`);
+      listed[1] = 'https://evil.example/mcp';
+
+      expect((await serve(lackingApp, CARD_PATH)).status).toBe(421);
+      const res = await serve(listedApp, CARD_PATH);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        remotes: [{ type: 'streamable-http', url: `${origin}/mcp` }],
+      });
+    });
+  },
+);
+
 describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
   const scalar = { ...card, resourceUrl: 'https://public.example.com/mcp' };
 
@@ -1917,26 +1994,6 @@ describe.each(serverCardApps)('%s serverCardHandler setup', (_name, mount) => {
       remotes: [{ type: 'streamable-http', url: 'https://public.example.com/mcp' }],
       _meta: { 'com.example/tier': 'free' },
     });
-  });
-
-  test('keeps the listed URLs it was created with when the list changes later', async () => {
-    const lacking = ['https://other.example.dev/mcp'];
-    const lackingApp = mount({ ...card, resourceUrl: lacking });
-    let listed: string[] = [];
-    const listedApp = mount((seen: string) => {
-      listed = ['https://other.example.dev/mcp', `${seen}/mcp`];
-      return { ...card, resourceUrl: listed };
-    });
-
-    lacking.push(`${origin}/mcp`);
-    listed[1] = 'https://evil.example/mcp';
-
-    expect((await serve(lackingApp, CARD_PATH)).status).toBe(421);
-    const res = await serve(listedApp, CARD_PATH);
-    expect(res.status).toBe(200);
-    expect((res.body as { remotes: unknown }).remotes).toEqual([
-      { type: 'streamable-http', url: `${res.origin}/mcp` },
-    ]);
   });
 
   test.each([
