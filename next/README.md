@@ -92,14 +92,15 @@ Tools read the verified auth info as `ctx.http?.authInfo`, as `@modelcontextprot
 
 #### 4. CORS for browser-based MCP clients
 
-Neither `withClerkMcpAuth` nor `mcp-handler` sets CORS headers on the MCP route. A browser-based client, such as MCP Inspector, needs the response to expose `WWW-Authenticate`, or it can't read the `401` challenge that points it to the metadata. It also sends `Authorization`, `Content-Type`, and, after `initialize`, `Mcp-Protocol-Version`, so the preflight must allow those request headers. To serve those clients, add the headers in `app/mcp/route.ts` and answer the preflight, which carries no token, before `withClerkMcpAuth`:
+Neither `withClerkMcpAuth` nor `mcp-handler` sets CORS headers on the MCP route. A browser-based client, such as MCP Inspector, needs the response to expose `WWW-Authenticate`, or it can't read the `401` challenge that points it to the metadata. It also sends `Authorization`, `Content-Type`, `Mcp-Protocol-Version`, and the [standard request headers](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#standard-request-headers) of the 2026-07-28 transport: `Mcp-Method` on every request, and `Mcp-Name` on `tools/call`, `resources/read`, and `prompts/get`. The preflight must allow all of them. If a tool marks a parameter with `x-mcp-header`, clients also send its `Mcp-Param-{Name}` header; add each of those names to the allowed headers too. To serve those clients, add the headers in `app/mcp/route.ts` and answer the preflight, which carries no token, before `withClerkMcpAuth`:
 
 ```ts
 // app/mcp/route.ts, in place of the export above
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Mcp-Protocol-Version',
+  'Access-Control-Allow-Headers':
+    'Authorization, Content-Type, Mcp-Protocol-Version, Mcp-Method, Mcp-Name',
   'Access-Control-Expose-Headers': 'WWW-Authenticate',
 };
 
