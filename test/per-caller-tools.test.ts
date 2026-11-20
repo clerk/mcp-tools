@@ -38,6 +38,8 @@ const authOptions = (resourceUrl: string) => ({
 
 const result = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 
+const isAdmin = (authInfo: AuthInfo | undefined) => authInfo?.extra?.role === 'admin';
+
 // What the README recipe registers: an admin tool only for an admin, so no other caller can list or call it
 type Registrar = {
   registerTool(
@@ -47,14 +49,14 @@ type Registrar = {
   ): unknown;
 };
 
-function registerTools(server: Registrar, authInfo: AuthInfo | undefined) {
+function registerTools(server: Registrar, { admin }: { admin: boolean }) {
   server.registerTool('search_docs', { description: 'Searches the public docs' }, async () =>
     result('results'),
   );
   server.registerTool('list_projects', { description: 'Lists your projects' }, async () =>
     result('projects'),
   );
-  if (authInfo?.extra?.role === 'admin') {
+  if (admin) {
     server.registerTool('delete_project', { description: 'Deletes a project' }, async () =>
       result('deleted'),
     );
@@ -97,6 +99,19 @@ const callDeleteProject = (send: Send, token?: string) =>
     token,
   );
 
+// The Next.js recipe: one handler for each set of tools, built once and chosen per request
+function nextRoute(options: { maxSubscriptions?: number } = {}) {
+  const handlers = {
+    admin: createMcpHandler((server) => registerTools(server, { admin: true }), options),
+    default: createMcpHandler((server) => registerTools(server, { admin: false }), options),
+  };
+  return nextAdapter.withClerkMcpAuth(
+    (req) =>
+      handlers[isAdmin((req as Request & { auth?: AuthInfo }).auth) ? 'admin' : 'default'](req),
+    authOptions(`${ORIGIN}/mcp`),
+  );
+}
+
 const servers: Record<string, (run: (send: Send) => Promise<void>) => Promise<void>> = {
   'express on MCP SDK 1.x': async (run) => {
     const app = express();
@@ -105,7 +120,9 @@ const servers: Record<string, (run: (send: Send) => Promise<void>) => Promise<vo
       app.all('/mcp', expressAdapter.mcpAuth(authOptions(`${base}/mcp`)), (req, res) =>
         expressAdapter.streamableHttpHandler(() => {
           const server = new McpServerV1({ name: 'projects', version: '0.0.0' });
-          registerTools(server, (req as express.Request & { auth?: AuthInfo }).auth);
+          registerTools(server, {
+            admin: isAdmin((req as express.Request & { auth?: AuthInfo }).auth),
+          });
           return server;
         }, StreamableHTTPServerTransport)(req, res),
       );
@@ -124,7 +141,7 @@ const servers: Record<string, (run: (send: Send) => Promise<void>) => Promise<vo
     app.all('/mcp', honoAdapter.mcpAuth(authOptions(`${ORIGIN}/mcp`)), (c) =>
       honoAdapter.streamableHttpHandler(() => {
         const server = new McpServerV1({ name: 'projects', version: '0.0.0' });
-        registerTools(server, c.get('mcpAuth'));
+        registerTools(server, { admin: isAdmin(c.get('mcpAuth')) });
         return server;
       }, WebTransportV1)(c),
     );
@@ -141,7 +158,7 @@ const servers: Record<string, (run: (send: Send) => Promise<void>) => Promise<vo
     app.all('/mcp', honoAdapter.mcpAuth(authOptions(`${ORIGIN}/mcp`)), (c) =>
       honoAdapter.streamableHttpHandler(() => {
         const server = new McpServerV2({ name: 'projects', version: '0.0.0' });
-        registerTools(server, c.get('mcpAuth'));
+        registerTools(server, { admin: isAdmin(c.get('mcpAuth')) });
         return server;
       }, WebTransportV2)(c),
     );
@@ -154,13 +171,7 @@ const servers: Record<string, (run: (send: Send) => Promise<void>) => Promise<vo
     );
   },
   'next with mcp-handler on MCP SDK 2.x': async (run) => {
-    const route = nextAdapter.withClerkMcpAuth(
-      (req) =>
-        createMcpHandler((server) =>
-          registerTools(server, (req as Request & { auth?: AuthInfo }).auth),
-        )(req),
-      authOptions(`${ORIGIN}/mcp`),
-    );
+    const route = nextRoute();
     await run(async (message, token) =>
       route(
         new Request(`${ORIGIN}/mcp`, {
@@ -207,5 +218,49 @@ describe.each(Object.entries(servers))('a per-caller tool list: %s', (name, with
       expect(allowed.status).toBe(200);
       expect((await messageOf(allowed)).result?.content?.[0]?.text).toBe('deleted');
     });
+  });
+});
+
+// MCP SDK 2.x counts the subscriptions/listen streams a handler holds open against `maxSubscriptions`, so a handler
+// built for each request would never reach the limit
+describe('a per-caller tool list: next with mcp-handler, on protocol revision 2026-07-28', () => {
+  test('keeps the limit on listen streams from clients without a token', async () => {
+    const route = nextRoute({ maxSubscriptions: 1 });
+    const abort = new AbortController();
+    const listen = () =>
+      route(
+        new Request(`${ORIGIN}/mcp`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            'mcp-protocol-version': '2026-07-28',
+            'mcp-method': 'subscriptions/listen',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'subscriptions/listen',
+            params: {
+              notifications: { toolsListChanged: true },
+              _meta: {
+                'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+                'io.modelcontextprotocol/clientInfo': { name: 'client', version: '0.0.0' },
+                'io.modelcontextprotocol/clientCapabilities': {},
+              },
+            },
+          }),
+          signal: abort.signal,
+        }),
+      );
+
+    const open = await listen();
+    expect(open.status).toBe(200);
+    expect(open.headers.get('content-type')).toBe('text/event-stream');
+
+    const refused = await listen();
+    expect((await messageOf(refused)).error?.message).toBe('Subscription limit reached');
+    abort.abort();
+    await open.body?.cancel();
   });
 });
