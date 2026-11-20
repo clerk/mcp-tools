@@ -86,6 +86,10 @@ describe('generateAICatalog', () => {
 describe('generateAICatalog contract', () => {
   test.each([
     'https://my_host.example/card',
+    'https://@example.com/card',
+    'https://:@example.com/card',
+    'https://@my_host.example/card',
+    'https://:@my_host.example/card',
     'https://my~host.example/card',
     'https://my!host.example/card',
     'https://ex%61mple.com/card',
@@ -96,6 +100,23 @@ describe('generateAICatalog contract', () => {
     const serialized = JSON.parse(JSON.stringify(catalog));
     expect(serialized.entries[0].url).toBe(url);
     expect(linkedCardCatalogErrors(serialized)).toEqual([]);
+  });
+
+  test.each([
+    'https://user:password@example.com/card',
+    'https://user@example.com/card',
+    'https://:password@example.com/card',
+    'https://us%65r:p%61ss@example.com/card',
+  ])('rejects credentials in the builder and independent contract: %s', (url) => {
+    expect(() => generateAICatalog({ entries: [{ ...weather, url }] })).toThrow(
+      'Clerk error: generateAICatalog entries[0].url must be',
+    );
+    expect(
+      linkedCardCatalogErrors({
+        specVersion: '0.9',
+        entries: [{ ...weather, type: CARD_TYPE, url }],
+      }),
+    ).not.toEqual([]);
   });
 
   test('generates a catalog the pinned AI Catalog contract accepts, linking cards on other hosts too', () => {
