@@ -283,7 +283,7 @@ ora treats a server that is closed to them in one of two ways, depending on what
 
 - `{ methods: ['initialize'] }` is the least that lets such a client connect, and is here only to show where that line is. It leaves `ping` closed, and `server/discover`, which clients on protocol revision 2026-07-28 use in place of `initialize`. Prefer `{ methods: true }`, or a list that names the methods you want open.
 - `{ methods: true }` is the setting that lets a scanner assess your tools: their names, descriptions, input and output schemas, and annotations all come from `tools/list`. It shows them to everyone else too, so use it when your list of tools is not a secret. It never opens a call.
-- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name. To let it read every listed resource, name each URI that `resources/list` returns, or set `resources: true`. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
+- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name. To let it read every listed resource, name each URI that `resources/list` returns. `resources: true` opens those too, but also every URI a resource template matches, so set it only when every resource and template is safe to read without auth info. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
 - These settings decide what a scanner can reach, not the score it gives. How a scanner counts a `401` for something you kept protected is its own rule.
 
 ##### Showing different tools to different callers
@@ -293,20 +293,26 @@ Every caller that may send `tools/list` gets the same list: each tool your serve
 Hide only what the caller can never obtain, such as an admin tool from a user who is not an admin. Keep a tool listed when the caller could be given access to it:
 
 - A tool that needs a scope the user could approve must stay listed. The `403` step-up answers a `tools/call`, and a model only calls the tools it was shown, so a hidden tool is never called and the user is never asked for the scope.
-- A protected tool must stay in the list a client without a token gets, for the same reason: the `401` that asks the user to sign in answers a call to it.
+- A protected tool that any signed-in user would see must stay in the list a client without a token gets, for the same reason: the `401` that asks the user to sign in answers a call to it.
+- A tool you show only to some users, such as an admin tool, is the exception. A client without a token does not say who the user is, so the recipe below leaves the tool out of its list. That keeps the tool from everyone who is not an admin, but an admin cannot reach it until they sign in for another reason and their client lists the tools again. Hide a tool from clients without a token only when you accept that.
 
-The list protects nothing by itself, so don't hide a tool by filtering the list or with the SDK's `disable()`. Register the tool only for the callers who may have it. `streamableHttpHandler` creates a server for each request, so build it from that request's auth info:
+The list protects nothing by itself, so don't hide a tool by filtering the list. Don't use the SDK's `disable()` either: it refuses a call to the tool, but on a server shared between requests it hides the tool from every caller, and its "disabled" error tells a caller the tool exists. Register the tool only for the callers who may have it. `streamableHttpHandler` creates a server for each request, so build it from that request's auth info:
 
 ```ts
-function createServer(authInfo: AuthInfo | undefined) {
-  const server = new McpServer({ name: 'projects', version: '1.0.0' });
+function registerTools(server: McpServer, { admin }: { admin: boolean }) {
   server.registerTool('search_docs' /* ... */);
   // Stays listed for everyone: a token without the scope gets the 403 step-up
   server.registerTool(
     'list_projects' /* ..., scopeChallenge: requireAdditionalScopes('projects:read') */,
   );
-  // Your own check. No one else can list this tool or call it.
-  if (isAdmin(authInfo)) server.registerTool('delete_project' /* ... */);
+  // No one else can list this tool or call it
+  if (admin) server.registerTool('delete_project' /* ... */);
+}
+
+function createServer(authInfo: AuthInfo | undefined) {
+  const server = new McpServer({ name: 'projects', version: '1.0.0' });
+  // `isAdmin` is your own check
+  registerTools(server, { admin: isAdmin(authInfo) });
   return server;
 }
 
@@ -327,21 +333,26 @@ app.all('/mcp', mcpAuth(mcpAuthOptions), (req, res) =>
 );
 ```
 
-In Next.js, create the `mcp-handler` handler for each request the same way, and register the tools from `req.auth`:
+In Next.js, create one `mcp-handler` handler for each set of tools, once, and choose between them from `req.auth`:
 
 ```ts
+const handlers = {
+  admin: createMcpHandler((server) => registerTools(server, { admin: true })),
+  default: createMcpHandler((server) => registerTools(server, { admin: false })),
+};
+
 const authHandler = withClerkMcpAuth(
   (req) =>
-    createMcpHandler((server) => {
-      registerTools(server, (req as Request & { auth?: AuthInfo }).auth);
-    })(req),
+    handlers[isAdmin((req as Request & { auth?: AuthInfo }).auth) ? 'admin' : 'default'](req),
   mcpAuthOptions,
 );
 ```
 
+Don't create the handler inside the route handler. MCP SDK 2.x counts the `subscriptions/listen` streams a handler holds open against its `maxSubscriptions`, and a handler created for a request starts that count again, so the limit never applies and a client without a token can hold open as many streams as the platform allows. Each handler keeps its own count, so the limit applies to each set of tools.
+
 - The auth info is `undefined` for a request that `publicAccess` let through, so decide what a client without a token is shown as well.
 - A call to a tool that is not registered for the caller is answered as a call to an unknown tool: "Tool delete_project not found", a JSON-RPC error on MCP SDK 2.x and an error result on 1.x, with no challenge. A request without a token gets the `401` before that, unless the tool is in `publicAccess.tools`.
-- A client can keep the list it got before the user signed in. The stateless handlers have no stream to send `notifications/tools/list_changed` on, so the client sees the new list when it next sends `tools/list`.
+- A client can keep the list it got before the user signed in. Nothing tells it that the caller changed: the server never sends `notifications/tools/list_changed` for a sign-in, so the client sees the new list when it next sends `tools/list`.
 - On protocol revision 2026-07-28 a list result says who may cache it. MCP SDK 2.x sends `cacheScope: "private"` unless you set `cacheHints`, which is right for a list that differs by caller: "`"private"` is appropriate for `resources/read` results that depend on the authenticated user, or for filtered list results that vary per user" ([Caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#choosing-a-cache-scope)). Don't set `tools/list` to `"public"` on such a server.
 
 #### Collecting feedback from agents
