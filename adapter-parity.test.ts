@@ -15,6 +15,7 @@ import { validateServerCard } from './test/server-card-schema';
 import type { AuthInfo } from './mcp-types';
 import { type McpAuthFailure, McpTokenVerificationError, toClerkAuthInfo } from './server';
 import { resourceMetadataUrlFor } from './bearer-auth';
+import { CREATE_BROWSER_SESSION_TOOL_NAME } from './create-browser-session';
 import * as expressAdapter from './express';
 import * as honoAdapter from './hono';
 import * as nextAdapter from './next';
@@ -1237,6 +1238,50 @@ describe.each(authApps)('%s publicAccess', (_name, mount) => {
       error: { code: -32000, message: 'Method not allowed.' },
       id: null,
     });
+  });
+});
+
+// The public identity tool warning is module-level, so each entry point is loaded fresh for its own.
+const freshAuthEntryPoints: [Adapter, () => Promise<(options: object) => unknown>][] = [
+  [
+    'express',
+    async () => {
+      const { mcpAuth } = await import('./express');
+      return (options) => mcpAuth(options as expressAdapter.McpAuthOptions);
+    },
+  ],
+  [
+    'hono',
+    async () => {
+      const { mcpAuth } = await import('./hono');
+      return (options) => mcpAuth(options as honoAdapter.McpAuthOptions);
+    },
+  ],
+  [
+    'next',
+    async () => {
+      const { withClerkMcpAuth } = await import('./next');
+      return (options) =>
+        withClerkMcpAuth(async () => new Response(), options as nextAdapter.McpAuthOptions);
+    },
+  ],
+];
+
+describe.each(freshAuthEntryPoints)('%s public identity tool warning', (_name, load) => {
+  test('warns once at setup when publicAccess.tools lists create_browser_session', async () => {
+    vi.resetModules();
+    const mount = await load();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    mount({ verifyToken, publicAccess: { tools: ['search_docs'] } });
+    expect(warn).not.toHaveBeenCalled();
+    mount({ verifyToken, publicAccess: { tools: [CREATE_BROWSER_SESSION_TOOL_NAME] } });
+    mount({ verifyToken, publicAccess: { tools: [CREATE_BROWSER_SESSION_TOOL_NAME] } });
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toMatch(
+      /^Clerk warning: create_browser_session requires a Clerk identity but is listed in publicAccess\.tools\./,
+    );
   });
 });
 

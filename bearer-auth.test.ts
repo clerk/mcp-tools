@@ -12,6 +12,7 @@ import {
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from './bearer-auth';
+import { CREATE_BROWSER_SESSION_TOOL_NAME } from './create-browser-session';
 import { type PublicAccess, McpAuthError, McpTokenVerificationError } from './server';
 import { FAKE_PK, clerkAuthenticated, expiresAt } from './test/mcp-harness';
 
@@ -274,46 +275,66 @@ describe('bearerAuthenticator', () => {
     });
   });
 
-  test.each([
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'],
-    ['https://mcp.example.com/mcp/', 'https://mcp.example.com/mcp/'],
-    ['https://mcp.example.com/mcp?tenant=1', 'https://mcp.example.com/mcp?tenant=1'],
-    ['https://MCP.example.com:443/mcp', 'https://mcp.example.com/mcp'],
-    ['https://mcp.example.com', 'https://mcp.example.com/'],
-    ['https://mcp.example.com/', 'https://mcp.example.com'],
-  ])('accepts a token for %s whose verifier reports %s', async (resourceUrl, resource) => {
-    const result = await authenticate({
-      requestUrl: 'https://mcp.example.com/mcp',
-      resourceUrl,
-      verifyToken: async () => ({ ...authInfo, resource: new URL(resource) }),
-    });
+  // `AuthInfo.resource` is a URL, but a JavaScript verifier can report the string it read, such as `payload.aud`
+  type ReportedCase = [resourceUrl: string, resource: string, form: string, reported: URL];
+  const reportedForms = (cases: [string, string][]): ReportedCase[] =>
+    cases.flatMap(([resourceUrl, resource]) => [
+      [resourceUrl, resource, 'URL', new URL(resource)],
+      [resourceUrl, resource, 'string', resource as unknown as URL],
+    ]);
 
-    expect(result).toMatchObject({ ok: true });
-  });
+  test.each(
+    reportedForms([
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'],
+      ['https://mcp.example.com/mcp/', 'https://mcp.example.com/mcp/'],
+      ['https://mcp.example.com/mcp?tenant=1', 'https://mcp.example.com/mcp?tenant=1'],
+      ['https://MCP.example.com:443/mcp', 'https://mcp.example.com/mcp'],
+      ['https://mcp.example.com', 'https://mcp.example.com/'],
+      ['https://mcp.example.com/', 'https://mcp.example.com'],
+    ]),
+  )(
+    'accepts a token for %s whose verifier reports %s as a %s',
+    async (resourceUrl, _, __, resource) => {
+      const result = await authenticate({
+        requestUrl: 'https://mcp.example.com/mcp',
+        resourceUrl,
+        verifyToken: async () => ({ ...authInfo, resource }),
+      });
 
-  test.each([
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp/'],
-    ['https://mcp.example.com/mcp/', 'https://mcp.example.com/mcp'],
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#section'],
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#'],
-    ['https://mcp.example.com', 'https://mcp.example.com/#section'],
-    ['https://mcp.example.com', 'https://mcp.example.com/#'],
-    ['https://mcp.example.com/mcp?tenant=1', 'https://mcp.example.com/mcp?tenant=1/'],
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/'],
-    ['https://mcp.example.com/mcp', 'http://mcp.example.com/mcp'],
-    ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp?tenant=1'],
-  ])('rejects a token for %s whose verifier reports %s', async (resourceUrl, resource) => {
-    const result = await authenticate({
-      resourceUrl,
-      verifyToken: async () => ({ ...authInfo, resource: new URL(resource) }),
-    });
+      expect(result).toMatchObject({ ok: true });
+    },
+  );
 
-    expect(result).toMatchObject({
-      ok: false,
-      status: 401,
-      failure: { reason: 'invalid_token', cause: { code: 'resource-mismatch' } },
-    });
-  });
+  test.each<ReportedCase>([
+    ...reportedForms([
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp/'],
+      ['https://mcp.example.com/mcp/', 'https://mcp.example.com/mcp'],
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#section'],
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp#'],
+      ['https://mcp.example.com', 'https://mcp.example.com/#section'],
+      ['https://mcp.example.com', 'https://mcp.example.com/#'],
+      ['https://mcp.example.com/mcp?tenant=1', 'https://mcp.example.com/mcp?tenant=1/'],
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com/'],
+      ['https://mcp.example.com/mcp', 'http://mcp.example.com/mcp'],
+      ['https://mcp.example.com/mcp', 'https://mcp.example.com/mcp?tenant=1'],
+    ]),
+    // A string that does not parse as a URL can't name the resource
+    ['https://mcp.example.com/mcp', 'not a url', 'string', 'not a url' as unknown as URL],
+  ])(
+    'rejects a token for %s whose verifier reports %s as a %s',
+    async (resourceUrl, _, __, resource) => {
+      const result = await authenticate({
+        resourceUrl,
+        verifyToken: async () => ({ ...authInfo, resource }),
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 401,
+        failure: { reason: 'invalid_token', cause: { code: 'resource-mismatch' } },
+      });
+    },
+  );
 
   test('leaves the resource unchecked when the verifier reports none, or resourceUrl is not set', async () => {
     const withoutResource = await authenticate({ resourceUrl: 'https://mcp.example.com/mcp' });
@@ -350,49 +371,46 @@ describe('public identity tool warning', () => {
     return (await import('./bearer-auth')).createBearerAuth;
   }
 
-  test.each(['mcpAuth', 'withClerkMcpAuth'])(
-    '%s warns at startup once across middleware instances, without changing public access',
-    async (caller) => {
-      const create = await freshAuth();
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      const verifyToken = vi.fn(async () => authInfo);
-      const defaultClient = vi.fn();
-      const options = {
-        verifyToken,
-        publicAccess: {
-          tools: ['create_browser_session', 'create_browser_session', 'search_docs'],
-        },
-      };
-      try {
-        const first = create(caller, options, defaultClient, 'Clerk');
-        // It is a setup warning, not one deferred until a request arrives.
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          'Clerk warning: create_browser_session requires a Clerk identity but is listed in publicAccess.tools. Calls without a token will get not_authenticated instead of a 401 challenge, so the client will not start sign-in. Remove create_browser_session from publicAccess.tools.',
-        );
-        const second = create(caller, options, defaultClient, 'Clerk');
-        for (const authenticate of [first, second, second]) {
-          await expect(
-            authenticate(undefined, {
-              authorization: undefined,
-              requestUrl: 'https://mcp.example.com/mcp',
-              method: 'POST',
-              body: async () => ({
-                jsonrpc: '2.0',
-                id: 1,
-                method: 'tools/call',
-                params: { name: 'create_browser_session' },
-              }),
+  test('warns at startup once across middleware instances, without changing public access', async () => {
+    const create = await freshAuth();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const verifyToken = vi.fn(async () => authInfo);
+    const defaultClient = vi.fn();
+    const options = {
+      verifyToken,
+      publicAccess: {
+        tools: [CREATE_BROWSER_SESSION_TOOL_NAME, CREATE_BROWSER_SESSION_TOOL_NAME, 'search_docs'],
+      },
+    };
+    try {
+      const first = create('mcpAuth', options, defaultClient, 'Clerk');
+      // It is a setup warning, not one deferred until a request arrives.
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        'Clerk warning: create_browser_session requires a Clerk identity but is listed in publicAccess.tools. Calls without a token will get not_authenticated instead of a 401 challenge, so the client will not start sign-in. Remove create_browser_session from publicAccess.tools.',
+      );
+      const second = create('mcpAuth', options, defaultClient, 'Clerk');
+      for (const authenticate of [first, second, second]) {
+        await expect(
+          authenticate(undefined, {
+            authorization: undefined,
+            requestUrl: 'https://mcp.example.com/mcp',
+            method: 'POST',
+            body: async () => ({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'tools/call',
+              params: { name: CREATE_BROWSER_SESSION_TOOL_NAME },
             }),
-          ).resolves.toEqual({ ok: true, authInfo: undefined });
-        }
-        expect(warn).toHaveBeenCalledOnce();
-        expect(verifyToken).not.toHaveBeenCalled();
-        expect(defaultClient).not.toHaveBeenCalled();
-      } finally {
-        warn.mockRestore();
+          }),
+        ).resolves.toEqual({ ok: true, authInfo: undefined });
       }
-    },
-  );
+      expect(warn).toHaveBeenCalledOnce();
+      expect(verifyToken).not.toHaveBeenCalled();
+      expect(defaultClient).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   test.each([
     undefined,
@@ -410,7 +428,7 @@ describe('public identity tool warning', () => {
       // A safe configuration must not consume the one-time warning for a later unsafe one.
       create(
         'mcpAuth',
-        { ...options, publicAccess: { tools: ['create_browser_session'] } },
+        { ...options, publicAccess: { tools: [CREATE_BROWSER_SESSION_TOOL_NAME] } },
         vi.fn(),
         'Clerk',
       );
