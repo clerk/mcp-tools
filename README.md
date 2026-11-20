@@ -140,7 +140,7 @@ For framework-specific implementations, see:
 
 #### Discovery: AI Catalogs (beta)
 
-An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, usually at `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
+An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
 
 `generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
@@ -167,6 +167,8 @@ const catalog = generateAICatalog({
   ],
 });
 ```
+
+Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler doesn't read the path, so it needs no configuration for either, and both answer with the same bytes and headers, `ETag` included.
 
 The handlers answer as the Server Card handlers do, with the catalog's media type, `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
 

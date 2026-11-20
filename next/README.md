@@ -286,10 +286,10 @@ export {
 
 ### `aiCatalogHandler(options)`
 
-Route handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Export it for each method, as `serverCardHandler`:
+Route handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Export it for each method, as `serverCardHandler`, from the route for `/.well-known/ard.json`, and re-export that route from `/.well-known/ai-catalog.json`, so both [catalog paths](../README.md#discovery-ai-catalogs-beta) serve it:
 
 ```ts
-// app/.well-known/ai-catalog.json/route.ts
+// app/.well-known/ard.json/route.ts
 import { aiCatalogHandler } from '@clerk/mcp-tools/next';
 
 const handler = aiCatalogHandler({
@@ -313,7 +313,12 @@ export {
 };
 ```
 
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
+```ts
+// app/.well-known/ai-catalog.json/route.ts
+export { GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE } from '../ard.json/route';
+```
+
+It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
 
 ### `completeOAuthHandler`
 

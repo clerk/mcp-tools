@@ -235,29 +235,35 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
 
 /**
  * A Hono handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
- * `/.well-known/ai-catalog.json` to find a domain's MCP servers. It validates the options and generates the catalog
+ * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers.
+ * It validates the options and generates the catalog
  * when it is created, so it needs no Clerk keys or MCP SDK and never fetches the cards it links to, and later changes
  * to the options change nothing. The catalog is the same for every request: to answer on several origins with their
- * own cards, create one handler for each and pick it by origin. Mount it with `app.all` so OPTIONS and other methods
- * reach it; importing it mounts nothing.
+ * own cards, create one handler for each and pick it by origin. Mount the one handler at both paths with `app.all` so
+ * OPTIONS and other methods reach it; importing it mounts nothing.
  *
  * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
  * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
  * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
- * `Cache-Control: no-store`.
+ * `Cache-Control: no-store`. Both paths get the same body and headers.
  * @see https://github.com/Agent-Card/ai-catalog
+ * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
  * @param options - See `AICatalogHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
  * @example
  * ```ts
- * app.all(
- *   '/.well-known/ai-catalog.json',
- *   aiCatalogHandler({
- *     entries: [
- *       { identifier: 'urn:air:example.com:weather:mcp', url: 'https://mcp.example.com/mcp/server-card' },
- *     ],
- *   }),
- * );
+ * const catalog = aiCatalogHandler({
+ *   entries: [
+ *     {
+ *       identifier: 'urn:air:example.com:weather:mcp',
+ *       displayName: 'Weather',
+ *       url: 'https://mcp.example.com/mcp/server-card',
+ *     },
+ *   ],
+ * });
+ *
+ * app.all('/.well-known/ard.json', catalog);
+ * app.all('/.well-known/ai-catalog.json', catalog);
  * ```
  */
 export function aiCatalogHandler(options: AICatalogHandlerOptions) {

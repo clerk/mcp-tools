@@ -296,26 +296,26 @@ app.all(
 
 ### `aiCatalogHandler(options)`
 
-Handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all`:
+Handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount the one handler with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs-beta), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
 
 ```ts
 import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
 
-app.all(
-  '/.well-known/ai-catalog.json',
-  aiCatalogHandler({
-    entries: [
-      {
-        identifier: 'urn:air:example.com:weather:mcp',
-        displayName: 'Weather',
-        url: 'https://mcp.example.com/mcp/server-card',
-      },
-    ],
-  }),
-);
+const catalog = aiCatalogHandler({
+  entries: [
+    {
+      identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
+      url: 'https://mcp.example.com/mcp/server-card',
+    },
+  ],
+});
+
+app.all('/.well-known/ard.json', catalog);
+app.all('/.well-known/ai-catalog.json', catalog);
 ```
 
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and keeps earlier middleware headers the same way. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
+It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and keeps earlier middleware headers the same way. Both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
 
 ### `streamableHttpHandler(createServer, Transport)`
 
