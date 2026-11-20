@@ -99,15 +99,20 @@ const callDeleteProject = (send: Send, token?: string) =>
     token,
   );
 
-// The Next.js recipe: one handler for each set of tools, built once and chosen per request
+// The Next.js recipe: one handler for each set of tools and one for clients without a token, built once and chosen
+// per request
 function nextRoute(options: { maxSubscriptions?: number } = {}) {
   const handlers = {
     admin: createMcpHandler((server) => registerTools(server, { admin: true }), options),
-    default: createMcpHandler((server) => registerTools(server, { admin: false }), options),
+    member: createMcpHandler((server) => registerTools(server, { admin: false }), options),
+    anonymous: createMcpHandler((server) => registerTools(server, { admin: false }), options),
   };
+  function handlerFor(authInfo: AuthInfo | undefined) {
+    if (!authInfo) return handlers.anonymous;
+    return isAdmin(authInfo) ? handlers.admin : handlers.member;
+  }
   return nextAdapter.withClerkMcpAuth(
-    (req) =>
-      handlers[isAdmin((req as Request & { auth?: AuthInfo }).auth) ? 'admin' : 'default'](req),
+    (req) => handlerFor((req as Request & { auth?: AuthInfo }).auth)(req),
     authOptions(`${ORIGIN}/mcp`),
   );
 }
@@ -222,16 +227,17 @@ describe.each(Object.entries(servers))('a per-caller tool list: %s', (name, with
 });
 
 // MCP SDK 2.x counts the subscriptions/listen streams a handler holds open against `maxSubscriptions`, so a handler
-// built for each request would never reach the limit
+// built for each request would never reach the limit, and callers who share a handler share its limit
 describe('a per-caller tool list: next with mcp-handler, on protocol revision 2026-07-28', () => {
   test('keeps the limit on listen streams from clients without a token', async () => {
     const route = nextRoute({ maxSubscriptions: 1 });
     const abort = new AbortController();
-    const listen = () =>
+    const listen = (token?: string) =>
       route(
         new Request(`${ORIGIN}/mcp`, {
           method: 'POST',
           headers: {
+            ...(token && { authorization: `Bearer ${token}` }),
             'content-type': 'application/json',
             accept: 'application/json, text/event-stream',
             'mcp-protocol-version': '2026-07-28',
@@ -260,7 +266,13 @@ describe('a per-caller tool list: next with mcp-handler, on protocol revision 20
 
     const refused = await listen();
     expect((await messageOf(refused)).error?.message).toBe('Subscription limit reached');
+
+    // Clients without a token have their own handler, so they cannot use up the limit for signed-in users
+    const member = await listen('token_member');
+    expect(member.status).toBe(200);
+    expect(member.headers.get('content-type')).toBe('text/event-stream');
     abort.abort();
     await open.body?.cancel();
+    await member.body?.cancel();
   });
 });
