@@ -56,7 +56,7 @@ export type AICatalogEntryOptions = {
 export type AICatalogTrustManifest = {
   /**
    * The publisher's identity, an absolute URI such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID. An
-   * `http`, `data`, `file`, or `javascript` URI is rejected.
+   * `http`, `data`, `file`, or `javascript` URI is rejected, as is an https URL with credentials.
    * ARD requires its trust domain to match the publisher in the entry's `identifier`, as `example.com` in
    * `urn:air:example.com:weather`.
    */
@@ -225,7 +225,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     }
     if (trustManifest !== undefined && !isTrustManifest(trustManifest)) {
       fail(
-        `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity that isn't http, data, file, or javascript, such as 'https://example.com' or 'did:web:example.com', and attestations a list of { type, uri, digest?, mediaType? } with an https URL or data: URI uri. Trust schemas, provenance, and signatures are not supported`,
+        `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity that isn't http, data, file, or javascript, nor an https URL with credentials, such as 'https://example.com' or 'did:web:example.com', and attestations a list of { type, uri, digest?, mediaType? } with an https URL or data: URI uri. Trust schemas, provenance, and signatures are not supported`,
       );
     }
     return {
@@ -290,9 +290,13 @@ function isAttestation(value: unknown): boolean {
 // network attacker can rewrite
 const UNTRUSTED_IDENTITY_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'http:']);
 
-// Open in ARD, so a did:, spiffe:, or https: identity, among others, is kept, but not a scheme that names no publisher
+// Open in ARD, so a did:, spiffe:, or https: identity, among others, is kept, but not a scheme that names no publisher,
+// nor an https URL with credentials, which the public catalog would publish
 function isIdentity(value: unknown): value is string {
-  return isUri(value) && !UNTRUSTED_IDENTITY_SCHEMES.has(new URL(value).protocol);
+  if (!isUri(value)) return false;
+  const { protocol } = new URL(value);
+  if (UNTRUSTED_IDENTITY_SCHEMES.has(protocol)) return false;
+  return protocol !== 'https:' || isHttpUrl(value);
 }
 
 // The pinned AI Catalog RC, Attestation Object: the uri "may be an HTTPS URL or an inline Data URI", so not plain

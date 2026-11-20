@@ -453,6 +453,10 @@ describe('generateAICatalog options', () => {
           'data:,example.com',
           'file:///etc/passwd',
           'http://example.com',
+          // Credentials in a URL would be published in a public, cached catalog
+          'https://user:password@example.com/',
+          'https://user@example.com/',
+          'HTTPS://user:password@example.com/',
         ].map((identity) => [`a trust manifest identity ${identity}`, { identity }] as const),
         ['a numeric identityType', { identity: 'https://example.com', identityType: 1 }],
         ['an empty identityType', { identity: 'https://example.com', identityType: '' }],
