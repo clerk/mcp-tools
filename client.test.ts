@@ -360,4 +360,32 @@ describe('OAuth credential persistence', () => {
     expect(credentialRequests(fetchFn)).toEqual([]);
     expect(await store.read('session_legacy')).toEqual(legacy);
   });
+
+  test('a dynamic initializer that registered at one issuer does not register again at another', async () => {
+    const store = createStore();
+    const { authorizationServer, fetchFn } = authorizationServerFetch('https://a.example/');
+    const initial = await createDynamicallyRegisteredMcpClient({
+      ...clientParams,
+      store,
+      redirect: vi.fn(),
+    });
+    await expect(
+      auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).resolves.toBe('REDIRECT');
+    const registered = await store.read(`session_${initial.sessionId}`);
+    expect(registered).toMatchObject({
+      clientId: 'registered-at-a.example',
+      oauthClientInformation: { issuer: 'https://a.example/' },
+    });
+
+    authorizationServer.url = 'https://b.example/';
+    fetchFn.mockClear();
+    await expect(
+      auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).rejects.toThrow(
+      'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
+    );
+    expect(credentialRequests(fetchFn)).toEqual([]);
+    expect(await store.read(`session_${initial.sessionId}`)).toEqual(registered);
+  });
 });
