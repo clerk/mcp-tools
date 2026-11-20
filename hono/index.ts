@@ -361,7 +361,11 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
       requestUrl: c.req.url,
       method: c.req.method,
       // A clone, so the MCP transport can still read the request
-      body: async () => readJsonBody(await requestWithBody(c)),
+      body: async () =>
+        readJsonBody(
+          await requestWithBody(c),
+          'Clerk warning: mcpAuth could not read the JSON body of a request without a token, because something before it already read c.req.raw, so discoverable and publicAccess open nothing and the request got the 401 challenge. Read the body through Hono, as c.req.json(), or read a copy, as c.req.raw.clone().json(), or set discoverable: false to require a token for every request',
+        ),
     });
     if ('serverError' in result) throw withJsonResponse(result.serverError);
     if (!result.ok) {
