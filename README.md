@@ -268,6 +268,80 @@ Nothing is open unless it is listed, and without `publicAccess` every request wi
 - A protected tool still declares the scopes it needs with `requireAdditionalScopes`, as in [Step-up for your own tools](#step-up-for-your-own-tools), so that a token without them gets the `403` step-up.
 - A mistake in `publicAccess`, such as `tools/call` in `methods`, throws a `Clerk error:` at startup.
 
+##### What a client without a token can reach
+
+Some clients never sign in: a scanner that grades MCP servers for agent readiness, such as ora, a registry crawler, or a user's client before they connect an account. They see only what `publicAccess` opens, so choose the setting by what you are willing to show them.
+
+| `publicAccess`                                      | A client without a token can                                                                       | It cannot                                                              |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Left out, the default                               | Do nothing: every request gets the `401`                                                           | Connect. ora does not score a server whose handshake needs credentials |
+| `{ methods: ['initialize'] }`                       | Connect, and read the server's name, version, capabilities, and instructions                       | List anything                                                          |
+| `{ methods: true }`                                 | Also list every tool, resource, resource template, and prompt, with their descriptions and schemas | Call a tool, read a resource, or get a prompt                          |
+| `{ methods: true, tools: [...], resources: [...] }` | Also call the tools and read the resources you name                                                | Reach anything you did not name                                        |
+
+- `{ methods: ['initialize'] }` is the least that lets such a client connect, and is here only to show where that line is. It leaves `ping` closed, and `server/discover`, which clients on protocol revision 2026-07-28 use in place of `initialize`. Prefer `{ methods: true }`, or a list that names the methods you want open.
+- `{ methods: true }` is the setting that lets a scanner assess your tools: their names, descriptions, input and output schemas, and annotations all come from `tools/list`. It shows them to everyone else too, so use it when your list of tools is not a secret. It never opens a call.
+- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name. To let it read every listed resource, name each URI that `resources/list` returns, or set `resources: true`. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
+- These settings decide what a scanner can reach, not the score it gives. How a scanner counts a `401` for something you kept protected is its own rule.
+
+##### Showing different tools to different callers
+
+Every caller that may send `tools/list` gets the same list: each tool your server registered. Protocol revision 2026-07-28 lets it differ by caller ("The set **MAY** vary by the authorization presented on the request — for example, returning only the tools the caller's granted scopes permit", [Tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#capabilities)), and your server decides that, not `mcpAuth`, which never sees the list.
+
+Hide only what the caller can never obtain, such as an admin tool from a user who is not an admin. Keep a tool listed when the caller could be given access to it:
+
+- A tool that needs a scope the user could approve must stay listed. The `403` step-up answers a `tools/call`, and a model only calls the tools it was shown, so a hidden tool is never called and the user is never asked for the scope.
+- A protected tool must stay in the list a client without a token gets, for the same reason: the `401` that asks the user to sign in answers a call to it.
+
+The list protects nothing by itself, so don't hide a tool by filtering the list or with the SDK's `disable()`. Register the tool only for the callers who may have it. `streamableHttpHandler` creates a server for each request, so build it from that request's auth info:
+
+```ts
+function createServer(authInfo: AuthInfo | undefined) {
+  const server = new McpServer({ name: 'projects', version: '1.0.0' });
+  server.registerTool('search_docs' /* ... */);
+  // Stays listed for everyone: a token without the scope gets the 403 step-up
+  server.registerTool(
+    'list_projects' /* ..., scopeChallenge: requireAdditionalScopes('projects:read') */,
+  );
+  // Your own check. No one else can list this tool or call it.
+  if (isAdmin(authInfo)) server.registerTool('delete_project' /* ... */);
+  return server;
+}
+
+// Hono
+app.all('/mcp', mcpAuth(mcpAuthOptions), (c) =>
+  streamableHttpHandler(
+    () => createServer(c.get('mcpAuth')),
+    WebStandardStreamableHTTPServerTransport,
+  )(c),
+);
+
+// Express. `mcpAuth` sets `req.auth`, which Express's own types do not declare.
+app.all('/mcp', mcpAuth(mcpAuthOptions), (req, res) =>
+  streamableHttpHandler(
+    () => createServer((req as express.Request & { auth?: AuthInfo }).auth),
+    StreamableHTTPServerTransport,
+  )(req, res),
+);
+```
+
+In Next.js, create the `mcp-handler` handler for each request the same way, and register the tools from `req.auth`:
+
+```ts
+const authHandler = withClerkMcpAuth(
+  (req) =>
+    createMcpHandler((server) => {
+      registerTools(server, (req as Request & { auth?: AuthInfo }).auth);
+    })(req),
+  mcpAuthOptions,
+);
+```
+
+- The auth info is `undefined` for a request that `publicAccess` let through, so decide what a client without a token is shown as well.
+- A call to a tool that is not registered for the caller is answered as a call to an unknown tool: "Tool delete_project not found", a JSON-RPC error on MCP SDK 2.x and an error result on 1.x, with no challenge. A request without a token gets the `401` before that, unless the tool is in `publicAccess.tools`.
+- A client can keep the list it got before the user signed in. The stateless handlers have no stream to send `notifications/tools/list_changed` on, so the client sees the new list when it next sends `tools/list`.
+- On protocol revision 2026-07-28 a list result says who may cache it. MCP SDK 2.x sends `cacheScope: "private"` unless you set `cacheHints`, which is right for a list that differs by caller: "`"private"` is appropriate for `resources/read` results that depend on the authenticated user, or for filtered list results that vary per user" ([Caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#choosing-a-cache-scope)). Don't set `tools/list` to `"public"` on such a server.
+
 #### Collecting feedback from agents
 
 Agents that use your MCP server sometimes get blocked, need a workaround, or find a tool confusing. `submitFeedbackTool` from `@clerk/mcp-tools/tools` adds a `submit_feedback` tool that agents can call to report it. Reports are stored on your Clerk instance and shown on the instance's **Feedback** tab in the Clerk Dashboard.
