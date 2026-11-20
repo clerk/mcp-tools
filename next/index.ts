@@ -13,7 +13,17 @@ import {
   requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
+import {
+  type AICatalogHandlerOptions,
+  type DiscoveryAnswer,
+  type DiscoveryRequest,
+  type ServerCardHandlerOptions,
+  aiCatalogResponder,
+  serverCardResponder,
+} from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
+
+export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withClerkMcpAuth`, all optional, plus
@@ -88,6 +98,120 @@ export function authorizationServerMetadataHandler(): () => Promise<Response> {
  */
 export function metadataCorsHandler(): () => Response {
   return () => new Response(null, { status: 200, headers: metadataCorsHeaders });
+}
+
+/**
+ * A Next.js route handler that serves an MCP Server Card, the public document a client reads before it connects to
+ * learn what the server is and where to connect. It validates the options and generates the card when it is created,
+ * so it needs no Clerk keys or MCP SDK and makes no request, and later changes to the options change nothing.
+ * Importing it adds no route.
+ *
+ * Any origin can read the card. GET and HEAD get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or
+ * `maxAge`'s seconds (`public, no-cache` for `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS
+ * gets the CORS preflight, another method a 405, and a request to an origin no listed `resourceUrl` has a 421, each
+ * error with `Cache-Control: no-store`. Next.js only calls the handler for the methods the route exports, so export it
+ * for each of them: without an `OPTIONS` export, Next.js answers the preflight itself, without the CORS headers.
+ * @see https://github.com/modelcontextprotocol/ext-server-card
+ * @param options - See `ServerCardHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the card cannot have. Exporting
+ * `serverCardHandler` itself, without calling it, throws a `Clerk error:` on the first request.
+ * @example
+ * ```ts
+ * // app/mcp/server-card/route.ts
+ * const handler = serverCardHandler({
+ *   name: 'com.example/weather',
+ *   version: '1.2.0',
+ *   description: 'Forecasts and current conditions.',
+ *   resourceUrl: 'https://mcp.example.com/mcp',
+ * });
+ *
+ * export {
+ *   handler as GET,
+ *   handler as HEAD,
+ *   handler as OPTIONS,
+ *   handler as POST,
+ *   handler as PUT,
+ *   handler as PATCH,
+ *   handler as DELETE,
+ * };
+ * ```
+ */
+export function serverCardHandler(options: ServerCardHandlerOptions): (req: Request) => Response {
+  assertDiscoveryHandlerCalled('serverCardHandler', options);
+  return discoveryHandler(serverCardResponder('serverCardHandler', options));
+}
+
+/**
+ * A Next.js route handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
+ * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
+ * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
+ * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
+ * request: to answer on several origins with their own cards, create one handler for each and pick it by origin.
+ * Importing it adds no route.
+ *
+ * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
+ * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
+ * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
+ * `Cache-Control: no-store`. Export it for each method, as for `serverCardHandler`, from the `ard.json` route, and
+ * re-export that route's methods from the `ai-catalog.json` route, so both paths get the same body and headers.
+ * @see https://github.com/Agent-Card/ai-catalog
+ * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+ * @param options - See `AICatalogHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have. Exporting
+ * `aiCatalogHandler` itself, without calling it, throws a `Clerk error:` on the first request.
+ * @example
+ * ```ts
+ * // app/.well-known/ard.json/route.ts
+ * const handler = aiCatalogHandler({
+ *   entries: [
+ *     {
+ *       identifier: 'urn:air:example.com:weather',
+ *       displayName: 'Weather',
+ *       url: 'https://mcp.example.com/mcp/server-card',
+ *     },
+ *   ],
+ * });
+ *
+ * export {
+ *   handler as GET,
+ *   handler as HEAD,
+ *   handler as OPTIONS,
+ *   handler as POST,
+ *   handler as PUT,
+ *   handler as PATCH,
+ *   handler as DELETE,
+ * };
+ *
+ * // app/.well-known/ai-catalog.json/route.ts
+ * export { GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE } from '../ard.json/route';
+ * ```
+ */
+export function aiCatalogHandler(options: AICatalogHandlerOptions): (req: Request) => Response {
+  assertDiscoveryHandlerCalled('aiCatalogHandler', options);
+  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
+}
+
+// Exported uncalled as a method, the factory is called with the request, which would otherwise fail on a missing option
+function assertDiscoveryHandlerCalled(caller: string, options: unknown) {
+  if (options instanceof Request) {
+    throw new Error(
+      `Clerk error: call ${caller}(options) and export its result from the route, instead of exporting ${caller} itself`,
+    );
+  }
+}
+
+function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {
+  // The request's own URL selects a listed resourceUrl, as for `protectedResourceMetadataHandler`; Host and
+  // X-Forwarded-* are never read. The serialized body is sent as it is, so it is the one the ETag was computed from.
+  return (req: Request): Response => {
+    const answer = respond({
+      method: req.method,
+      url: req.url,
+      ifMatch: req.headers.get('if-match'),
+      ifNoneMatch: req.headers.get('if-none-match'),
+    });
+    return new Response(answer.body, { status: answer.status, headers: answer.headers });
+  };
 }
 
 /**
