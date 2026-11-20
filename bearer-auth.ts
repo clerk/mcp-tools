@@ -77,8 +77,10 @@ type DiscoveryOptions =
        * their descriptions and schemas (protected ones included), without a token. `true`, the default, opens
        * `initialize` with its `notifications/initialized`, `server/discover`, `ping`, `tools/list`,
        * `resources/list`, `resources/templates/list`, and `prompts/list`, so a GET without a token gets a 405
-       * rather than the 401. Calls still need a token, except the ones `publicAccess` names. `false` requires a
-       * token for every MCP request, as 0.9 did. It is only about these MCP methods: protected resource metadata
+       * rather than the 401. Calls still need a token, except the ones `publicAccess` names, and so do
+       * `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed`, which are not
+       * checked against the caller. `false` requires a token for every MCP request, as 0.9 did, unless
+       * `publicAccess.methods` opens some. It is only about these MCP methods: protected resource metadata
        * (RFC 9728) and the Server Card are public either way, and it is unrelated to OAuth token introspection
        * (RFC 7662). A `publicAccess.methods` setting replaces it with exactly the methods it opens.
        */
@@ -94,19 +96,21 @@ type DiscoveryOptions =
     }
   | {
       /**
-       * `false` requires a token for every MCP request, as 0.9 did. See `discoverable: true`, the default.
+       * `false` requires a token for every MCP request, as 0.9 did, unless `publicAccess.methods` opens some. See
+       * `discoverable: true`, the default.
        */
       discoverable?: boolean | undefined;
       /**
        * Without `discoverable`, no client without a token can connect, so `publicAccess` can name calls only when
-       * `discoverable` is `true` or left out.
+       * `discoverable` is `true` or left out. Empty placeholders, `tools: []` and `resources` or `prompts` as `[]`
+       * or `false`, name nothing and are accepted.
        */
       publicAccess?:
         | {
             methods?: PublicAccess['methods'];
-            tools?: never;
-            resources?: never;
-            prompts?: never;
+            tools?: readonly [] | undefined;
+            resources?: readonly [] | false | undefined;
+            prompts?: readonly [] | false | undefined;
           }
         | undefined;
     };
@@ -358,24 +362,10 @@ function opensHandshake(publicAccess: PublicAccess): boolean {
   return opensMethod(publicAccess, 'initialize') || opensMethod(publicAccess, 'server/discover');
 }
 
-// Whether `publicAccess` opens anything at all, so that a client without a token can have a request in flight
-function opensAnything({ methods, tools, resources, prompts }: PublicAccess): boolean {
-  return [methods, tools, resources, prompts].some(opensSome);
-}
-
-// The notifications a client sends about work already under way, which pass whenever `publicAccess` opens anything.
-// A challenge for one would start authorization although the user reached nothing protected: `cancelled` when a call
-// is cancelled or times out, `progress` while the client answers a request from the server, and
-// `roots/list_changed` when the client's roots change. None of them runs anything or returns data, and a server
-// ignores a cancellation or progress token for a request it does not have in flight.
-const openNotifications: ReadonlySet<string> = new Set([
-  'notifications/cancelled',
-  'notifications/progress',
-  'notifications/roots/list_changed',
-]);
-
 // Whether one JSON-RPC message is open without a token. A response to a server request has no `method`, and a
-// notification that is not named here is not listed, so both stay closed.
+// notification that is not named here stays closed: `notifications/cancelled`, `notifications/progress`, and
+// `notifications/roots/list_changed` refer to work in a session without being checked against the caller, so they
+// always need a token, whatever `discoverable` and `publicAccess` open.
 function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean {
   if (typeof message !== 'object' || message === null || Array.isArray(message)) return false;
   const { method, params } = message as { method?: unknown; params?: unknown };
@@ -417,7 +407,6 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
       );
     }
     default:
-      if (openNotifications.has(method)) return opensAnything(publicAccess);
       return publicMethods.has(method) && opensMethod(publicAccess, method as McpPublicMethod);
   }
 }
@@ -648,10 +637,9 @@ export function createBearerAuth<Req>(
   // Keep the name here rather than importing the tool: auth-only entry points must not require its optional Zod peer.
   // The warning tests list the tool by `CREATE_BROWSER_SESSION_TOOL_NAME`, so they fail if the two names drift apart.
   // submit_feedback supports anonymous callers; create_browser_session is the only prebuilt identity-only tool.
-  if (
-    !warnedPublicIdentityTool &&
-    options.publicAccess?.tools?.includes('create_browser_session')
-  ) {
+  // Typed as any list, since `discoverable: false` narrows `tools` to the empty placeholder.
+  const publicTools: readonly string[] | undefined = options.publicAccess?.tools;
+  if (!warnedPublicIdentityTool && publicTools?.includes('create_browser_session')) {
     warnedPublicIdentityTool = true;
     console.warn(
       'Clerk warning: create_browser_session requires a Clerk identity but is listed in publicAccess.tools. Calls without a token will get not_authenticated instead of a 401 challenge, so the client will not start sign-in. Remove create_browser_session from publicAccess.tools.',

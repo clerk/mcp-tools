@@ -2,6 +2,7 @@
 // `publicAccess`, on MCP SDK 2.x.
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import {
+  createMcpHandler,
   McpServer,
   ResourceTemplate,
   WebStandardStreamableHTTPServerTransport,
@@ -45,9 +46,14 @@ type ReadBody = (context: Context) => Promise<unknown>;
 type ServerOptions = Pick<McpAuthOptions, 'discoverable' | 'publicAccess'>;
 const PUBLIC_TOOLS: ServerOptions = { publicAccess: { tools: ['search_docs', 'slow_search'] } };
 
+// `streamableHttpHandler` serves the protocol revisions before 2026-07-28, and MCP SDK 2's `createMcpHandler` serves
+// 2026-07-28 as well
+type Serve = 'streamableHttpHandler' | 'createMcpHandler';
+
 function startServer(
   readBody: ReadBody | undefined = undefined,
   options: ServerOptions = PUBLIC_TOOLS,
+  serve: Serve = 'streamableHttpHandler',
 ) {
   const toolCalls = vi.fn();
   // Every answer the MCP endpoint gave, as `<method> <status>`
@@ -106,7 +112,12 @@ function startServer(
       challengeScopes: ['profile', 'email'],
       ...options,
     } as McpAuthOptions),
-    streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
+    serve === 'streamableHttpHandler'
+      ? streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport)
+      : (c) => {
+          const authInfo: AuthInfo | undefined = c.get('mcpAuth');
+          return createMcpHandler(createServer).fetch(c.req.raw, { ...(authInfo && { authInfo }) });
+        },
   );
 
   const fetchImpl = async (input: string | URL, init?: RequestInit) => {
@@ -131,7 +142,8 @@ async function connect(token?: string, readBody: ReadBody | undefined = undefine
   return { client, redirects, toolCalls, answers };
 }
 
-// A POST of one JSON-RPC request without a token, as a client on protocol revision 2026-07-28 sends it
+// A POST of one JSON-RPC request without a token, as a client on protocol revision 2026-07-28 sends it, with the
+// `_meta` envelope that revision requires of every request
 function postRequest(
   fetchImpl: ReturnType<typeof startServer>['fetchImpl'],
   method: string,
@@ -143,9 +155,32 @@ function postRequest(
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
       'mcp-protocol-version': '2026-07-28',
+      'mcp-method': method,
     },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'test-client', version: '0.0.0' },
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    }),
   });
+}
+
+// The one JSON-RPC message in a response, sent as JSON or as the only event of a stream
+async function responseMessage(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (res.headers.get('content-type')?.startsWith('text/event-stream')) {
+    const data = text.split('\n').find((line) => line.startsWith('data: '));
+    return JSON.parse(data!.slice('data: '.length));
+  }
+  return JSON.parse(text);
 }
 
 describe('a server with publicAccess, discoverable by default', () => {
@@ -220,35 +255,21 @@ describe('a server with publicAccess, discoverable by default', () => {
 
   // Protocol revision 2026-07-28 replaces that GET stream with this POST
   test('admits the subscriptions/listen a client opens after connecting, but not one for a closed resource', async () => {
-    const { fetchImpl } = startServer();
+    const { fetchImpl } = startServer(undefined, PUBLIC_TOOLS, 'createMcpHandler');
     const post = (notifications: Record<string, unknown>) =>
-      fetchImpl(MCP_URL, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          'mcp-protocol-version': '2026-07-28',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'subscriptions/listen',
-          params: { notifications },
-        }),
-      });
+      postRequest(fetchImpl, 'subscriptions/listen', { notifications });
 
-    // It reaches the transport, which answers this bare request itself; only a challenge would start authorization
     const listening = await post({ toolsListChanged: true });
+    expect(listening.status).toBe(200);
+    expect(listening.headers.get('content-type')).toBe('text/event-stream');
     await listening.body?.cancel();
-    expect(listening.status).not.toBe(401);
-    expect(listening.headers.get('www-authenticate')).toBeNull();
 
     const subscribed = await post({ resourceSubscriptions: ['docs://private'] });
     expect(subscribed.status).toBe(401);
     expect(subscribed.headers.get('www-authenticate')).toMatch(/^Bearer /);
   });
 
-  test('does not start authorization when the client cancels a public tool call', async () => {
+  test('challenges the cancellation of a public tool call, so the client starts authorization', async () => {
     const { client, redirects, toolCalls, answers } = await connect();
     const abort = new AbortController();
 
@@ -260,12 +281,14 @@ describe('a server with publicAccess, discoverable by default', () => {
     abort.abort();
     await expect(call).rejects.toThrow();
 
-    // The client tells the server with a notifications/cancelled POST, which must not be challenged
+    // The client tells the server with a notifications/cancelled POST. It is not checked against the caller, so
+    // it needs a token even here.
     await vi.waitFor(() => expect(answers.length).toBeGreaterThan(before));
     expect(answers.slice(before).filter((answer) => answer.startsWith('POST'))).toEqual([
-      'POST 202',
+      'POST 401',
     ]);
-    expect(redirects).toHaveLength(0);
+    // The SDK client answers that challenge by starting authorization
+    await vi.waitFor(() => expect(redirects).toHaveLength(1));
   });
 
   test('starts authorization when the client reaches a protected tool', async () => {
@@ -312,14 +335,22 @@ describe('a server with publicAccess, discoverable by default', () => {
     expect(answers.filter((answer) => answer.endsWith(' 401'))).toEqual([]);
   });
 
-  // Protocol revision 2026-07-28 replaces `initialize` with this request
-  test('answers the server/discover of a client without a token, not a challenge', async () => {
-    const { fetchImpl } = startServer();
+  // Protocol revision 2026-07-28 replaces `initialize` with this request. With no `discoverable` or `publicAccess`
+  // option, discovery is open by default.
+  test('answers the server/discover of a client without a token on a server with neither option', async () => {
+    const { fetchImpl } = startServer(undefined, {}, 'createMcpHandler');
 
     const res = await postRequest(fetchImpl, 'server/discover');
-    await res.body?.cancel();
-    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(200);
     expect(res.headers.get('www-authenticate')).toBeNull();
+    expect(await responseMessage(res)).toMatchObject({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        supportedVersions: expect.arrayContaining(['2026-07-28']),
+        capabilities: { tools: {}, resources: {}, prompts: {} },
+      },
+    });
   });
 
   test('challenges a call to a tool it does not name, which a token then reaches', async () => {

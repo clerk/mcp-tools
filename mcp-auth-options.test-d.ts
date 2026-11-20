@@ -184,6 +184,25 @@ describe('the mcpAuth options', () => {
     nextMetadataHandler({ discoverable: false, onAuthFailure: () => {} });
   });
 
+  test('accept empty placeholders with discoverable: false, which name no calls', () => {
+    expressMcpAuth({ resourceUrl, discoverable: false, publicAccess: { tools: [] } });
+    honoMcpAuth({
+      verifyToken,
+      discoverable: false,
+      publicAccess: { tools: [], resources: false, prompts: false },
+    });
+    nextWithMcpAuth(handler, {
+      resourceUrl,
+      discoverable: false,
+      publicAccess: { resources: [], prompts: [] },
+    });
+    expressMetadataHandler({
+      resourceUrl,
+      discoverable: false,
+      publicAccess: { tools: [] as const },
+    });
+  });
+
   test('accept discoverable from a shared options object that is not const', () => {
     const privateOptions = { resourceUrl, discoverable: false };
     expressMcpAuth(privateOptions);
@@ -211,6 +230,12 @@ describe('the mcpAuth options', () => {
     });
     // @ts-expect-error the metadata handler takes the same options
     expressMetadataHandler({ resourceUrl, discoverable: false, publicAccess: { tools: ['x'] } });
+    // @ts-expect-error `true` opens every resource, which is not a placeholder
+    honoMcpAuth({
+      verifyToken,
+      discoverable: false,
+      publicAccess: { resources: [], prompts: true },
+    });
   });
 
   test('reject a discoverable that is not a boolean', () => {
