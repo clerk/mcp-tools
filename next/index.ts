@@ -143,11 +143,11 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
 
 /**
  * A Next.js route handler that serves an AI Catalog linking to MCP Server Cards, the document a client reads at
- * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers.
- * It validates the options and generates the catalog
- * when it is created, so it needs no Clerk keys or MCP SDK and never fetches the cards it links to, and later changes
- * to the options change nothing. The catalog is the same for every request: to answer on several origins with their
- * own cards, create one handler for each and pick it by origin. Importing it adds no route.
+ * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
+ * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
+ * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
+ * request: to answer on several origins with their own cards, create one handler for each and pick it by origin.
+ * Importing it adds no route.
  *
  * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
  * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching

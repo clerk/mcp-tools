@@ -125,11 +125,12 @@ export type AICatalog = {
 };
 
 /**
- * Generates an AI Catalog that links to MCP Server Cards, the document a client reads at
- * `/.well-known/ai-catalog.json` to find a domain's MCP servers. It supports a subset of the AI Catalog
- * specification: a minimal (Level 1) catalog whose entries each link one Server Card by a logical identifier, a display
- * name, and the card's URL, with an optional ARD trust manifest. Inline documents, other artifact types, host information,
- * AI Catalog `trustManifests`, signatures, and extensions are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
+ * Generates an AI Catalog that links to MCP Server Cards, the document a client reads at its canonical path
+ * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
+ * supports a subset of the AI Catalog specification: a minimal (Level 1) catalog whose entries each link one Server
+ * Card by a logical identifier, a display name, and the card's URL, with an optional ARD trust manifest. Inline
+ * documents, other artifact types, host information, AI Catalog `trustManifests`, signatures, and extensions are not
+ * supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
  * @see https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md
  * @param options - See `AICatalogOptions`
  * @returns The catalog, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the catalog
