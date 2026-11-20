@@ -268,6 +268,93 @@ describe('OAuth credential persistence', () => {
     expect(await reloaded.authProvider.tokens()).toMatchObject({ issuer: 'https://a.example/' });
   });
 
+  test.each(['known', 'dynamic'] as const)(
+    'a %s callback uses the authorization server found at a resource metadata URL from the challenge',
+    async (kind) => {
+      const store = createStore();
+      const resourceMetadataUrl = new URL('https://resource.example/prm/mcp');
+      const { fetchFn: authorizationServers } = authorizationServerFetch('https://a.example/');
+      // Only the challenge's URL serves resource metadata, so discovery without
+      // it falls back to the MCP server's origin as the authorization server.
+      const fetchFn = vi.fn<typeof fetch>(async (input, init) => {
+        const requestUrl = new URL(input instanceof Request ? input.url : input);
+        if (requestUrl.href === resourceMetadataUrl.href) {
+          return Response.json({
+            resource: clientParams.mcpEndpoint,
+            authorization_servers: ['https://a.example/'],
+          });
+        }
+        if (requestUrl.pathname.startsWith(resourceMetadataPath)) {
+          return new Response(null, { status: 404 });
+        }
+        return authorizationServers(input, init);
+      });
+      const options = { ...clientParams, store, redirect: vi.fn() };
+      const initial =
+        kind === 'known'
+          ? await createKnownCredentialsMcpClient({
+              ...options,
+              clientId: 'user-client',
+              clientSecret: 'user-secret',
+            })
+          : await createDynamicallyRegisteredMcpClient(options);
+      await expect(
+        auth(initial.authProvider, {
+          serverUrl: clientParams.mcpEndpoint,
+          resourceMetadataUrl,
+          fetchFn,
+        }),
+      ).resolves.toBe('REDIRECT');
+      fetchFn.mockClear();
+
+      const state = await initial.authProvider.state!();
+      const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
+      await expect(
+        auth(resumed.authProvider, {
+          serverUrl: clientParams.mcpEndpoint,
+          authorizationCode: 'code',
+          fetchFn,
+        }),
+      ).resolves.toBe('AUTHORIZED');
+      expect(credentialRequests(fetchFn)).toEqual(['POST https://a.example/token']);
+      const reloaded = await getMcpClientBySessionId({ sessionId: initial.sessionId, store });
+      expect(await reloaded.authProvider.clientInformation()).toMatchObject({
+        issuer: 'https://a.example/',
+      });
+      expect(await reloaded.authProvider.tokens()).toMatchObject({ issuer: 'https://a.example/' });
+      expect(await store.read(`session_${initial.sessionId}`)).not.toHaveProperty(
+        'oauthDiscoveryState',
+      );
+    },
+  );
+
+  test('a known initializer that fails before the redirect leaves its session unbound', async () => {
+    const store = createStore();
+    const { fetchFn: authorizationServers } = authorizationServerFetch('https://a.example/');
+    // The authorization server does not support the code response type, so
+    // the SDK rejects the authorization request before any redirect.
+    const fetchFn = vi.fn<typeof fetch>(async (input, init) => {
+      const response = await authorizationServers(input, init);
+      const requestUrl = new URL(input instanceof Request ? input.url : input);
+      if (requestUrl.pathname !== authorizationServerMetadataPath) return response;
+      return Response.json({ ...(await response.json()), response_types_supported: ['token'] });
+    });
+    const redirect = vi.fn();
+    const initial = await createKnownCredentialsMcpClient({
+      ...clientParams,
+      store,
+      redirect,
+      clientId: 'user-client',
+      clientSecret: 'user-secret',
+    });
+    const unbound = await store.read(`session_${initial.sessionId}`);
+    await expect(
+      auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).rejects.toThrow('does not support response type code');
+    expect(redirect).not.toHaveBeenCalled();
+    expect(await store.read(`session_${initial.sessionId}`)).toEqual(unbound);
+  });
+
   test('saves compare issuers as URLs, as the SDK does', async () => {
     const store = createStore();
     await store.write('session_bound', {
@@ -433,7 +520,7 @@ describe('OAuth credential persistence', () => {
   });
 
   test.each(['known', 'dynamic'] as const)(
-    'a %s session does not exchange its code at an authorization server named after the redirect',
+    'a %s session exchanges its code only with the authorization server named at the redirect',
     async (kind) => {
       const store = createStore();
       const { authorizationServer, fetchFn } = authorizationServerFetch('https://a.example/');
@@ -454,20 +541,25 @@ describe('OAuth credential persistence', () => {
       authorizationServer.url = 'https://b.example/';
       fetchFn.mockClear();
       const state = await initial.authProvider.state!();
-      const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
-      // The callback, and the initializer starting another authorization.
-      for (const [provider, authorizationCode] of [
-        [resumed.authProvider, 'code'],
-        [initial.authProvider, undefined],
-      ] as const) {
-        await expect(
-          auth(provider, { serverUrl: clientParams.mcpEndpoint, authorizationCode, fetchFn }),
-        ).rejects.toThrow(
-          'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
-        );
-      }
+      // The initializer starting another authorization meets the binding.
+      await expect(
+        auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+      ).rejects.toThrow(
+        'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
+      );
       expect(credentialRequests(fetchFn)).toEqual([]);
       expect(await store.read(`session_${initial.sessionId}`)).toEqual(bound);
+
+      // The callback restores the redirect's discovery state instead.
+      const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
+      await expect(
+        auth(resumed.authProvider, {
+          serverUrl: clientParams.mcpEndpoint,
+          authorizationCode: 'code',
+          fetchFn,
+        }),
+      ).resolves.toBe('AUTHORIZED');
+      expect(credentialRequests(fetchFn)).toEqual(['POST https://a.example/token']);
     },
   );
 
@@ -519,15 +611,6 @@ describe('OAuth credential persistence', () => {
 
     authorizationServer.url = 'https://b.example/';
     await expect(
-      auth(stale.authProvider, {
-        serverUrl: clientParams.mcpEndpoint,
-        authorizationCode: 'code',
-        fetchFn,
-      }),
-    ).rejects.toThrow(
-      'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
-    );
-    await expect(
       stale.authProvider.saveTokens({ ...tokens, issuer: 'https://b.example/' }),
     ).rejects.toThrow(
       'is bound to authorization server https://a.example/ and does not save tokens for https://b.example/',
@@ -535,7 +618,7 @@ describe('OAuth credential persistence', () => {
     expect(credentialRequests(fetchFn)).toEqual([]);
     expect(await store.read(`session_${initial.sessionId}`)).toEqual(bound);
 
-    authorizationServer.url = 'https://a.example/';
+    // The callback presents the binding and discovery state saved by the other.
     await expect(
       auth(stale.authProvider, {
         serverUrl: clientParams.mcpEndpoint,
