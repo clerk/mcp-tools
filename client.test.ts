@@ -66,6 +66,57 @@ function discoveryState(authorizationServerUrl = issuer) {
   };
 }
 
+const resourceMetadataPath = '/.well-known/oauth-protected-resource';
+const authorizationServerMetadataPath = '/.well-known/oauth-authorization-server';
+
+/**
+ * Serves the resource and authorization server metadata, registration and
+ * token endpoints, naming `authorizationServer.url` as the resource's
+ * authorization server. Change `url` to move the resource to another one.
+ */
+function authorizationServerFetch(url: string) {
+  const authorizationServer = { url };
+  const fetchFn = vi.fn<typeof fetch>(async (input, init) => {
+    const requestUrl = new URL(input instanceof Request ? input.url : input);
+    const origin = `${requestUrl.origin}/`;
+    if (requestUrl.pathname.startsWith(resourceMetadataPath)) {
+      return Response.json({
+        resource: clientParams.mcpEndpoint,
+        authorization_servers: [authorizationServer.url],
+      });
+    }
+    if (requestUrl.pathname === authorizationServerMetadataPath) {
+      return Response.json({
+        ...discoveryState(origin).authorizationServerMetadata,
+        registration_endpoint: `${origin}register`,
+      });
+    }
+    if (requestUrl.pathname === '/register' && init?.method === 'POST') {
+      return Response.json({
+        client_id: `registered-at-${requestUrl.host}`,
+        client_secret: `registered-secret-${requestUrl.host}`,
+        redirect_uris: [clientParams.oauthRedirectUrl],
+      });
+    }
+    if (requestUrl.pathname === '/token' && init?.method === 'POST') {
+      return Response.json({
+        access_token: `access-from-${requestUrl.host}`,
+        refresh_token: `refresh-from-${requestUrl.host}`,
+        token_type: 'Bearer',
+      });
+    }
+    return new Response(null, { status: 404 });
+  });
+  return { authorizationServer, fetchFn };
+}
+
+/** The requests that carry credentials, as `METHOD url`. */
+function credentialRequests(fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchFn.mock.calls
+    .filter(([, init]) => init?.method === 'POST')
+    .map(([input]) => `POST ${String(input instanceof Request ? input.url : input)}`);
+}
+
 describe('OAuth credential persistence', () => {
   test.each(['known', 'dynamic'] as const)(
     '%s client retains complete SDK credentials',
@@ -134,7 +185,6 @@ describe('OAuth credential persistence', () => {
     });
     expect(await resumed.authProvider.tokens()).toEqual({
       access_token: 'legacy-access',
-      refresh_token: 'legacy-refresh',
       token_type: 'Bearer',
     });
 
@@ -211,7 +261,9 @@ describe('OAuth credential persistence', () => {
           fetchFn,
         },
       ),
-    ).rejects.toThrow('Existing OAuth client information is required');
+    ).rejects.toThrow(
+      'OAuth client information is bound to authorization server https://auth.example/ and is not presented to https://other-auth.example/',
+    );
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
@@ -241,5 +293,71 @@ describe('OAuth credential persistence', () => {
     ).resolves.toBe('REDIRECT');
     expect(fetchFn).not.toHaveBeenCalled();
     expect(redirectToAuthorization).toHaveBeenCalledOnce();
+  });
+
+  test.each(['known', 'dynamic'] as const)(
+    'a %s session bound at one issuer does not register at another or replace its credentials',
+    async (kind) => {
+      const store = createStore();
+      const { authorizationServer, fetchFn } = authorizationServerFetch('https://a.example/');
+      const options = { ...clientParams, store, redirect: vi.fn() };
+      const initial =
+        kind === 'known'
+          ? await createKnownCredentialsMcpClient({
+              ...options,
+              clientId: 'user-client',
+              clientSecret: 'user-secret',
+            })
+          : await createDynamicallyRegisteredMcpClient(options);
+      await expect(
+        auth(initial.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+      ).resolves.toBe('REDIRECT');
+
+      const state = await initial.authProvider.state!();
+      const resumed = await getMcpClientBySessionId({ sessionId: initial.sessionId, store, state });
+      await expect(
+        auth(resumed.authProvider, {
+          serverUrl: clientParams.mcpEndpoint,
+          authorizationCode: 'code',
+          fetchFn,
+        }),
+      ).resolves.toBe('AUTHORIZED');
+      const bound = await store.read(`session_${initial.sessionId}`);
+      expect(bound).toMatchObject({ oauthClientInformation: { issuer: 'https://a.example/' } });
+
+      // The same provider instance, and a reloaded one, now meet another issuer.
+      authorizationServer.url = 'https://b.example/';
+      fetchFn.mockClear();
+      const reloaded = await getMcpClientBySessionId({ sessionId: initial.sessionId, store });
+      for (const provider of [resumed.authProvider, reloaded.authProvider]) {
+        await expect(
+          auth(provider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+        ).rejects.toThrow(
+          'OAuth client information is bound to authorization server https://a.example/ and is not presented to https://b.example/',
+        );
+      }
+      expect(credentialRequests(fetchFn)).toEqual([]);
+      expect(await store.read(`session_${initial.sessionId}`)).toEqual(bound);
+    },
+  );
+
+  test('a pre-upgrade session does not send its refresh token or client secret to an unverified issuer', async () => {
+    const store = createStore();
+    const legacy = {
+      ...clientParams,
+      clientId: 'user-client',
+      clientSecret: 'user-secret',
+      accessToken: 'legacy-access',
+      refreshToken: 'legacy-refresh',
+    };
+    await store.write('session_legacy', legacy);
+    const { fetchFn } = authorizationServerFetch('https://b.example/');
+    const resumed = await getMcpClientBySessionId({ sessionId: 'legacy', store });
+
+    await expect(
+      auth(resumed.authProvider, { serverUrl: clientParams.mcpEndpoint, fetchFn }),
+    ).rejects.toThrow('Unexpected call to AuthProvider method "saveCodeVerifier"');
+    expect(credentialRequests(fetchFn)).toEqual([]);
+    expect(await store.read('session_legacy')).toEqual(legacy);
   });
 });
