@@ -290,6 +290,8 @@ app.all(
 );
 ```
 
+Without `resourceUrl`, an origin-form request whose immediate peer is trusted by Express's `trust proxy` policy also gets `Vary: X-Forwarded-Host, X-Forwarded-Proto`, merged with any existing `Vary`, so caches distinguish the origins those headers select. This applies even when either header is absent. A fixed `resourceUrl`, an absolute-form request-target, or an untrusted peer does not add these `Vary` fields.
+
 Both metadata handlers send the same headers as the Next.js ones: `Cache-Control: max-age=3600` and the CORS headers in `metadataCorsHeaders`, which allow any origin, on the metadata, and the CORS headers alone, with no caching, on an error such as the `421` or `502`. Mounted for `OPTIONS` as well as `GET` (`app.all` or `app.use`, not `app.get`), each answers the CORS preflight with a `200` and those CORS headers.
 
 ## Authorization Server Metadata

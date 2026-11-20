@@ -238,6 +238,15 @@ export function protectedResourceMetadataHandler(options: ProtectedResourceMetad
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
+    if (
+      options.resourceUrl === undefined &&
+      req.originalUrl.startsWith('/') &&
+      req.app.get('trust proxy fn')(req.socket.remoteAddress, 0)
+    ) {
+      // Include absent headers too: forwarding either header changes the derived origin of this cacheable response.
+      res.vary('X-Forwarded-Host');
+      res.vary('X-Forwarded-Proto');
+    }
     sendMetadata(
       res,
       protectedResourceMetadataAnswer(options, {
