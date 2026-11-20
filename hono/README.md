@@ -307,6 +307,7 @@ app.all(
     entries: [
       {
         identifier: 'urn:air:example.com:weather:mcp',
+        displayName: 'Weather',
         url: 'https://mcp.example.com/mcp/server-card',
       },
     ],

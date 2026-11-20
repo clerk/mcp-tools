@@ -44,7 +44,11 @@ describe('serverCardHandler types', () => {
 
 describe('aiCatalogHandler types', () => {
   const entries = [
-    { identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' },
+    {
+      identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
+      url: 'https://example.com/mcp/server-card',
+    },
   ];
 
   test('takes linked entries and a maxAge, and returns a Hono handler', () => {
@@ -59,8 +63,10 @@ describe('aiCatalogHandler types', () => {
     aiCatalogHandler({ entries, specVersion: '0.9' });
     // @ts-expect-error the catalog is fixed: one handler for each origin, not a list to select from
     aiCatalogHandler({ entries, resourceUrl: ['https://mcp.example.com/mcp'] });
-    // @ts-expect-error the catalog is fixed: no callback per request
-    aiCatalogHandler({ entries: (c: Context) => [{ identifier: 'x', url: c.req.url }] });
+    aiCatalogHandler({
+      // @ts-expect-error the catalog is fixed: no callback per request
+      entries: (c: Context) => [{ identifier: 'x', displayName: 'X', url: c.req.url }],
+    });
     // @ts-expect-error entries are required
     aiCatalogHandler({});
   });
@@ -69,7 +75,11 @@ describe('aiCatalogHandler types', () => {
 describe('Next.js discovery route handler types', () => {
   const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
   const entries = [
-    { identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' },
+    {
+      identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
+      url: 'https://example.com/mcp/server-card',
+    },
   ];
 
   test('take the shared options and return a route handler of a Request', () => {
@@ -105,7 +115,11 @@ describe('Next.js discovery route handler types', () => {
 describe('Express discovery handler types', () => {
   const card = { name: 'com.example/weather', version: '1.2.0', description: 'Forecasts.' };
   const entries = [
-    { identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' },
+    {
+      identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
+      url: 'https://example.com/mcp/server-card',
+    },
   ];
 
   test('take the same options as the Hono handlers and return Express handlers', () => {

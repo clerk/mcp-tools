@@ -20,6 +20,12 @@ export type AICatalogEntryOptions = {
    */
   identifier: string;
   /**
+   * The server's human-readable name, such as `Weather`. Agentic Resource Discovery (ARD) v0.91 requires it on every
+   * entry. The v0.9 release candidate makes it optional and, when present, a consumer shows it instead of the card's
+   * `title`, so keep the two the same.
+   */
+  displayName: string;
+  /**
    * The exact URL the Server Card is retrieved from, such as `https://example.com/mcp/server-card`. It may be on
    * another host. It must be https, except on `localhost`, `127.0.0.1`, or `[::1]`, where http is allowed for local
    * development. It is never fetched.
@@ -54,6 +60,7 @@ export type AICatalogOptions = {
  */
 export type AICatalogEntry = {
   readonly identifier: string;
+  readonly displayName: string;
   readonly type: typeof SERVER_CARD_TYPE;
   readonly url: string;
 };
@@ -69,8 +76,8 @@ export type AICatalog = {
 /**
  * Generates an AI Catalog that links to MCP Server Cards, the document a client reads at
  * `/.well-known/ai-catalog.json` to find a domain's MCP servers. It supports a subset of the AI Catalog
- * specification: a minimal (Level 1) catalog whose entries each link one Server Card by a logical identifier and the
- * card's URL. Inline documents, other artifact types, host information, trust manifests, signatures, and extensions
+ * specification: a minimal (Level 1) catalog whose entries each link one Server Card by a logical identifier, a display
+ * name, and the card's URL. Inline documents, other artifact types, host information, trust manifests, signatures, and extensions
  * are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
  * @see https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md
  * @param options - See `AICatalogOptions`
@@ -80,7 +87,11 @@ export type AICatalog = {
  * ```ts
  * const catalog = generateAICatalog({
  *   entries: [
- *     { identifier: 'urn:air:example.com:weather:mcp', url: 'https://mcp.example.com/mcp/server-card' },
+ *     {
+ *       identifier: 'urn:air:example.com:weather:mcp',
+ *       displayName: 'Weather',
+ *       url: 'https://mcp.example.com/mcp/server-card',
+ *     },
  *   ],
  * });
  * ```
@@ -91,7 +102,7 @@ export function generateAICatalog(options: AICatalogOptions): AICatalog {
 
 const catalogKeys = new Set(['entries']);
 const generatedCatalogKeys = new Set(['specVersion']);
-const entryKeys = new Set(['identifier', 'url']);
+const entryKeys = new Set(['identifier', 'displayName', 'url']);
 const generatedEntryKeys = new Set(['type']);
 
 /**
@@ -105,7 +116,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   const fail = failFor(caller);
   if (!isPlainObject(options)) {
     return fail(
-      "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' }] })",
+      "takes an options object with entries, as generateAICatalog({ entries: [{ identifier: 'urn:air:example.com:weather:mcp', displayName: 'Weather', url: 'https://example.com/mcp/server-card' }] })",
     );
   }
   assertKnownKeys(fail, options, {
@@ -114,13 +125,13 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     generatedMessage: () =>
       "cannot set specVersion: the catalog's specVersion and each entry's type are generated",
     unknownMessage: (key) =>
-      `does not take ${key}. An AI Catalog here supports only entries, each linking one Server Card by identifier and url`,
+      `does not take ${key}. An AI Catalog here supports only entries, each linking one Server Card by identifier, displayName, and url`,
   });
   const { entries } = options;
   // The pinned specification: "This array MAY be empty."
   if (!Array.isArray(entries) || !Array.from(entries).every(isPlainObject)) {
     return fail(
-      "entries must be a list of { identifier, url }, such as [{ identifier: 'urn:air:example.com:weather:mcp', url: 'https://example.com/mcp/server-card' }]",
+      "entries must be a list of { identifier, displayName, url }, such as [{ identifier: 'urn:air:example.com:weather:mcp', displayName: 'Weather', url: 'https://example.com/mcp/server-card' }]",
     );
   }
 
@@ -133,9 +144,9 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       generatedMessage: () =>
         `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
       unknownMessage: (key) =>
-        `${at} does not take ${key}. An entry supports identifier and url only: inline documents, other artifact types, versions, trust manifests, and extensions are not supported`,
+        `${at} does not take ${key}. An entry supports identifier, displayName, and url only: inline documents, other artifact types, versions, trust manifests, and extensions are not supported`,
     });
-    const { identifier, url } = entry;
+    const { identifier, displayName, url } = entry;
     if (!isIdentifier(identifier)) {
       fail(
         `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:weather:mcp'. It names the server and is not the URL of its card`,
@@ -147,12 +158,22 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       );
     }
     identifiers.add(identifier as string);
+    if (!isDisplayName(displayName)) {
+      fail(
+        `${at}.displayName must be a human-readable name for the server, such as 'Weather', with more than whitespace and no control characters`,
+      );
+    }
     if (!isCardUrl(url)) {
       fail(
         `${at}.url must be an absolute https URL, or http on localhost, 127.0.0.1, or [::1] for local development, without credentials, a fragment, or spaces`,
       );
     }
-    return { identifier: identifier as string, type: SERVER_CARD_TYPE, url: url as string };
+    return {
+      identifier: identifier as string,
+      displayName: displayName as string,
+      type: SERVER_CARD_TYPE,
+      url: url as string,
+    };
   });
 
   return deepFreeze({ specVersion: '0.9', entries: linked });
@@ -168,6 +189,12 @@ function isCardUrl(value: unknown): value is string {
   if (value.startsWith('https://')) return true;
   const rawHostname = /^http:\/\/(?::?@)?(\[[^\]]+\]|[^:/?#]+)/.exec(value)?.[1];
   return rawHostname !== undefined && LOOPBACK_HOSTS.has(rawHostname.toLowerCase());
+}
+
+// Text in the specification, required by ARD: rejected only when it shows nothing, being empty or whitespace, or
+// carries control characters
+function isDisplayName(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && !/\p{Cc}/u.test(value);
 }
 
 // Open text in the specification, so only what can't be a logical identifier is rejected: nothing, whitespace or

@@ -144,10 +144,10 @@ An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON docum
 
 `generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
-- **Required:** `entries`, a list of `{ identifier, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
+- **Required:** `entries`, a list of `{ identifier, displayName, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
 - **Generated:** `specVersion: "0.9"`, the v0.9 release candidate version, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, trust manifests, signatures, and extensions are not supported.
 
-An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:weather:mcp`. The v0.9 RC recommends `urn:air:{publisher}:{name}[:{kind}]`: the publisher's domain, a stable name, and an optional single-segment kind suffix. This naming structure is a recommendation, not a required scheme; the builder preserves logical identifiers and does not validate the `urn:air` grammar. An identifier is not a retrieval URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
+An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:weather:mcp`. The v0.9 RC recommends `urn:air:{publisher}:{name}[:{kind}]`: the publisher's domain, a stable name, and an optional single-segment kind suffix. This naming structure is a recommendation, not a required scheme; the builder preserves logical identifiers and does not validate the `urn:air` grammar. An identifier is not a retrieval URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `displayName` is the server's human-readable name, such as `Weather`. The v0.9 RC makes it optional, but [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec) (ARD) v0.91 requires it on every entry, so it is required here; it must have more than whitespace and no control characters. A client shows it instead of the card's `title`, so keep the two the same. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
 
 ```ts
 import { generateAICatalog } from '@clerk/mcp-tools/server';
@@ -156,10 +156,12 @@ const catalog = generateAICatalog({
   entries: [
     {
       identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
       url: 'https://mcp.example.com/mcp/server-card',
     },
     {
       identifier: 'urn:air:example.com:search:mcp',
+      displayName: 'Search',
       url: 'https://cards.saas.example/search/server-card',
     },
   ],

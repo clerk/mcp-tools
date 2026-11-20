@@ -1401,10 +1401,12 @@ const card = {
 const catalogEntries = [
   {
     identifier: 'urn:air:example.com:weather:mcp',
+    displayName: 'Weather',
     url: 'https://public.example.com/mcp/server-card',
   },
   {
     identifier: 'urn:air:saas.example:search:mcp',
+    displayName: 'Search',
     url: 'https://cards.saas.example/search/server-card',
   },
 ];
@@ -2044,11 +2046,13 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
       entries: [
         {
           identifier: 'urn:air:example.com:weather:mcp',
+          displayName: 'Weather',
           type: CARD_TYPE,
           url: 'https://public.example.com/mcp/server-card',
         },
         {
           identifier: 'urn:air:saas.example:search:mcp',
+          displayName: 'Search',
           type: CARD_TYPE,
           url: 'https://cards.saas.example/search/server-card',
         },
@@ -2106,6 +2110,7 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     entry.url = 'https://evil.example/card';
     changing.entries.push({
       identifier: 'urn:air:evil.example:x:mcp',
+      displayName: 'Evil',
       url: 'https://evil.example/x',
     });
 
@@ -2119,7 +2124,11 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
 
   test.each([
     ['no options', undefined, 'aiCatalogHandler takes an options object with entries'],
-    ['no entries', {}, 'aiCatalogHandler entries must be a list of { identifier, url }'],
+    [
+      'no entries',
+      {},
+      'aiCatalogHandler entries must be a list of { identifier, displayName, url }',
+    ],
     [
       'a specVersion',
       { ...options, specVersion: '0.9' },
@@ -2142,8 +2151,21 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     ],
     [
       'a relative card url',
-      { entries: [{ identifier: 'urn:air:example.com:x:mcp', url: '/mcp/server-card' }] },
+      {
+        entries: [
+          { identifier: 'urn:air:example.com:x:mcp', displayName: 'X', url: '/mcp/server-card' },
+        ],
+      },
       'aiCatalogHandler entries[0].url must be',
+    ],
+    [
+      'an entry without a displayName',
+      {
+        entries: [
+          { identifier: 'urn:air:example.com:x:mcp', url: 'https://example.com/mcp/server-card' },
+        ],
+      },
+      'aiCatalogHandler entries[0].displayName must be',
     ],
   ])('throws at setup for %s', (_case, invalid, message) => {
     expect(() => mount(invalid as never)).toThrow(`Clerk error: ${message}`);

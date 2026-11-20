@@ -72,7 +72,8 @@ export function aiCatalogErrors(document: unknown): string[] {
 
 /**
  * Where `document` falls outside the linked-Server-Card subset `generateAICatalog` produces, on top of
- * `aiCatalogErrors`: v0.9 of the AI Catalog specification, and entries that only link a Server Card by a logical identifier and its URL.
+ * `aiCatalogErrors`: v0.9 of the AI Catalog specification, and entries that only link a Server Card by a logical identifier, a
+ * display name, and its URL. The display name is optional in the AI Catalog but required by ARD v0.91 ("4.2 Entry Terms").
  */
 export function linkedCardCatalogErrors(document: unknown): string[] {
   const errors = aiCatalogErrors(document);
@@ -84,9 +85,13 @@ export function linkedCardCatalogErrors(document: unknown): string[] {
   }
   catalog.entries.forEach((entry, index) => {
     const at = `entries[${index}]`;
-    if (Object.keys(entry).join() !== 'identifier,type,url') {
-      errors.push(`${at} has ${Object.keys(entry).join()}, not just identifier, type, and url`);
+    if (Object.keys(entry).join() !== 'identifier,displayName,type,url') {
+      errors.push(
+        `${at} has ${Object.keys(entry).join()}, not just identifier, displayName, type, and url`,
+      );
     }
+    if (!isText(entry.displayName) || (entry.displayName as string).trim() === '')
+      errors.push(`${at}.displayName is not a non-empty name`);
     // ext-server-card discovery.md, Server Card Entries: type MUST be the Server Card media type
     if (entry.type !== 'application/mcp-server-card+json')
       errors.push(`${at}.type is not a Server Card`);

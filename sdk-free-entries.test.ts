@@ -199,6 +199,7 @@ describe('the adapter entry points without Clerk packages', () => {
         entries: [
           {
             identifier: 'urn:air:example.com:weather:mcp',
+            displayName: 'Weather',
             url: 'https://mcp.example.com/mcp/server-card',
           },
         ],
@@ -228,6 +229,7 @@ describe('the adapter entry points without Clerk packages', () => {
       entries: [
         {
           identifier: 'urn:air:example.com:weather:mcp',
+          displayName: 'Weather',
           url: 'https://mcp.example.com/mcp/server-card',
         },
       ],
@@ -289,6 +291,7 @@ describe('the adapter entry points without Clerk packages', () => {
         entries: [
           {
             identifier: 'urn:air:example.com:weather:mcp',
+            displayName: 'Weather',
             url: 'https://mcp.example.com/mcp/server-card',
           },
         ],

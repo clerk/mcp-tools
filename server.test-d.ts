@@ -84,6 +84,7 @@ describe('generateServerCard types', () => {
 describe('generateAICatalog types', () => {
   const entry = {
     identifier: 'urn:air:example.com:weather:mcp',
+    displayName: 'Weather',
     url: 'https://example.com/mcp/server-card',
   };
 
@@ -91,6 +92,7 @@ describe('generateAICatalog types', () => {
     const catalog = generateAICatalog({ entries: [entry] });
     expectTypeOf(catalog).toEqualTypeOf<AICatalog>();
     expectTypeOf(catalog.specVersion).toEqualTypeOf<'0.9'>();
+    expectTypeOf(catalog.entries[0]!.displayName).toEqualTypeOf<string>();
     expectTypeOf(catalog.entries[0]!.type).toEqualTypeOf<'application/mcp-server-card+json'>();
     // @ts-expect-error the catalog is read-only
     catalog.entries[0]!.url = 'https://evil.example/card';
@@ -107,7 +109,11 @@ describe('generateAICatalog types', () => {
     generateAICatalog({ entries: [{ identifier: entry.identifier, data: {} }] });
     // @ts-expect-error no trust manifests
     generateAICatalog({ entries: [{ ...entry, trustManifest: {} }] });
-    // @ts-expect-error an entry needs its url
-    generateAICatalog({ entries: [{ identifier: entry.identifier }] });
+    generateAICatalog({
+      // @ts-expect-error an entry needs its url
+      entries: [{ identifier: entry.identifier, displayName: entry.displayName }],
+    });
+    // @ts-expect-error an entry needs its displayName, which ARD requires
+    generateAICatalog({ entries: [{ identifier: entry.identifier, url: entry.url }] });
   });
 });
