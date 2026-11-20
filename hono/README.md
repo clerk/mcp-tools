@@ -203,7 +203,7 @@ app.all(
 );
 ```
 
-`c.get('mcpAuth')` is `undefined` for a request that `discoverable` or `publicAccess` let through, and its type is `AuthInfo | undefined`. `mcpAuth` reads the body of a request without a token to check it, so a middleware before it that reads the body must use `c.req.json()` or `c.req.text()`, or read a copy, as `c.req.raw.clone().json()`. One that reads `c.req.raw` itself makes `mcpAuth` throw a `Clerk error:`. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+`c.get('mcpAuth')` is `undefined` for a request that `discoverable` or `publicAccess` let through, and its type is `AuthInfo | undefined`. `mcpAuth` reads the body of a request without a token to check it, so a middleware before it that reads the body must use `c.req.json()` or `c.req.text()`, or read a copy, as `c.req.raw.clone().json()`. One that reads `c.req.raw` itself leaves `mcpAuth` nothing to check, so a request without a token gets the `401` challenge, and `mcpAuth` logs a one-time `Clerk warning:` naming the fix. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
 
 ### Per-tool scopes
 

@@ -1483,47 +1483,55 @@ describe.each(authApps)('%s insufficient_scope challenge', (_name, mount) => {
   });
 });
 
-describe('express publicAccess without express.json()', () => {
+// A body the auth check can't read can't be open, so a request without a token gets the 401 challenge that starts
+// sign-in, as it did before `discoverable` was on by default, and a one-time warning names the fix.
+describe('express without express.json()', () => {
   function appWithoutJsonParser(options: object) {
     const app = express();
     app.post('/mcp', expressAdapter.mcpAuth({ verifyToken, ...options }), (_req, res) => {
       res.json({ reached: true });
     });
-    app.use(((error, _req, res, _next) => {
-      res.status(500).json({ message: (error as Error).message });
-    }) satisfies express.ErrorRequestHandler);
     return app;
   }
+  const warning =
+    'Clerk warning: mcpAuth could not read the JSON body of a request without a token, so discoverable and publicAccess open nothing and the request got the 401 challenge. Mount express.json() before mcpAuth, as app.use(express.json()), or set discoverable: false to require a token for every request';
 
   test.each([
     ['discoverable by default', {}],
-    ['publicAccess', { publicAccess: { methods: ['initialize'] } }],
+    ['publicAccess', { publicAccess: { methods: ['tools/list'] } }],
   ])(
-    'throws a setup error for a JSON request without a token when %s, instead of a 401 with no cause',
+    'challenges a JSON request without a token when %s, and warns once',
     async (_case, options) => {
-      const res = await serve(appWithoutJsonParser(options), '/mcp', {
-        body: rpc('initialize'),
-      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const app = appWithoutJsonParser(options);
 
-      expect(res.status).toBe(500);
-      expect(res.body).toEqual({
-        message:
-          'Clerk error: mcpAuth discoverable and publicAccess read the parsed JSON body of a request without a token. Mount express.json() before mcpAuth, as app.use(express.json()), or set discoverable: false to require a token for every request',
-      });
+      const first = await serve(app, '/mcp', { body: rpc('tools/list') });
+      const second = await serve(app, '/mcp', { body: rpc('tools/list') });
+
+      for (const res of [first, second]) {
+        expect(res.status).toBe(401);
+        expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+      }
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(warning);
+      warn.mockRestore();
     },
   );
 
   test('does not need the parser with discoverable: false, or for a request with a token', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const notDiscoverable = await serve(appWithoutJsonParser({ discoverable: false }), '/mcp', {
-      body: rpc('initialize'),
+      body: rpc('tools/list'),
     });
     expect(notDiscoverable.status).toBe(401);
 
     const withToken = await serve(appWithoutJsonParser({}), '/mcp', {
-      body: rpc('initialize'),
+      body: rpc('tools/list'),
       authorization: 'Bearer token-1',
     });
     expect(withToken).toMatchObject({ status: 200, body: { reached: true } });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 
@@ -1567,25 +1575,91 @@ describe('express publicAccess behind express.json() with a limit over 1 MiB', (
   );
 });
 
-test('hono publicAccess throws a setup error when a middleware before it read the raw request, which leaves nothing to check', async () => {
-  const app = new Hono();
-  app.use('*', async (c, next) => {
-    await c.req.raw.json();
-    await next();
-  });
-  app.post(
-    '/mcp',
-    honoAdapter.mcpAuth({ verifyToken, publicAccess: { methods: true, tools: ['search_docs'] } }),
-    (c) => c.json({ reached: true }),
+describe('hono after a middleware read the raw request', () => {
+  function appReadingRaw(options: object) {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      await c.req.raw.json();
+      await next();
+    });
+    app.post('/mcp', honoAdapter.mcpAuth({ verifyToken, ...options }), (c) =>
+      c.json({ reached: true }),
+    );
+    return app;
+  }
+  const warning =
+    'Clerk warning: mcpAuth could not read the JSON body of a request without a token, because something before it already read c.req.raw, so discoverable and publicAccess open nothing and the request got the 401 challenge. Read the body through Hono, as c.req.json(), or read a copy, as c.req.raw.clone().json(), or set discoverable: false to require a token for every request';
+
+  test.each([
+    ['discoverable by default', {}],
+    ['publicAccess', { publicAccess: { methods: true, tools: ['search_docs'] } }],
+  ])(
+    'challenges a JSON request without a token when %s, and warns once',
+    async (_case, options) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const app = appReadingRaw(options);
+
+      const first = await serve(app.fetch, '/mcp', { body: rpc('tools/list') });
+      const second = await serve(app.fetch, '/mcp', { body: rpc('tools/list') });
+
+      for (const res of [first, second]) {
+        expect(res.status).toBe(401);
+        expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+      }
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(warning);
+      warn.mockRestore();
+    },
   );
-  app.onError((error, c) => c.json({ message: error.message }, 500));
 
-  const res = await serve(app.fetch, '/mcp', { body: rpc('initialize') });
+  test('lets a request with a token through', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const res = await serve(appReadingRaw({}).fetch, '/mcp', {
+      body: rpc('tools/list'),
+      authorization: 'Bearer token-1',
+    });
 
-  expect(res.status).toBe(500);
-  expect(res.body).toEqual({
-    message:
-      'Clerk error: discoverable and publicAccess read the body of a request without a token, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+    expect(res).toMatchObject({ status: 200, body: { reached: true } });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('next after the request body was read', () => {
+  function handlerAfterRead(options: object) {
+    const handler = nextAdapter.withClerkMcpAuth(async () => Response.json({ reached: true }), {
+      verifyToken,
+      ...options,
+    });
+    return async (req: Request) => {
+      await req.json();
+      return handler(req);
+    };
+  }
+
+  test('challenges a JSON request without a token, and warns once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const app = handlerAfterRead({});
+
+    const first = await serve(app, '/mcp', { body: rpc('tools/list') });
+    const second = await serve(app, '/mcp', { body: rpc('tools/list') });
+
+    for (const res of [first, second]) {
+      expect(res.status).toBe(401);
+      expect(res.challenge).toMatch(/^Bearer resource_metadata="/);
+    }
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toMatch(/^Clerk warning: .*request\.clone\(\)\.json\(\)/);
+    warn.mockRestore();
+  });
+
+  test('lets a request with a token through', async () => {
+    const res = await serve(handlerAfterRead({}), '/mcp', {
+      body: rpc('tools/list'),
+      authorization: 'Bearer token-1',
+    });
+
+    expect(res).toMatchObject({ status: 200, body: { reached: true } });
   });
 });
 

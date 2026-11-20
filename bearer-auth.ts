@@ -419,24 +419,36 @@ function isPublicRequest(publicAccess: PublicAccess, body: unknown): boolean {
   return messages.length > 0 && messages.every((message) => isPublicMessage(publicAccess, message));
 }
 
+// The warning for a request body something before the auth check already read, in the terms of a fetch `Request`
+const UNREADABLE_BODY_WARNING =
+  'Clerk warning: the auth check could not read the JSON body of a request without a token, because something before it already read the request, so discoverable and publicAccess open nothing and the request got the 401 challenge. Read a copy there instead, as request.clone().json(), or set discoverable: false to require a token for every request';
+
+/**
+ * Thrown by an adapter's body reader when the body of a request without a token can't be read, such as one that
+ * middleware already consumed. `createBearerAuth` answers that request with the 401 challenge, as a server that opens
+ * nothing would, so the client still starts sign-in, and logs the message, a `Clerk warning:` naming the fix, once.
+ */
+export class UnreadableBodyError extends Error {
+  override name = 'UnreadableBodyError';
+}
+
 /**
  * Reads the JSON body of a request without consuming it, for the `publicAccess` check, so that the MCP transport can
  * still read the request afterwards. It reads a clone, and stops at `PUBLIC_BODY_LIMIT` bytes. Only a body sent as
  * `application/json` is read, the one media type the streamable HTTP transport takes a POST in, which is also what
  * `express.json()` parses for the Express adapter.
  * @param request - The incoming request
- * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON. It throws a
- * `Clerk error:` when the body was already read: a request can't be cloned after that, and answering with the 401
- * would give nothing to say why, as with the Express adapter without `express.json()`.
+ * @param unreadable - The warning for a body that was already read, naming the fix in the caller's terms
+ * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON. It throws an
+ * `UnreadableBodyError` with `unreadable` when the body was already read, since a request can't be cloned after that.
  */
-export async function readJsonBody(request: Request): Promise<unknown> {
+export async function readJsonBody(
+  request: Request,
+  unreadable = UNREADABLE_BODY_WARNING,
+): Promise<unknown> {
   const [mediaType = ''] = (request.headers.get('content-type') ?? '').split(';');
   if (mediaType.trim().toLowerCase() !== 'application/json') return undefined;
-  if (request.bodyUsed) {
-    throw new Error(
-      'Clerk error: discoverable and publicAccess read the body of a request without a token, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
-    );
-  }
+  if (request.bodyUsed) throw new UnreadableBodyError(unreadable);
   // `Number(null)` is 0, so a request without the header goes on to the counted read below
   if (Number(request.headers.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
   const reader = request.clone().body?.getReader();
@@ -647,6 +659,7 @@ export function createBearerAuth<Req>(
   }
   const authenticate = bearerAuthenticator(options);
   let warnedAudienceRejection = false;
+  let warnedUnreadableBody = false;
 
   return async (
     request: Req,
@@ -680,8 +693,25 @@ export function createBearerAuth<Req>(
             throw error;
           }
         };
+    const readBody = input.body;
+    // An unreadable body opens nothing, so the request gets the 401 challenge that starts sign-in, rather than a
+    // server error that a client without a token can't get past
+    const body =
+      readBody &&
+      (async () => {
+        try {
+          return await readBody();
+        } catch (error) {
+          if (!(error instanceof UnreadableBodyError)) throw error;
+          if (!warnedUnreadableBody) {
+            warnedUnreadableBody = true;
+            console.warn(error.message);
+          }
+          return undefined;
+        }
+      });
     try {
-      return await authenticate({ ...input, verifyToken });
+      return await authenticate({ ...input, body, verifyToken });
     } catch (error) {
       if (!(error instanceof McpAuthError)) throw error;
       return { ok: false, serverError: error };

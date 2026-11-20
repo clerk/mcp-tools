@@ -9,6 +9,7 @@ import {
   createBearerAuth,
   protectedResourceMetadataAnswer,
   readJsonBody,
+  UnreadableBodyError,
   resourceMetadataUrlFor,
   verifyClerkOAuthToken,
 } from './bearer-auth';
@@ -1161,12 +1162,15 @@ describe('readJsonBody', () => {
     await expect(readJsonBody(post(`{}${padding}`))).resolves.toEqual({});
   });
 
-  test('throws a setup error for a body that was already read', async () => {
+  test('throws an UnreadableBodyError naming the fix for a body that was already read', async () => {
     const request = post('{"jsonrpc":"2.0","id":1,"method":"ping"}');
     await request.json();
 
-    await expect(readJsonBody(request)).rejects.toThrow(
-      'Clerk error: discoverable and publicAccess read the body of a request without a token, and something before the auth check already read it. Read a copy there instead, as request.clone().json()',
+    const error = await readJsonBody(request).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(UnreadableBodyError);
+    expect(error).toHaveProperty(
+      'message',
+      'Clerk warning: the auth check could not read the JSON body of a request without a token, because something before it already read the request, so discoverable and publicAccess open nothing and the request got the 401 challenge. Read a copy there instead, as request.clone().json(), or set discoverable: false to require a token for every request',
     );
   });
 });
