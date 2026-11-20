@@ -404,3 +404,44 @@ describe('a server with discoverable: false', () => {
     }
   });
 });
+
+describe('a server with a publicAccess.methods list', () => {
+  const handshakeOnly: ServerOptions = {
+    publicAccess: { methods: ['initialize', 'server/discover'], tools: ['search_docs'] },
+  };
+
+  test('lets a client without a token connect and call a named tool, but challenges a list it leaves out', async () => {
+    const { fetchImpl, toolCalls, answers } = startServer(undefined, handshakeOnly);
+    const { client, connected, redirects } = connectOAuthClient(MCP_URL, fetchImpl, undefined);
+    await connected;
+    try {
+      expect(textOf(await client.callTool({ name: 'search_docs', arguments: {} }))).toBe('results');
+      expect(toolCalls.mock.calls).toEqual([['search_docs']]);
+      expect(redirects).toHaveLength(0);
+      await vi.waitFor(() => expect(answers).toContain('GET 405'));
+
+      await expect(client.listTools()).rejects.toBeInstanceOf(UnauthorizedError);
+      expect(redirects).toHaveLength(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('opens only the listed methods, and answers a GET without a token with the 401 when no handshake is listed', async () => {
+    const { fetchImpl } = startServer(undefined, { publicAccess: { methods: ['ping'] } });
+
+    const ping = await postRequest(fetchImpl, 'ping');
+    await ping.body?.cancel();
+    expect(ping.status).not.toBe(401);
+    for (const method of ['server/discover', 'tools/list']) {
+      const res = await postRequest(fetchImpl, method);
+      expect(res.status, method).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
+    }
+    const get = await fetchImpl(MCP_URL, {
+      method: 'GET',
+      headers: { accept: 'text/event-stream' },
+    });
+    expect(get.status).toBe(401);
+  });
+});

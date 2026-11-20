@@ -1171,7 +1171,7 @@ const rpc = (method: string, params?: Record<string, unknown>) => ({
 
 // `publicAccess`: what a request without a token may reach, and what it gets when it may not
 describe.each(authApps)('%s publicAccess', (_name, mount) => {
-  const publicAccess = { methods: true, tools: ['search_docs'] } as const;
+  const publicAccess = { tools: ['search_docs'] } as const;
   const send = (options: object, init: Init) => post(mount, { verifyToken, ...options }, init);
 
   test('lets an open method through without auth info, with its body still readable', async () => {
@@ -1280,7 +1280,14 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     ['by default', {}],
     [
       'with every method and call open',
-      { publicAccess: { methods: true, tools: ['search_docs'], resources: true, prompts: true } },
+      {
+        publicAccess: {
+          methods: ['initialize', 'ping'],
+          tools: ['search_docs'],
+          resources: true,
+          prompts: true,
+        },
+      },
     ],
   ])(
     'challenges the cancelled, progress, and roots notifications without a token %s',
@@ -1334,6 +1341,45 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     expect((await send(options, { body: rpc('initialize') })).status).toBe(200);
     expect((await send(options, { body: rpc('tools/list') })).status).toBe(401);
   });
+
+  test.each([true, false])(
+    'rejects discoverable: %s next to publicAccess.methods at setup',
+    (discoverable) => {
+      expect(() =>
+        mount({ verifyToken, discoverable, publicAccess: { methods: ['initialize'] } }),
+      ).toThrow(`Clerk error: ${caller} set discoverable or publicAccess.methods, not both`);
+    },
+  );
+
+  test.each([true, false, 'initialize'])('rejects publicAccess.methods: %j at setup', (methods) => {
+    expect(() => mount({ verifyToken, publicAccess: { methods } })).toThrow(
+      `Clerk error: ${caller} publicAccess.methods must be a list; use discoverable to open every method`,
+    );
+  });
+
+  test.each([
+    ['tools', { tools: ['search_docs'] }],
+    ['resources', { resources: true }],
+    ['prompts', { prompts: ['summarize'] }],
+  ])(
+    'rejects publicAccess.%s with a methods list that opens neither handshake at setup',
+    (key, calls) => {
+      expect(() =>
+        mount({ verifyToken, publicAccess: { methods: ['ping', 'tools/list'], ...calls } }),
+      ).toThrow(
+        `Clerk error: ${caller} publicAccess.${key} needs publicAccess.methods to include 'initialize' or 'server/discover', so clients can connect without a token`,
+      );
+    },
+  );
+
+  test.each([['initialize'], ['server/discover']])(
+    'accepts named calls with a methods list that opens %s',
+    (method) => {
+      expect(() =>
+        mount({ verifyToken, publicAccess: { methods: [method], tools: ['search_docs'] } }),
+      ).not.toThrow();
+    },
+  );
 
   test.each(['yes', 'false', 1, 0, null])('rejects discoverable %j at setup', (discoverable) => {
     expect(() => mount({ verifyToken, discoverable })).toThrow(
@@ -1592,7 +1638,7 @@ describe('hono after a middleware read the raw request', () => {
 
   test.each([
     ['discoverable by default', {}],
-    ['publicAccess', { publicAccess: { methods: true, tools: ['search_docs'] } }],
+    ['publicAccess', { publicAccess: { tools: ['search_docs'] } }],
   ])(
     'challenges a JSON request without a token when %s, and warns once',
     async (_case, options) => {

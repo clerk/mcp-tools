@@ -33,7 +33,7 @@ function verifyToken(token: string): AuthInfo | undefined {
 const authOptions = (resourceUrl: string) => ({
   verifyToken,
   resourceUrl,
-  publicAccess: { methods: true, tools: ['search_docs'] },
+  publicAccess: { tools: ['search_docs'] },
 });
 
 const result = (text: string) => ({ content: [{ type: 'text' as const, text }] });

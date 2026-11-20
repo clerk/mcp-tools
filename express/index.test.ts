@@ -149,7 +149,7 @@ describe('mcpAuth', () => {
       });
       const app = express();
       app.use(express.json());
-      app.post('/mcp', mcpAuth({ verifyToken, publicAccess: { methods: true } }), downstream);
+      app.post('/mcp', mcpAuth({ verifyToken, discoverable: true }), downstream);
 
       const status = await withListening(
         app,
