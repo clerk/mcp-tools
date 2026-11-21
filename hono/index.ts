@@ -88,6 +88,7 @@ type ClerkEnv = {
   CLERK_API_URL?: string;
   CLERK_API_VERSION?: string;
   CLERK_JWT_KEY?: string;
+  CLERK_PROXY_URL?: string;
 };
 
 // The clients `mcpAuth` built from the environment, keyed by every setting, the secret included (in memory only). On
@@ -96,8 +97,8 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
 
 /**
  * The settings a Clerk client is built from, read from the app's environment through `env(c)`: the secret and
- * publishable keys, and `CLERK_API_URL`, `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as
- * `clerkClient` from `@clerk/express` reads them.
+ * publishable keys, and `CLERK_API_URL`, `CLERK_API_VERSION`, `CLERK_JWT_KEY`, and `CLERK_PROXY_URL` when they are set,
+ * as `clerkClient` from `@clerk/express` reads them.
  * @param c - The Hono context of the request
  * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
  * not set.
@@ -109,6 +110,7 @@ function requireClerkKeys(c: Context) {
     CLERK_API_URL,
     CLERK_API_VERSION,
     CLERK_JWT_KEY,
+    CLERK_PROXY_URL,
   } = env<ClerkEnv>(c);
   const keys = requireClerkEnvKeys('mcpAuth', { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
   // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
@@ -118,6 +120,8 @@ function requireClerkKeys(c: Context) {
     ...(CLERK_API_URL && { apiUrl: CLERK_API_URL }),
     ...(CLERK_API_VERSION && { apiVersion: CLERK_API_VERSION }),
     ...(CLERK_JWT_KEY && { jwtKey: CLERK_JWT_KEY }),
+    // Behind a proxy, Clerk issues OAuth access tokens with the proxy URL as their `iss`
+    ...(CLERK_PROXY_URL && { proxyUrl: CLERK_PROXY_URL }),
   };
 }
 
@@ -322,7 +326,7 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * Clerk, including that its audience is this endpoint; pass `verifyToken` to verify tokens with your own function.
  * @param options - See `McpAuthOptions`. Without `clerkClient`, it builds one with `createClerkClient` from
  * `@clerk/backend`, from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` read through `env(c)`, with `CLERK_API_URL`,
- * `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, kept for each set of those settings. Keep
+ * `CLERK_API_VERSION`, `CLERK_JWT_KEY`, and `CLERK_PROXY_URL` when they are set, kept for each set of those settings. Keep
  * `clerkMiddleware()` off the MCP route, which otherwise verifies each token a second time.
  * @returns The middleware. A missing or rejected token gets a 401 challenge, a token without `requiredScopes` gets a
  * 403 challenge, and a request to an origin no `resourceUrl` lists gets a 421. The reason is recorded in the
