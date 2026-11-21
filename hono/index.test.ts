@@ -656,7 +656,7 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
     vi.mocked(env).mockImplementation(() => process.env);
   });
 
-  test('passes CLERK_API_URL, CLERK_API_VERSION, and CLERK_JWT_KEY to the client, building another when they change', async () => {
+  test('passes CLERK_API_URL, CLERK_API_VERSION, CLERK_JWT_KEY, and CLERK_PROXY_URL to the client, building another when they change', async () => {
     envClient();
     const app = envApp();
 
@@ -667,6 +667,7 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
       CLERK_API_URL: 'https://api.clerkstage.dev',
       CLERK_API_VERSION: 'v2',
       CLERK_JWT_KEY: 'jwt-key-8',
+      CLERK_PROXY_URL: 'https://example.com/__clerk',
     });
     await post(app);
     expect((await post(app)).status).toBe(200);
@@ -680,6 +681,7 @@ describe('mcpAuth with a Clerk client built from the environment', () => {
           apiUrl: 'https://api.clerkstage.dev',
           apiVersion: 'v2',
           jwtKey: 'jwt-key-8',
+          proxyUrl: 'https://example.com/__clerk',
         },
       ],
     ]);
