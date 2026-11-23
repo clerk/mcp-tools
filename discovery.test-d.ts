@@ -3,9 +3,14 @@ import type { Context } from 'hono';
 import { describe, expectTypeOf, test } from 'vitest';
 
 import {
+  type AICatalogEntryOptions,
   type AICatalogHandlerOptions,
+  type AICatalogHost,
+  type AICatalogOptions,
   type ServerCardHandlerOptions,
   aiCatalogHandler,
+  ardHandler,
+  ardLinkHeader,
   serverCardHandler,
 } from './hono';
 import * as next from './next';
@@ -156,5 +161,67 @@ describe('Express discovery handler types', () => {
     expressAdapter.aiCatalogHandler({ entries, resourceUrl });
     // @ts-expect-error entries are required
     expressAdapter.aiCatalogHandler({});
+  });
+});
+
+describe('ARD discovery types', () => {
+  const entries = [
+    {
+      identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
+      url: 'https://example.com/mcp/server-card',
+    },
+  ];
+
+  test('ardHandler takes the aiCatalogHandler options and returns each adapter handler', () => {
+    const handler = ardHandler({ entries, maxAge: 0 });
+    expectTypeOf(handler).parameters.toEqualTypeOf<[Context]>();
+    expectTypeOf(handler).returns.toExtend<Response>();
+    expectTypeOf(next.ardHandler({ entries })).toEqualTypeOf<(req: Request) => Response>();
+    const expressHandler = expressAdapter.ardHandler({ entries });
+    expectTypeOf(expressHandler).parameters.toEqualTypeOf<[express.Request, express.Response]>();
+    expectTypeOf(expressHandler).toExtend<express.RequestHandler>();
+    expectTypeOf<Parameters<typeof ardHandler>[0]>().toEqualTypeOf<AICatalogHandlerOptions>();
+    // @ts-expect-error specVersion is generated
+    ardHandler({ entries, specVersion: '0.9' });
+    // @ts-expect-error entries are required
+    ardHandler({});
+  });
+
+  test('entries take representativeQueries and a trust manifest, or null to publish none', () => {
+    expectTypeOf<AICatalogEntryOptions['representativeQueries']>().toEqualTypeOf<
+      readonly string[] | undefined
+    >();
+    aiCatalogHandler({
+      entries: [{ ...entries[0]!, representativeQueries: ['Will it rain?'], trustManifest: null }],
+    });
+    aiCatalogHandler({
+      entries: [{ ...entries[0]!, trustManifest: { identity: 'https://example.com' } }],
+    });
+    // @ts-expect-error representativeQueries are text
+    aiCatalogHandler({ entries: [{ ...entries[0]!, representativeQueries: [1] }] });
+  });
+
+  test('a catalog takes a host with a displayName and identifier', () => {
+    expectTypeOf<AICatalogOptions['host']>().toEqualTypeOf<AICatalogHost | undefined>();
+    aiCatalogHandler({ entries, host: { displayName: 'Example', identifier: 'example.com' } });
+    aiCatalogHandler({
+      entries,
+      host: {
+        displayName: 'Example',
+        identifier: 'example.com',
+        documentationUrl: 'https://docs.example.com',
+      },
+    });
+    // @ts-expect-error a host needs an identifier
+    aiCatalogHandler({ entries, host: { displayName: 'Example' } });
+    // @ts-expect-error logoUrl is not supported
+    aiCatalogHandler({ entries, host: { displayName: 'E', identifier: 'e.com', logoUrl: 'x' } });
+  });
+
+  test('ardLinkHeader takes an optional target and returns the header value', () => {
+    expectTypeOf(ardLinkHeader).toEqualTypeOf<(target?: string) => string>();
+    expectTypeOf(next.ardLinkHeader).toEqualTypeOf(ardLinkHeader);
+    expectTypeOf(expressAdapter.ardLinkHeader).toEqualTypeOf(ardLinkHeader);
   });
 });

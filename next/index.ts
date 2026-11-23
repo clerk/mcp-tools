@@ -19,6 +19,7 @@ import {
   type DiscoveryRequest,
   type ServerCardHandlerOptions,
   aiCatalogResponder,
+  ardResponder,
   serverCardResponder,
 } from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
@@ -152,8 +153,8 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
  * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
  * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
- * `Cache-Control: no-store`. Export it for each method, as for `serverCardHandler`, from the `ard.json` route, and
- * re-export that route's methods from the `ai-catalog.json` route, so both paths get the same body and headers.
+ * `Cache-Control: no-store`. Export it for each method, as for `serverCardHandler`, from the `ai-catalog.json` route,
+ * and `ardHandler` with the same options from the `ard.json` route.
  * @see https://github.com/Agent-Card/ai-catalog
  * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
  * @param options - See `AICatalogHandlerOptions`
@@ -161,7 +162,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  * `aiCatalogHandler` itself, without calling it, throws a `Clerk error:` on the first request.
  * @example
  * ```ts
- * // app/.well-known/ard.json/route.ts
+ * // app/.well-known/ai-catalog.json/route.ts
  * const handler = aiCatalogHandler({
  *   entries: [
  *     {
@@ -181,14 +182,56 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  *   handler as PATCH,
  *   handler as DELETE,
  * };
- *
- * // app/.well-known/ai-catalog.json/route.ts
- * export { GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE } from '../ard.json/route';
  * ```
  */
 export function aiCatalogHandler(options: AICatalogHandlerOptions): (req: Request) => Response {
   assertDiscoveryHandlerCalled('aiCatalogHandler', options);
   return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
+}
+
+/**
+ * A Next.js route handler that serves the AI Catalog `aiCatalogHandler` does at `/.well-known/ard.json`, the
+ * canonical path of Agentic Resource Discovery (ARD) v0.91, as `application/json`, the media type the ARD publishing
+ * guide serves it with. It takes the same options and answers the same way: the same body, weak `ETag`, caching,
+ * public CORS, conditional requests, and 405. Export it for each method from the `ard.json` route, and
+ * `aiCatalogHandler` with the same options from the `ai-catalog.json` route, which keeps the AI Catalog's
+ * `application/ai-catalog+json`.
+ * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+ * @see https://agenticresourcediscovery.org/how_to_publish/
+ * @param options - See `AICatalogHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have. Exporting
+ * `ardHandler` itself, without calling it, throws a `Clerk error:` on the first request.
+ * @example
+ * ```ts
+ * // lib/catalog.ts
+ * export const catalog = {
+ *   entries: [
+ *     {
+ *       identifier: 'urn:air:example.com:weather',
+ *       displayName: 'Weather',
+ *       url: 'https://mcp.example.com/mcp/server-card',
+ *     },
+ *   ],
+ * };
+ *
+ * // app/.well-known/ard.json/route.ts
+ * const handler = ardHandler(catalog);
+ * export {
+ *   handler as GET,
+ *   handler as HEAD,
+ *   handler as OPTIONS,
+ *   handler as POST,
+ *   handler as PUT,
+ *   handler as PATCH,
+ *   handler as DELETE,
+ * };
+ *
+ * // app/.well-known/ai-catalog.json/route.ts: the same exports, with aiCatalogHandler(catalog)
+ * ```
+ */
+export function ardHandler(options: AICatalogHandlerOptions): (req: Request) => Response {
+  assertDiscoveryHandlerCalled('ardHandler', options);
+  return discoveryHandler(ardResponder('ardHandler', options));
 }
 
 // Exported uncalled as a method, the factory is called with the request, which would otherwise fail on a missing option

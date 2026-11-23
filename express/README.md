@@ -342,26 +342,39 @@ Express writes the discovery answer's headers over earlier values, including `Ca
 
 ### `aiCatalogHandler`
 
-Express handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
+Express handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all` at `/.well-known/ai-catalog.json`, and [`ardHandler`](#ardhandler) with the same options at `/.well-known/ard.json`, so both [catalog paths](../README.md#discovery-ai-catalogs) serve it:
 
 ```ts
-import { aiCatalogHandler } from '@clerk/mcp-tools/express';
+import { aiCatalogHandler, ardHandler } from '@clerk/mcp-tools/express';
 
-app.all(
-  ['/.well-known/ard.json', '/.well-known/ai-catalog.json'],
-  aiCatalogHandler({
-    entries: [
-      {
-        identifier: 'urn:air:example.com:weather',
-        displayName: 'Weather',
-        url: 'https://mcp.example.com/mcp/server-card',
-      },
-    ],
-  }),
-);
+const catalog = {
+  entries: [
+    {
+      identifier: 'urn:air:example.com:weather',
+      displayName: 'Weather',
+      url: 'https://mcp.example.com/mcp/server-card',
+    },
+  ],
+};
+
+app.all('/.well-known/ard.json', ardHandler(catalog));
+app.all('/.well-known/ai-catalog.json', aiCatalogHandler(catalog));
 ```
 
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and both paths get the same body and headers. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `${req.protocol}://${req.host}` (with `trust proxy` behind a proxy), and answer `421` for an origin without one rather than serving another origin's catalog.
+It answers as `serverCardHandler` does, with `application/ai-catalog+json`. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `${req.protocol}://${req.host}` (with `trust proxy` behind a proxy), and answer `421` for an origin without one rather than serving another origin's catalog.
+
+### `ardHandler`
+
+Express handler that serves the same catalog as `aiCatalogHandler`, from the same options, at `/.well-known/ard.json` as `application/json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves it with. It answers exactly as `aiCatalogHandler` does otherwise, with the same body and `ETag`, so the two paths revalidate each other. Point the homepage at it with `ardLinkHeader()`; see [ARD discovery](../README.md#ard-discovery):
+
+```ts
+import { ardLinkHeader } from '@clerk/mcp-tools/express';
+
+app.get('/', (_req, res) => {
+  res.set('Link', ardLinkHeader()); // </.well-known/ard.json>; rel="ard"
+  res.send('OK');
+});
+```
 
 ## MCP Request Handler
 

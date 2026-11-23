@@ -14,6 +14,7 @@ const SERVER: Surface = {
   values: [
     'McpAuthError',
     'McpTokenVerificationError',
+    'ardLinkHeader',
     'fetchAuthorizationServerMetadata',
     'generateAICatalog',
     'generateProtectedResourceMetadata',
@@ -29,6 +30,7 @@ const SERVER: Surface = {
     'AICatalogAttestation',
     'AICatalogEntry',
     'AICatalogEntryOptions',
+    'AICatalogHost',
     'AICatalogOptions',
     'AICatalogTrustManifest',
     'ClerkAuthInfo',
@@ -54,6 +56,7 @@ const withServer = (values: string[], types: string[]): Surface => ({
 const ADAPTER: Surface = {
   values: [
     'aiCatalogHandler',
+    'ardHandler',
     'authorizationServerMetadataHandler',
     'mcpAuth',
     'protectedResourceMetadataHandler',
@@ -128,6 +131,7 @@ const PINNED: Record<string, Surface> = {
   './next': withServer(
     [
       'aiCatalogHandler',
+      'ardHandler',
       'authorizationServerMetadataHandler',
       'metadataCorsHandler',
       'protectedResourceMetadataHandler',

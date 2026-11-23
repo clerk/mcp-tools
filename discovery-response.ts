@@ -26,8 +26,8 @@ export type ServerCardHandlerOptions = Omit<ServerCardOptions, 'resourceUrl'> & 
 };
 
 /**
- * Options for an `aiCatalogHandler`: the `generateAICatalog` options and the cache lifetime. The catalog is the same
- * for every request; an app that answers on several origins mounts one handler for each.
+ * Options for an `aiCatalogHandler` or an `ardHandler`: the `generateAICatalog` options and the cache lifetime. The
+ * catalog is the same for every request; an app that answers on several origins mounts one handler for each.
  */
 export type AICatalogHandlerOptions = AICatalogOptions & {
   /**
@@ -141,12 +141,29 @@ export function serverCardResponder(caller: string, options: unknown) {
  * @returns The function that answers each request
  */
 export function aiCatalogResponder(caller: string, options: unknown) {
+  return catalogResponder(caller, options, 'application/ai-catalog+json');
+}
+
+/**
+ * Validates an `ardHandler`'s options and generates its catalog once, as `aiCatalogResponder` does, served as
+ * `application/json`: the ARD publishing guide ("Step 2: Host the manifest") serves `/.well-known/ard.json` with it.
+ * @see https://agenticresourcediscovery.org/how_to_publish/
+ * @param caller - The entry point named in error messages
+ * @param options - The handler's options, unchecked
+ * @returns The function that answers each request
+ */
+export function ardResponder(caller: string, options: unknown) {
+  return catalogResponder(caller, options, 'application/json');
+}
+
+// One catalog, built from the handler's options, served with the given media type
+function catalogResponder(caller: string, options: unknown, mediaType: string) {
   // Anything but an object goes to the builder as it is, which names the options it takes
   const isObject = isPlainObject(options);
   const { maxAge, ...catalog } = isObject ? (options as AICatalogHandlerOptions) : {};
   return discoveryResponder(caller, {
     maxAge,
-    mediaType: 'application/ai-catalog+json',
+    mediaType,
     // One catalog, whatever the request's URL
     build: () => ({ document: buildAICatalog(caller, isObject ? catalog : options) }),
   });

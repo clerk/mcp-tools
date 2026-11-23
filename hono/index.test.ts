@@ -35,6 +35,7 @@ import {
   authorizationServerMetadataHandler,
   mcpAuth,
   aiCatalogHandler,
+  ardHandler,
   serverCardHandler,
   streamableHttpHandler,
 } from './index';
@@ -206,6 +207,21 @@ describe.each([
       }),
     '/.well-known/ai-catalog.json',
     'application/ai-catalog+json',
+  ],
+  [
+    'ardHandler',
+    () =>
+      ardHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:weather:mcp',
+            displayName: 'Weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      }),
+    '/.well-known/ard.json',
+    'application/json',
   ],
 ])('%s', (_name, handler, path, mediaType) => {
   test('keeps the headers earlier middleware set, on the document and on a 304', async () => {

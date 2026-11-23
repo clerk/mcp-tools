@@ -33,6 +33,7 @@ import {
   McpAuthError,
   type McpAuthFailure,
   aiCatalogHandler,
+  ardHandler,
   protectedResourceMetadataHandler,
   serverCardHandler,
   withClerkMcpAuth,
@@ -524,6 +525,7 @@ describe('discovery route handlers', () => {
   test.each([
     ['serverCardHandler', serverCardHandler],
     ['aiCatalogHandler', aiCatalogHandler],
+    ['ardHandler', ardHandler],
   ] as const)('%s exported uncalled throws a Clerk error on the first request', (name, factory) => {
     expect(() => (factory as unknown as (req: Request) => unknown)(new Request(CARD_URL))).toThrow(
       `Clerk error: call ${name}(options) and export its result from the route, instead of exporting ${name} itself`,

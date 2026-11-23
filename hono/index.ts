@@ -22,6 +22,7 @@ import {
   type DiscoveryRequest,
   type ServerCardHandlerOptions,
   aiCatalogResponder,
+  ardResponder,
   serverCardResponder,
 } from '../discovery-response';
 import {
@@ -239,19 +240,50 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
  * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
  * request: to answer on several origins with their own cards, create one handler for each and pick it by origin. Mount
- * the one handler at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
+ * it at `/.well-known/ai-catalog.json`, and `ardHandler` with the same options at `/.well-known/ard.json`, with
+ * `app.all` so OPTIONS and other methods reach them; importing it mounts nothing.
  *
  * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
  * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
  * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
- * `Cache-Control: no-store`. Both paths get the same body and headers.
+ * `Cache-Control: no-store`.
  * @see https://github.com/Agent-Card/ai-catalog
  * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
  * @param options - See `AICatalogHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
  * @example
  * ```ts
- * const catalog = aiCatalogHandler({
+ * app.all(
+ *   '/.well-known/ai-catalog.json',
+ *   aiCatalogHandler({
+ *     entries: [
+ *       {
+ *         identifier: 'urn:air:example.com:weather',
+ *         displayName: 'Weather',
+ *         url: 'https://mcp.example.com/mcp/server-card',
+ *       },
+ *     ],
+ *   }),
+ * );
+ * ```
+ */
+export function aiCatalogHandler(options: AICatalogHandlerOptions) {
+  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
+}
+
+/**
+ * A Hono handler that serves the AI Catalog `aiCatalogHandler` does at `/.well-known/ard.json`, the canonical path of
+ * Agentic Resource Discovery (ARD) v0.91, as `application/json`, the media type the ARD publishing guide serves it
+ * with. It takes the same options and answers the same way: the same body, weak `ETag`, caching, public CORS,
+ * conditional requests, and 405. Mount it with `app.all` at `/.well-known/ard.json`, and `aiCatalogHandler` with the
+ * same options at `/.well-known/ai-catalog.json`, which keeps the AI Catalog's `application/ai-catalog+json`.
+ * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+ * @see https://agenticresourcediscovery.org/how_to_publish/
+ * @param options - See `AICatalogHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
+ * @example
+ * ```ts
+ * const options = {
  *   entries: [
  *     {
  *       identifier: 'urn:air:example.com:weather',
@@ -259,14 +291,14 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  *       url: 'https://mcp.example.com/mcp/server-card',
  *     },
  *   ],
- * });
+ * };
  *
- * app.all('/.well-known/ard.json', catalog);
- * app.all('/.well-known/ai-catalog.json', catalog);
+ * app.all('/.well-known/ard.json', ardHandler(options));
+ * app.all('/.well-known/ai-catalog.json', aiCatalogHandler(options));
  * ```
  */
-export function aiCatalogHandler(options: AICatalogHandlerOptions) {
-  return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
+export function ardHandler(options: AICatalogHandlerOptions) {
+  return discoveryHandler(ardResponder('ardHandler', options));
 }
 
 function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {

@@ -146,15 +146,15 @@ For framework-specific implementations, see:
 
 An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
 
-`generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
+`generateAICatalog` builds a catalog that links to Server Cards, minimal (Level 1), or Discoverable (Level 2) with a `host`, and each adapter's `ardHandler` and `aiCatalogHandler` serve one (Hono, Express, and Next.js):
 
 - **Required:** `entries`, a list of `{ identifier, displayName, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
-- **Optional:** an entry's `trustManifest`, `{ identity, identityType?, attestations? }`, the [ARD](https://agenticresourcediscovery.org/spec) v0.91 trust manifest. Omitted, the entry carries no trust data.
-- **Generated:** `specVersion: "0.9"`, the v0.9 release candidate version, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, the AI Catalog's own contributor-keyed `trustManifests`, signatures, and extensions are not supported.
+- **Optional:** an entry's `representativeQueries`, the sample requests the server answers, and its `trustManifest`, `{ identity, identityType?, attestations? }`, the [ARD](https://agenticresourcediscovery.org/spec) v0.91 trust manifest, which defaults from a `urn:air:<domain>:…` identifier (`null` publishes none); and the catalog's `host`, `{ displayName, identifier, documentationUrl? }`. See [ARD discovery](#ard-discovery).
+- **Generated:** `specVersion: "0.9"`, the v0.9 release candidate version, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, a host's `logoUrl`, versions, the AI Catalog's own contributor-keyed `trustManifests`, signatures, and extensions are not supported.
 
 An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:weather`. The v0.9 RC recommends `urn:air:{publisher}:{name}[:{kind}]`: the publisher's domain, a stable name, and an optional single-segment kind suffix. ARD v0.91 reads the same form as `urn:air:<publisher>:[<namespace>:]<agent-name>`, taking a third segment as the agent name, so the examples here use only a publisher and a name, which both read the same way. This naming structure is a recommendation, not a required scheme; the builder preserves logical identifiers and does not validate the `urn:air` grammar. An identifier is not a retrieval URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `displayName` is the server's human-readable name, such as `Weather`. The v0.9 RC makes it optional, but [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec) (ARD) v0.91 requires it on every entry, so it is required here; it must have more than whitespace and no control characters. A client shows it instead of the card's `title`, so keep the two the same. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
 
-An entry's `trustManifest` says who stands behind the server. It follows the `TrustManifest` of the ARD v0.91 entry schema, which requires only `identity`: an absolute URI for the publisher, such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID, but not an `http`, `data`, `file`, or `javascript` URI, nor an `https` URL with credentials. ARD requires its trust domain to match the publisher in the entry's `identifier` (`example.com` in `urn:air:example.com:weather`); the builder does not check that, as it does not parse identifiers. `identityType` is an open hint for the identity's format, such as `https`, `did`, or `spiffe`. `attestations` lists claims, each `{ type, uri, digest?, mediaType? }` whose `uri` is an `https` URL or an inline `data:` URI, as the AI Catalog v0.9 RC's Attestation Object allows, such as `{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }`; list only claims you can back. The manifest is validated when the catalog is created and emitted as given. Its trust schema, provenance, and signature members are not supported, and the AI Catalog v0.9 RC ignores this ARD member, defining a separate `trustManifests` list instead.
+An entry's `trustManifest` says who stands behind the server. It follows the `TrustManifest` of the ARD v0.91 entry schema, which requires only `identity`: an absolute URI for the publisher, such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID, but not an `http`, `data`, `file`, or `javascript` URI, nor an `https` URL with credentials. ARD requires its trust domain to match the publisher in the entry's `identifier` (`example.com` in `urn:air:example.com:weather`). Left out, it defaults to that publisher's https identity (see [ARD discovery](#ard-discovery)); a manifest you set is not checked against the identifier. `identityType` is an open hint for the identity's format, such as `https`, `did`, or `spiffe`. `attestations` lists claims, each `{ type, uri, digest?, mediaType? }` whose `uri` is an `https` URL or an inline `data:` URI, as the AI Catalog v0.9 RC's Attestation Object allows, such as `{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }`; list only claims you can back. A manifest you set is validated when the catalog is created and emitted as given. Its trust schema, provenance, and signature members are not supported, and the AI Catalog v0.9 RC ignores this ARD member, defining a separate `trustManifests` list instead.
 
 ```ts
 import { generateAICatalog } from '@clerk/mcp-tools/server';
@@ -176,15 +176,50 @@ const catalog = generateAICatalog({
 });
 ```
 
-Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler doesn't read the path, so it needs no configuration for either, and both answer with the same bytes and headers, `ETag` included.
+Serve the catalog at both paths, `ardHandler` at `/.well-known/ard.json` and `aiCatalogHandler` with the same options at `/.well-known/ai-catalog.json`. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. Neither handler reads the path, and both answer with the same bytes and `ETag`, so one path's `ETag` revalidates the other's copy; only the `Content-Type` differs.
 
-The handlers answer as the Server Card handlers do, with the catalog's media type, `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
+The handlers answer as the Server Card handlers do, `ardHandler` with `application/json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves `ard.json` with, and `aiCatalogHandler` with the AI Catalog's own `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
 
 For framework-specific implementations, see:
 
 - [Express.js implementation](./express/README.md#aicataloghandler)
 - [Hono implementation](./hono/README.md#aicataloghandleroptions)
 - [Next.js implementation](./next/README.md#aicataloghandleroptions)
+
+#### ARD discovery
+
+[Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 is how agents and registries find a domain's catalog: a consumer fetches `/.well-known/ard.json` on the host it is resolving and follows a `rel="ard"` link ([section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms)). To be found:
+
+- **Serve the catalog on the host that is scanned.** A scanner or consumer resolving `mcp.example.com` reads `https://mcp.example.com/.well-known/ard.json`. A catalog on the apex `example.com` does not cover an MCP endpoint on a subdomain, so mount `ardHandler` on the host that serves the endpoint, and on the apex too if that is also scanned.
+- **Serve `ard.json` as `application/json`.** `ardHandler` does, as the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) ("Step 2: Host the manifest") shows; `aiCatalogHandler` keeps the AI Catalog's `application/ai-catalog+json` for `ai-catalog.json`.
+- **Link the catalog from the homepage.** `ardLinkHeader()` returns `</.well-known/ard.json>; rel="ard"` for the homepage's `Link` header. Pass a path or an absolute http or https URL to link a catalog elsewhere.
+- **Add `representativeQueries` to each entry.** ARD's [4.2 Entry Terms](https://agenticresourcediscovery.org/spec/#42-entry-terms) says an entry SHOULD carry 2 to 5 sample natural-language requests, which a registry indexes for search; without them ARD's conformance tester warns. Up to 20 are accepted, each with more than whitespace and no control characters; ARD's count is advice, so it is not enforced.
+- **Name the operator with `host`.** `{ displayName, identifier, documentationUrl? }`, the AI Catalog's Host Info, makes the catalog Level 2 (Discoverable). `identifier` is a domain name or a DID without whitespace, and `documentationUrl` an https URL without credentials. Other Host Info members, such as `logoUrl`, are not supported.
+- **Bind each entry to its publisher.** ARD's [4.5.1 Publisher Authority Binding](https://agenticresourcediscovery.org/spec/#451-publisher-authority-binding) requires the entry's `trustManifest.identity` to align with the publisher domain of its `urn:air:<publisher>:…` identifier. When an entry has no `trustManifest` and its identifier is `urn:air:<domain>:<name>` with a domain name of two or more labels, the catalog emits `{ identity: 'https://<domain>', identityType: 'https' }`, the domain lowercased. Any other identifier gets none. Set `trustManifest: null` to publish none, or set your own manifest, which is emitted as given.
+
+```ts
+import { aiCatalogHandler, ardHandler, ardLinkHeader } from '@clerk/mcp-tools/hono';
+
+const catalog = {
+  host: { displayName: 'Example Inc.', identifier: 'example.com' },
+  entries: [
+    {
+      identifier: 'urn:air:example.com:weather',
+      displayName: 'Weather',
+      url: 'https://mcp.example.com/mcp/server-card',
+      representativeQueries: ['What is the weather in Paris?', 'Will it rain tomorrow in Berlin?'],
+      // Defaults to { identity: 'https://example.com', identityType: 'https' }
+    },
+  ],
+};
+
+app.all('/.well-known/ard.json', ardHandler(catalog));
+app.all('/.well-known/ai-catalog.json', aiCatalogHandler(catalog));
+app.get('/', (c) => {
+  c.header('Link', ardLinkHeader());
+  return c.text('OK');
+});
+```
 
 #### Creating an MCP endpoint
 
@@ -1087,9 +1122,14 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Returns:** `ServerCard`
 
 - `generateAICatalog`
-  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs): `specVersion` `0.9` and one entry for each `{ identifier, displayName, url, trustManifest? }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
+  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs): `specVersion` `0.9`, an optional `host`, and one entry for each `{ identifier, displayName, url, representativeQueries?, trustManifest? }`, with the generated type `application/mcp-server-card+json` and, for a `urn:air:<domain>:…` identifier without a `trustManifest`, the default `{ identity: 'https://<domain>', identityType: 'https' }` (`null` publishes none). It throws a `Clerk error:` for an unknown key, a `host` without a `displayName` and `identifier` or with a `documentationUrl` that isn't https, `representativeQueries` that isn't a list of at most 20 non-blank texts, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
   - **Params:** `AICatalogOptions`
   - **Returns:** `AICatalog`
+
+- `ardLinkHeader`
+  - **Description:** The `Link` header value that points ARD clients at the catalog from the homepage, `</.well-known/ard.json>; rel="ard"` by default (ARD v0.91 section 5.1). See [ARD discovery](#ard-discovery). It throws a `Clerk error:` for a target that isn't a path starting with one `/` or an absolute http or https URL without credentials, or that holds whitespace, control characters, `<`, `>`, or `"`.
+  - **Params:** `target?: string`
+  - **Returns:** `string`
 
 - `McpAuthError`
   - **Description:** The error `mcpAuth` and `withClerkMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express and Next.js answer `{"error":"server_error"}` with that status, or `500`, and log the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers and logs the same way.

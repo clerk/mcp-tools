@@ -403,8 +403,10 @@ export {
   type AICatalogAttestation,
   type AICatalogEntry,
   type AICatalogEntryOptions,
+  type AICatalogHost,
   type AICatalogOptions,
   type AICatalogTrustManifest,
+  ardLinkHeader,
   generateAICatalog,
 } from './ai-catalog';
 
