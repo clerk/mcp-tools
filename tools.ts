@@ -2,7 +2,8 @@
  * Prebuilt MCP tools backed by a Clerk instance: `submitFeedbackTool` lets agents report friction to the Clerk
  * Dashboard, and `createBrowserSessionTool` gives agents a one-time link that opens your app signed in as the user.
  * Register either with `server.registerTool(...tool)` on MCP SDK 1.x or 2.x. Every error result either tool returns
- * names its code in `_meta[ERROR_CODE_META_KEY]`.
+ * names its code in `_meta[ERROR_CODE_META_KEY]`. `mcpAppViewResource` builds an MCP App view, registered with
+ * `server.registerResource(...view)`.
  *
  * @module
  */
@@ -38,3 +39,9 @@ export {
   submitFeedbackTool,
 } from './feedback';
 export { ERROR_CAUSE_META_KEY, ERROR_CODE_META_KEY } from './mcp-tool';
+export {
+  type McpAppViewCsp,
+  type McpAppViewResource,
+  type McpAppViewResourceOptions,
+  mcpAppViewResource,
+} from './mcp-app-view';

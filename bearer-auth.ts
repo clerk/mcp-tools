@@ -81,7 +81,8 @@ type DiscoveryOptions =
       /**
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
-       * a tool in `tools`, a `resources/read` that `resources` opens, or a `prompts/get` that `prompts` opens.
+       * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
+       * opens.
        * Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
        * it reaches something protected. A request with a token is verified as usual.
        */
@@ -93,7 +94,8 @@ type DiscoveryOptions =
        * their descriptions and schemas (protected ones included), without a token. `true`, the default, opens
        * `initialize` with its `notifications/initialized`, `server/discover`, `ping`, `tools/list`,
        * `resources/list`, `resources/templates/list`, and `prompts/list`, so a GET without a token gets a 405
-       * rather than the 401. Calls still need a token, except the ones `publicAccess` names, and so do
+       * rather than the 401. Calls still need a token, except a `resources/read` of a `ui://` MCP App view, which
+       * `publicAccess.views` opens by default, and the ones `publicAccess` names, and so do
        * `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed`, which are not
        * checked against the caller. `false` requires a token for every MCP request, as 0.9 did. It is only about
        * these MCP methods: protected resource metadata (RFC 9728) and the Server Card are public either way, and
@@ -104,7 +106,8 @@ type DiscoveryOptions =
       /**
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
-       * a tool in `tools`, a `resources/read` that `resources` opens, or a `prompts/get` that `prompts` opens.
+       * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
+       * opens.
        * Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
        * it reaches something protected. A request with a token is verified as usual.
        */
@@ -117,8 +120,8 @@ type DiscoveryOptions =
       discoverable?: boolean | undefined;
       /**
        * Without `discoverable`, no client without a token can connect, so `publicAccess` can name calls only when
-       * `discoverable` is `true` or left out. Empty placeholders, `tools: []` and `resources` or `prompts` as `[]`
-       * or `false`, name nothing and are accepted.
+       * `discoverable` is `true` or left out. Empty placeholders, `tools: []`, `resources` or `prompts` as `[]`
+       * or `false`, and `views: false`, name nothing and are accepted.
        */
       publicAccess?:
         | {
@@ -126,6 +129,7 @@ type DiscoveryOptions =
             tools?: readonly [] | undefined;
             resources?: readonly [] | false | undefined;
             prompts?: readonly [] | false | undefined;
+            views?: false | undefined;
           }
         | undefined;
     };
@@ -231,6 +235,7 @@ const publicAccessKeys: ReadonlySet<string> = new Set<keyof PublicAccess>([
   'tools',
   'resources',
   'prompts',
+  'views',
 ]);
 
 // The methods that run something, and how `publicAccess` opens each. They are not valid in `methods`, so that
@@ -252,8 +257,8 @@ export const PUBLIC_BODY_LIMIT = 1024 * 1024;
 
 /**
  * Throws a `Clerk error:` message unless `publicAccess` is `undefined` or a valid `PublicAccess`: an object with
- * only its four keys, `methods` a list of `McpPublicMethod`s, `tools` a list of tool names, and
- * `resources` and `prompts` each a boolean or a list of resource URIs or prompt names. A mistake here would
+ * only its five keys, `methods` a list of `McpPublicMethod`s, `tools` a list of tool names,
+ * `resources` and `prompts` each a boolean or a list of resource URIs or prompt names, and `views` a boolean. A mistake here would
  * otherwise only show as requests answered with a 401.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param publicAccess - The option's value, unchecked
@@ -272,7 +277,7 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
     );
   }
 
-  const { methods, tools, resources, prompts } = publicAccess as Record<
+  const { methods, tools, resources, prompts, views } = publicAccess as Record<
     keyof PublicAccess,
     unknown
   >;
@@ -300,6 +305,9 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
       `Clerk error: ${caller} publicAccess.tools must be a list of tool names, such as ['search_docs']`,
     );
   }
+  if (views !== undefined && typeof views !== 'boolean') {
+    throw new Error(`Clerk error: ${caller} publicAccess.views must be true or false`);
+  }
   for (const [key, value, example] of [
     ['resources', resources, "resource URIs, such as ['docs://index']"],
     ['prompts', prompts, "prompt names, such as ['summarize']"],
@@ -316,7 +324,7 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
  * Throws a `Clerk error:` message unless `discoverable` is `undefined`, `true`, or `false`, it is not set next to
  * a `publicAccess.methods` list, and `publicAccess` names calls only when a client without a token can connect:
  * when `discoverable` is not `false`, or a `methods` list includes `initialize` or `server/discover`. Empty
- * placeholders, `tools: []`, `resources: false`, and `prompts: false`, name nothing.
+ * placeholders, `tools: []`, `resources: false`, `prompts: false`, and `views: false`, name nothing.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param discoverable - The option's value, unchecked
  * @param publicAccess - The `publicAccess` option, already checked
@@ -341,7 +349,7 @@ function assertDiscoverable(
         ? 'discoverable'
         : undefined;
   if (needs === undefined) return;
-  for (const key of ['tools', 'resources', 'prompts'] as const) {
+  for (const key of ['tools', 'resources', 'prompts', 'views'] as const) {
     if (opensSome(publicAccess?.[key])) {
       throw new Error(
         `Clerk error: ${caller} publicAccess.${key} needs ${needs}, so clients can connect without a token`,
@@ -366,9 +374,15 @@ function effectivePublicAccess({
   discoverable,
   publicAccess,
 }: Pick<BaseAuthOptions, 'discoverable' | 'publicAccess'>): PublicAccess | undefined {
-  if (publicAccess?.methods !== undefined) return publicAccess;
+  // `views` is on by default whenever the server is discoverable, which a list does only when it opens resources/list
+  if (publicAccess?.methods !== undefined) {
+    return {
+      ...publicAccess,
+      views: publicAccess.views ?? publicAccess.methods.includes('resources/list'),
+    };
+  }
   if (discoverable === false) return undefined;
-  return { ...publicAccess, methods: allPublicMethods };
+  return { ...publicAccess, views: publicAccess?.views ?? true, methods: allPublicMethods };
 }
 
 function isNameList(value: unknown): value is string[] {
@@ -409,8 +423,14 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
       const name = param('name');
       return typeof name === 'string' && (publicAccess.tools ?? []).includes(name);
     }
-    case 'resources/read':
-      return opensNamed(publicAccess.resources, param('uri'));
+    case 'resources/read': {
+      const uri = param('uri');
+      // The scheme is compared as the client sends it, so a URI that only differs in case stays closed
+      if (publicAccess.views === true && typeof uri === 'string' && uri.startsWith('ui://')) {
+        return true;
+      }
+      return opensNamed(publicAccess.resources, uri);
+    }
     case 'prompts/get':
       return opensNamed(publicAccess.prompts, param('name'));
     // The client sends this right after `initialize` succeeds, so it is part of that handshake

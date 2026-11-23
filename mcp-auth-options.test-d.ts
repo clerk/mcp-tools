@@ -266,6 +266,24 @@ describe('the mcpAuth options', () => {
     });
   });
 
+  test('accept publicAccess.views, and views: false as a placeholder with discoverable: false', () => {
+    expressMcpAuth({ resourceUrl, publicAccess: { views: false } });
+    honoMcpAuth({ verifyToken, discoverable: true, publicAccess: { views: true } });
+    nextWithMcpAuth(handler, {
+      resourceUrl,
+      publicAccess: { methods: ['initialize', 'resources/list'], views: false },
+    });
+    honoMcpAuth({ verifyToken, discoverable: false, publicAccess: { views: false } });
+    nextMetadataHandler({ discoverable: false, publicAccess: { views: false } });
+  });
+
+  test('reject public views with discoverable: false, and a views that is not a boolean', () => {
+    // @ts-expect-error public views that no client without a token can connect to reach
+    expressMcpAuth({ resourceUrl, discoverable: false, publicAccess: { views: true } });
+    // @ts-expect-error views is true or false
+    honoMcpAuth({ verifyToken, publicAccess: { views: ['ui://docs/viewer.html'] } });
+  });
+
   test('reject a discoverable that is not a boolean', () => {
     // @ts-expect-error discoverable is true or false
     expressMcpAuth({ resourceUrl, discoverable: 'yes' });

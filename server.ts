@@ -134,7 +134,7 @@ export type McpPublicMethod =
 
 /**
  * What a request without an `Authorization` header may do besides what `discoverable` opens, as the `publicAccess`
- * option of `mcpAuth` and `withClerkMcpAuth`. A call is open only when it is listed here, and a request for anything
+ * option of `mcpAuth` and `withClerkMcpAuth`. A call is open only when it is listed here, or is the read of a `ui://` view that `views` opens, and a request for anything
  * else gets the 401 challenge that starts authorization, so an MCP client signs in only when it reaches something
  * protected. A request that carries a token is verified as usual, whatever it asks for.
  */
@@ -145,7 +145,8 @@ export type PublicAccess = {
    * with `initialize` before protocol revision 2026-07-28 and with `server/discover` from it, so a list that names
    * one and not the other leaves some clients unable to connect, and `tools`, `resources`, and `prompts` need the
    * list to name at least one. An open list method shows its whole list, so with `tools/list` open anyone can read
-   * the name, description, and input schema of every tool, the protected ones included. It never opens a call. With
+   * the name, description, and input schema of every tool, the protected ones included. It never opens a call, but a
+   * list that opens `resources/list` turns `views` on by default, as `discoverable` does. With
    * `initialize` or `server/discover` open, a GET without a token gets a 405 rather than the 401, and a
    * `subscriptions/listen` (protocol revision 2026-07-28) is open when every resource in its `resourceSubscriptions`
    * is one `resources` opens.
@@ -166,6 +167,15 @@ export type PublicAccess = {
    * The prompts a `prompts/get` may ask for without a token: `true` for every prompt, or a list of prompt names.
    */
   prompts?: boolean | readonly string[] | undefined;
+  /**
+   * Whether a `resources/read` without a token may ask for an MCP App view template, any URI with the `ui://`
+   * scheme. On by default when the server is discoverable: `discoverable` left out or `true`, or a `methods` list
+   * that opens `resources/list`. MCP Apps (2026-01-26) lets a host prefetch and cache a view before any tool runs, so
+   * before the user has signed in, and a scanner reads it to check the view. A view template is shared HTML: user data
+   * reaches it only through the result of an authenticated tool call. Set `views: false` when your server renders
+   * per-user data into a template, so every view needs a token; `resources` can still open single views by URI.
+   */
+  views?: boolean | undefined;
 };
 
 /**

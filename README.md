@@ -232,7 +232,7 @@ server.registerTool(
 
 #### Public access: sign in only when needed
 
-A server is discoverable by default: anyone can connect and list its tools, resources, resource templates, and prompts, with their descriptions and schemas, the protected ones included, without a token. Calling them still needs sign-in, so an MCP client is asked to sign in the first time it reaches something protected. `publicAccess` names the calls that are open without a token as well, so a client can also call the tools you list without an account. Claude calls this "Sign in when needed" for a custom connector.
+A server is discoverable by default: anyone can connect and list its tools, resources, resource templates, and prompts, with their descriptions and schemas, the protected ones included, without a token. Calling them still needs sign-in, except reading an [MCP App view](#serving-mcp-app-views), so an MCP client is asked to sign in the first time it reaches something protected. `publicAccess` names the calls that are open without a token as well, so a client can also call the tools you list without an account. Claude calls this "Sign in when needed" for a custom connector.
 
 ```ts
 // Or from @clerk/mcp-tools/hono or @clerk/mcp-tools/next
@@ -252,12 +252,13 @@ Pass the same object to `mcpAuth` (`withClerkMcpAuth` in Next.js) and to `protec
 
 The example uses `challengeScopes`, not `requiredScopes`. `requiredScopes` makes every request with a token need those scopes, and answers a token without them with a `403`. `challengeScopes` only adds them to the challenges, the `401` and a `403` that `requiredScopes` causes, so the first sign-in asks for them without making them a condition of every request. Use `requiredScopes` for scopes no request may go without.
 
-- `discoverable`: `true`, the default, opens `initialize` with the `notifications/initialized` notification that follows it, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` without a token, so a client on any protocol revision can connect and list. It never opens a call. `false` requires a token for every MCP request, as version 0.9 did. It is only about these MCP methods: protected resource metadata and the [Server Card](#discovery-server-cards) are public either way, and it has nothing to do with OAuth token introspection (RFC 7662).
+- `discoverable`: `true`, the default, opens `initialize` with the `notifications/initialized` notification that follows it, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` without a token, so a client on any protocol revision can connect and list. It opens no call but one: the `resources/read` of an MCP App view, which `views` below turns on by default. `false` requires a token for every MCP request, as version 0.9 did. It is only about these MCP methods: protected resource metadata and the [Server Card](#discovery-server-cards) are public either way, and it has nothing to do with OAuth token introspection (RFC 7662).
 - `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
 - `resources`: the resources a `resources/read` may ask for without a token. `true` opens every resource, and a list opens only the URIs it names. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
 - `prompts`: the prompts a `prompts/get` may ask for without a token. `true` opens every prompt, and a list opens only the prompts it names.
+- `views`: whether a `resources/read` without a token may ask for an MCP App view, any URI with the `ui://` scheme. It is on by default whenever the server is discoverable, and `views: false` turns it off. See [Serving MCP App views](#serving-mcp-app-views).
 
-A call is open only when `publicAccess` names it. `tools`, `resources`, and `prompts` need `discoverable`: with `discoverable: false` no client without a token can connect to reach them, so naming any of them is a TypeScript error and throws a `Clerk error:` at startup. Empty placeholders, `tools: []`, and `[]` or `false` for `resources` and `prompts`, name nothing and are accepted, by TypeScript and at startup.
+A call is open only when `publicAccess` names it, or, for a `ui://` view, when `views` is on. `tools`, `resources`, `prompts`, and `views: true` need `discoverable`: with `discoverable: false` no client without a token can connect to reach them, so naming any of them is a TypeScript error and throws a `Clerk error:` at startup. Empty placeholders, `tools: []`, `[]` or `false` for `resources` and `prompts`, and `views: false`, name nothing and are accepted, by TypeScript and at startup.
 
 - A request that carries a token is verified as usual, even for an open method, and a token that does not verify gets its `401`.
 - A `POST` without a token passes only when every JSON-RPC message in its body is open. A batch with one protected message, a body that is not sent as `application/json`, and a body over 1 MiB all get the `401`. In Express, `express.json()` reads the body before `mcpAuth`, so its `limit` (100kb by default) is what bounds how much a request without a token makes the server buffer: set `express.json({ limit })` to the size you accept from anonymous clients. A body over 1 MiB still gets the `401`. For a chunked body Express measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so only `express.json()`'s `limit` bounds the original bytes. Unless `discoverable` is `false`, Express's `mcpAuth` needs `express.json()` mounted before it. Without it, a JSON request without a token gets the `401` challenge, and `mcpAuth` logs a one-time `Clerk warning:` naming `express.json()`. In Hono, a middleware before `mcpAuth` that reads `c.req.raw` itself has the same effect.
@@ -289,9 +290,9 @@ const options = {
 - The list replaces the default: only the methods it names are open, and an empty list opens none of them.
 - It replaces `discoverable`, so setting both, even `discoverable: true`, is a TypeScript error and throws a `Clerk error:` at startup. `methods: true` and `methods: false` throw too, with a hint to use `discoverable`.
 - A client connects through `initialize` before protocol revision 2026-07-28 and through `server/discover` from it, so a list that names one of them and not the other leaves some clients unable to connect. `initialize` covers the `notifications/initialized` notification that follows it.
-- `tools`, `resources`, and `prompts` need the list to include `initialize` or `server/discover`: without either, no client without a token can connect to reach the calls they name, so naming any of them throws a `Clerk error:` at startup.
+- `tools`, `resources`, `prompts`, and `views: true` need the list to include `initialize` or `server/discover`: without either, no client without a token can connect to reach the calls they name, so naming any of them throws a `Clerk error:` at startup.
 - The `GET` `405` and the `subscriptions/listen` rule follow the handshake: a `GET` without a token gets the `405` only when the list includes `initialize` or `server/discover`, and the `401` otherwise.
-- It never opens a call: `tools/call`, `resources/read`, or `prompts/get` in the list throws a `Clerk error:` at startup.
+- It never opens a call: `tools/call`, `resources/read`, or `prompts/get` in the list throws a `Clerk error:` at startup. A list that includes `resources/list` turns `views` on by default, as `discoverable` does, so the `ui://` views it lists can be read; set `views: false` to keep them closed. A list without `resources/list` leaves `views` off unless you set it to `true`.
 
 ##### What a client without a token can reach
 
@@ -299,14 +300,14 @@ Some clients never sign in: a scanner that grades MCP servers for agent readines
 
 ora treats a server that is closed to them in one of two ways, depending on what it scans. At ora's scoring revision 17, a direct scan of the MCP URL fails with a `422` `MCP_AUTH_REQUIRED` and gives no score. A scan of the domain marks the MCP checks that need a session as not applicable and still scores the domain, as clerk.com's stored report shows.
 
-| Options                                                | A client without a token can                                                                                                                                                | It cannot                                                                                                                           |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `{ discoverable: false }`                              | Do nothing: every request gets the `401`                                                                                                                                    | Connect. A direct ora scan of the MCP URL gets no score; a domain scan scores the domain without the MCP checks that need a session |
-| Left out, the default                                  | Connect, read the server's name, version, capabilities, and instructions, and list every tool, resource, resource template, and prompt, with their descriptions and schemas | Call a tool, read a resource, or get a prompt                                                                                       |
-| `{ publicAccess: { tools: [...], resources: [...] } }` | Also call the tools and read the resources you name                                                                                                                         | Reach anything you did not name                                                                                                     |
+| Options                                                | A client without a token can                                                                                                                                                                                 | It cannot                                                                                                                           |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `{ discoverable: false }`                              | Do nothing: every request gets the `401`                                                                                                                                                                     | Connect. A direct ora scan of the MCP URL gets no score; a domain scan scores the domain without the MCP checks that need a session |
+| Left out, the default                                  | Connect, read the server's name, version, capabilities, and instructions, list every tool, resource, resource template, and prompt, with their descriptions and schemas, and read every `ui://` MCP App view | Call a tool, read any other resource, or get a prompt                                                                               |
+| `{ publicAccess: { tools: [...], resources: [...] } }` | Also call the tools and read the resources you name                                                                                                                                                          | Reach anything you did not name                                                                                                     |
 
-- The default is the setting that lets a scanner assess your tools: their names, descriptions, input and output schemas, and annotations all come from `tools/list`. It shows them to everyone else too, so set `discoverable: false` when your list of tools is a secret. It never opens a call.
-- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name. To let it read every listed resource, name each URI that `resources/list` returns. `resources: true` opens those too, but also every URI a resource template matches, so set it only when every resource and template is safe to read without auth info. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
+- The default is the setting that lets a scanner assess your tools: their names, descriptions, input and output schemas, and annotations all come from `tools/list`. It shows them to everyone else too, so set `discoverable: false` when your list of tools is a secret. The only call it opens is the `resources/read` of a `ui://` view, which `views: false` closes.
+- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name, and the `ui://` views `views` opens. To let it read every listed resource, name each URI that `resources/list` returns. `resources: true` opens those too, but also every URI a resource template matches, so set it only when every resource and template is safe to read without auth info. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
 - These settings decide what a scanner can reach, not the score it gives. How a scanner counts a `401` for something you kept protected is its own rule.
 
 ##### Showing different tools to different callers
@@ -383,6 +384,43 @@ Don't create the handler inside the route handler. MCP SDK 2.x counts the `subsc
 - A call to a tool that is not registered for the caller is answered as a call to an unknown tool: "Tool delete_project not found", a JSON-RPC error on MCP SDK 2.x and an error result on 1.x, with no challenge. A request without a token gets the `401` before that, unless the tool is in `publicAccess.tools`.
 - A client can keep the list it got before the user signed in. Nothing tells it that the caller changed: the server never sends `notifications/tools/list_changed` for a sign-in, so the client sees the new list when it next sends `tools/list`.
 - On protocol revision 2026-07-28 a list result says who may cache it. MCP SDK 2.x sends `cacheScope: "private"` unless you set `cacheHints`, which is right for a list that differs by caller: "`"private"` is appropriate for `resources/read` results that depend on the authenticated user, or for filtered list results that vary per user" ([Caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#choosing-a-cache-scope)). Don't set `tools/list` to `"public"` on such a server.
+
+#### Serving MCP App views
+
+An [MCP App](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx) (MCP Apps 2026-01-26) view is a `ui://` resource that holds an HTML template, which an MCP Apps host renders a tool's result in. `mcpAppViewResource` from `@clerk/mcp-tools/tools` builds one as arguments for `server.registerResource(...)`, on MCP SDK 1.x or 2.x, without `@modelcontextprotocol/ext-apps`:
+
+```ts
+import { mcpAppViewResource } from '@clerk/mcp-tools/tools';
+
+server.registerResource(
+  ...mcpAppViewResource({
+    name: 'user_card',
+    uri: 'ui://my-server/user-card.html',
+    title: 'User card',
+    html: userCardHtml, // starts with <!DOCTYPE html> and declares <meta name="color-scheme" content="light dark">
+    csp: { resourceDomains: ['https://img.clerk.com'] },
+    prefersBorder: true,
+  }),
+);
+```
+
+A tool shows its result in the view by naming its URI in `_meta.ui.resourceUri`.
+
+- A `resources/read` returns the HTML as `text/html;profile=mcp-app`, the media type MCP Apps requires, with `csp` and `prefersBorder` in the content item's `_meta.ui`, where hosts and scanners read them. The view is listed with the same media type.
+- `csp` takes the origins the view may reach as `connectDomains` (`fetch`, XHR, WebSocket), `resourceDomains` (images, scripts, stylesheets, fonts, media), `frameDomains` (nested iframes), and `baseUriDomains` (`<base>`). Each entry is an origin, such as `https://cdn.example.com` or `https://*.example.com`: `*`, a bare scheme such as `https:`, and a URL with a path throw a `Clerk error:`. A list left out or empty allows no origin, and when every list is empty the CSP is left out, which MCP Apps treats the same.
+- The URI must use the `ui://` scheme, and the other options are checked as well: a mistake throws a `Clerk error:` when the view is built.
+- A template that does not start with `<!DOCTYPE html>`, declares no `color-scheme`, or contains a Clerk secret key (`sk_live_` or `sk_test_`) logs a one-time `Clerk warning:` for its URI, without throwing. Anyone who can read the view sees its HTML, so a key in it is leaked: remove it and rotate the key.
+
+Views are public on a discoverable server. MCP Apps lets a host prefetch and cache a view before any tool runs, often before the user has signed in, and scanners read views to check them. So `mcpAuth` and `withClerkMcpAuth` open the `resources/read` of every `ui://` URI without a token whenever the server is discoverable: `discoverable` left out or `true`, or a `publicAccess.methods` list that includes `resources/list`. Other resources keep their rule, and a request with a token is verified as usual.
+
+A view template is shared HTML: the user's data reaches it only through the result of an authenticated tool call, which the host passes to the view. If your server renders per-user data into a template instead, set `publicAccess.views: false`, and every view needs a token. To open single views again, list their URIs in `publicAccess.resources`:
+
+```ts
+const options = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  publicAccess: { views: false, resources: ['ui://my-server/public-help.html'] },
+} satisfies McpAuthOptions;
+```
 
 #### Collecting feedback from agents
 
@@ -1090,6 +1128,7 @@ Needs `zod` in your app's own dependencies; see [Collecting feedback from agents
 - `ERROR_CODE_META_KEY`: `'clerk.com/error_code'`, the `_meta` key that holds the code of every error result both tools return.
 - `ERROR_CAUSE_META_KEY`: `'clerk.com/error_cause'`, the `_meta` key that holds the caller's code behind an error result. `create_browser_session` sets it when its `organizationId` function throws an `OrganizationLookupError`.
 - `OrganizationLookupError`: thrown from a `createBrowserSessionTool` `organizationId` function to give the agent a specific text and a code for an `organization_lookup_failed` result. See [Signed-in browser links for agents](#signed-in-browser-links-for-agents).
+- `mcpAppViewResource(options)`: an MCP App view, as arguments for `server.registerResource(...)`. `McpAppViewResourceOptions` and `McpAppViewCsp` type its options. See [Serving MCP App views](#serving-mcp-app-views).
 
 #### Framework-Specific Utilities
 

@@ -1361,6 +1361,7 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     ['tools', { tools: ['search_docs'] }],
     ['resources', { resources: true }],
     ['prompts', { prompts: ['summarize'] }],
+    ['views', { views: true }],
   ])(
     'rejects publicAccess.%s with a methods list that opens neither handshake at setup',
     (key, calls) => {
@@ -1393,6 +1394,7 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     ['resources', { resources: ['docs://index'] }],
     ['prompts', { prompts: true }],
     ['prompts', { prompts: ['summarize'] }],
+    ['views', { views: true }],
   ])('rejects publicAccess.%s with discoverable: false at setup', (key, publicAccess) => {
     expect(() => mount({ verifyToken, discoverable: false, publicAccess })).toThrow(
       `Clerk error: ${caller} publicAccess.${key} needs discoverable, so clients can connect without a token`,
@@ -1402,7 +1404,7 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
   test('accepts empty placeholders with discoverable: false, which open nothing', async () => {
     const options = {
       discoverable: false,
-      publicAccess: { tools: [], resources: false, prompts: false },
+      publicAccess: { tools: [], resources: false, prompts: false, views: false },
     };
     expect(() => mount({ verifyToken, ...options })).not.toThrow();
     expect((await send(options, { body: rpc('initialize') })).status).toBe(401);
