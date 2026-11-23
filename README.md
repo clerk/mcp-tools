@@ -261,9 +261,38 @@ To create an MCP endpoint that handles the actual MCP protocol communication, yo
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
-Unknown option keys, such as `requiredScope` instead of `requiredScopes`, throw a `Clerk error:` at setup rather than being ignored. Setting both `clerkClient` and `verifyToken` also throws: choose Clerk verification with `clerkClient` and `resourceUrl`, or your own `verifyToken`. `properties` belongs only to `protectedResourceMetadataHandler`. `onAuthFailure` is accepted only by Next.js's `withClerkMcpAuth` and its metadata handler.
+Unknown option keys, such as `requiredScope` instead of `requiredScopes`, throw a `Clerk error:` at setup rather than being ignored. Setting both `clerkClient` and `verifyToken` also throws: choose Clerk verification with `clerkClient` and `resourceUrl`, or your own `verifyToken`. `properties` belongs only to `protectedResourceMetadataHandler`. `onAuthFailure` and `compactSchemas` are accepted only by Next.js's `withClerkMcpAuth` and its metadata handler; Express and Hono take `compactSchemas` as an option of `streamableHttpHandler`.
 
 Each adapter's auth entry point (`mcpAuth`, or `withClerkMcpAuth` in Next.js) verifies tokens with Clerk, or with a `verifyToken` function you pass. The result must have a finite `expiresAt`, in seconds since the epoch, and a non-empty `clientId`, or the token gets the `401` `invalid_token` challenge, with an `McpTokenVerificationError` cause whose `code` is `token-claims-missing` and whose `message` names the missing field. [MCP authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-handling), 2025-06-18 and later, has servers validate tokens as [OAuth 2.1 section 5.2](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13#section-5.2) describes, which includes checking that the token is not expired, and [RFC 9068 section 2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) makes `exp` and `client_id` REQUIRED in a JWT access token. JWT libraries such as `jsonwebtoken` and `jose` check `exp` only when the token has one, so pass it through as `expiresAt`. Auth info from `toClerkAuthInfo` is treated as Clerk-verified, so it passes without an `expiresAt` or a `clientId`, since Clerk checks those itself: build it only from a request state returned by `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`, using `requestState.toAuth()`, never from `auth({ acceptsToken: 'oauth_token' })` alone, a cached result, or a hand-built one. Otherwise use the built-in Clerk path, `mcpAuth({ clerkClient, resourceUrl })` (or `withClerkMcpAuth(handler, { clerkClient, resourceUrl })` in Next.js). Catch the errors your JWT library throws for a token it rejects, such as `JWTExpired` from `jose` or `TokenExpiredError` from `jsonwebtoken`, and return `undefined` or throw an `McpTokenVerificationError`, so the token gets the `401` `invalid_token` challenge, which [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) gives an expired or invalid token, and the client can get a new one. Any other error the function throws means the token could not be verified at all: it gets a `server_error` answer, a `500` unless the error has a `429` or `5xx` `status`, and the client keeps the token (see `McpAuthError` below).
+
+#### Compact tool lists
+
+Every client reads your whole `tools/list` into its model's context, so keywords that only restate a default cost tokens for nothing. The adapters' MCP handlers, `streamableHttpHandler` in Express and Hono and `withClerkMcpAuth` in Next.js, compact the tool schemas of every `tools/list` result by default, without changing what any schema accepts:
+
+- A root `$schema` naming JSON Schema 2020-12 is left out: [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic#schema-dialect) reads a schema without `$schema` as 2020-12. Any other `$schema`, such as the draft-07 one MCP SDK 1.x writes, stays.
+- An empty `additionalProperties` (`{}`), which allows what leaving it out allows, is left out, except in a schema that uses `unevaluatedProperties`, which it affects. `additionalProperties: false` and a property named `additionalProperties` stay.
+
+The SDK has already turned your tools' schemas into JSON Schema when they are compacted, so this works the same for raw Zod shapes, Zod objects, other Standard Schemas, and JSON Schema, on MCP SDK 1.x and 2.x. Your server still validates tool calls against the schemas you registered. To list the schemas exactly as the SDK writes them, pass `compactSchemas: false`:
+
+```ts
+streamableHttpHandler(createServer, StreamableHTTPServerTransport, { compactSchemas: false });
+
+withClerkMcpAuth(handler, { resourceUrl: 'https://mcp.example.com/mcp', compactSchemas: false });
+```
+
+A server you serve another way can call `compactToolSchemas(server)` from `@clerk/mcp-tools/server` before `server.connect(transport)`. `compactJsonSchema(schema)` compacts one schema.
+
+To hold your tool list to a budget in a test, `measureToolList` reports each tool's size in characters (its whole definition, description, `inputSchema`, `outputSchema`, and `_meta`), the totals, and an approximate token count: the list's characters divided by 4, rounded up, a rule of thumb that varies by tokenizer, so compare lists with it rather than predicting a model's exact count. Pass a fresh server, which it measures as the handlers serve it (compacted unless you pass `{ compactSchemas: false }`), or a `tools/list` result, such as `await client.listTools()` from your deployed endpoint:
+
+```ts
+import { measureToolList } from '@clerk/mcp-tools/server';
+
+test('the tool list stays small', async () => {
+  const { approximateTokens, tools } = await measureToolList(createServer());
+  expect(approximateTokens).toBeLessThan(4000);
+  expect(tools.find((tool) => tool.name === 'search_docs')?.description).toBeLessThan(500);
+});
+```
 
 #### Step-up for your own tools
 
@@ -1165,6 +1194,15 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** Generates the `server.json` for the official MCP Registry from the Server Card options, as described in [Publish to the MCP Registry](#publish-to-the-mcp-registry): the card's `name`, `version`, `description`, `title`, `websiteUrl`, `icons`, and `repository`, the 2025-12-11 `$schema`, and one streamable HTTP remote for each `resourceUrl`. It throws a `Clerk error:` for anything the card can't have and for what the registry rejects: a non-https icon, website, or remote, a `localhost` remote, an icon media type or size the schema doesn't list, a repository off GitHub and GitLab, or the version `latest`. It fetches nothing. The document is frozen.
   - **Params:** `RegistryServerJsonOptions`
   - **Returns:** `RegistryServerJson`
+
+- `compactJsonSchema`, `compactToolSchemas`
+  - **Description:** `compactJsonSchema(schema)` returns a copy of a tool's JSON Schema without a root 2020-12 `$schema` or empty `additionalProperties`, accepting exactly what the schema accepts. `compactToolSchemas(server)` applies it to every `tools/list` result an MCP SDK 1.x or 2.x server sends on the transports it connects to afterwards, and returns the server; it throws a `Clerk error:` for anything without `connect`. The adapters' MCP handlers already compact by default. See [Compact tool lists](#compact-tool-lists).
+  - **Params:** `JsonSchemaObject`; a server with `connect`
+
+- `measureToolList`
+  - **Description:** Measures a tool list as a client receives it: per tool, the characters of its definition, description, `inputSchema`, `outputSchema`, and `_meta`, the totals, and `approximateTokens` (characters divided by 4, rounded up). A server is connected to an in-memory client, has every page of its list read, compacted unless `compactSchemas: false`, and is closed. It rejects with a `Clerk error:` for anything else, or when the server answers with an error. See [Compact tool lists](#compact-tool-lists).
+  - **Params:** a fresh server or a `ToolsListResult`, `MeasureToolListOptions?`
+  - **Returns:** `Promise<ToolListMeasurement>` (with `ToolMeasurement` entries)
 
 - `McpAuthError`
   - **Description:** The error `mcpAuth` and `withClerkMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express and Next.js answer `{"error":"server_error"}` with that status, or `500`, and log the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers and logs the same way.

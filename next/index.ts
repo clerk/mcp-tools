@@ -23,6 +23,7 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
+import { compactToolsListResponse } from '../compact-schemas';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
@@ -65,8 +66,9 @@ export function protectedResourceMetadataHandler(
       'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route, instead of passing protectedResourceMetadataHandler itself',
     );
   }
-  // `onAuthFailure` is the one key of `withClerkMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
-  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure']));
+  // `onAuthFailure` and `compactSchemas` are the keys of `withClerkMcpAuth`'s options that the Express and Hono
+  // `mcpAuth` options do not have
+  assertProtectedResourceMetadataOptions(options, nextOptionKeys);
 
   return (req: Request): Response => {
     const answer = protectedResourceMetadataAnswer(options, {
@@ -302,6 +304,19 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
  */
 type McpRouteHandler = (req: Request) => Response | Promise<Response>;
 
+// The keys of `withClerkMcpAuth`'s options besides the shared `mcpAuth` ones
+const nextOptionKeys = new Set(['onAuthFailure', 'compactSchemas']);
+
+type CompactSchemasOption = {
+  /**
+   * Whether to compact the tool schemas in `tools/list` results, as `compactJsonSchema` does: a root `$schema`
+   * naming JSON Schema 2020-12, which MCP assumes without one, and empty `additionalProperties` are left out, which
+   * shortens every tool list without changing what any schema accepts. Defaults to `true`; pass `false` to list the
+   * schemas exactly as the MCP SDK writes them.
+   */
+  compactSchemas?: boolean | undefined;
+};
+
 type McpAuthFailureOption = {
   /**
    * Synchronously notifies why a request is about to be answered with a 401 or 403 challenge or a 421, for example
@@ -321,7 +336,9 @@ type McpAuthFailureOption = {
  * each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure` is
  * available either way.
  */
-export type McpAuthOptions = McpAuthFailureOption & MiddlewareAuthOptions<Request>;
+export type McpAuthOptions = McpAuthFailureOption &
+  CompactSchemasOption &
+  MiddlewareAuthOptions<Request>;
 
 const withClerkMcpAuthCallForm =
   'withClerkMcpAuth(handler, { resourceUrl }), or as withClerkMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
@@ -374,7 +391,11 @@ export function withClerkMcpAuth(
     options,
     `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
-  assertMcpAuthOptions('withClerkMcpAuth', options, new Set(['onAuthFailure']));
+  assertMcpAuthOptions('withClerkMcpAuth', options, nextOptionKeys);
+  if (options.compactSchemas !== undefined && typeof options.compactSchemas !== 'boolean') {
+    throw new Error('Clerk error: withClerkMcpAuth compactSchemas must be true or false');
+  }
+  const compactSchemas = options.compactSchemas ?? true;
 
   const authenticate = createBearerAuth(
     'withClerkMcpAuth from @clerk/mcp-tools/next',
@@ -411,7 +432,10 @@ export function withClerkMcpAuth(
     // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does. It is `undefined` for a
     // request without a token that `publicAccess` let through.
     (req as Request & { auth?: AuthInfo }).auth = result.authInfo;
-    return handler(req);
+    if (!compactSchemas || req.method !== 'POST') return handler(req);
+    // Read before the route handler consumes the request, to find a `tools/list` whose result to compact
+    const body = await readJsonBody(req).catch(() => undefined);
+    return compactToolsListResponse(body, await handler(req));
   };
 }
 
