@@ -768,11 +768,13 @@ describe('generateAICatalog representativeQueries and host', () => {
     expect(generateAICatalog({ entries: [] })).toEqual({ specVersion: '0.9', entries: [] });
   });
 
-  // ARD v0.91 4.2 and D.2: neither presence nor count is enforced, so an empty list is emitted as set
-  test('emits an empty list of representativeQueries as set', () => {
-    const catalog = generateAICatalog({ entries: [{ ...weather, representativeQueries: [] }] });
-    expect(catalog.entries[0]?.representativeQueries).toEqual([]);
-    expect(linkedCardCatalogErrors(JSON.parse(JSON.stringify(catalog)))).toEqual([]);
+  // ARD v0.91 4.2 and D.2 enforce no count, but an empty list carries nothing, so it is rejected rather than emitted
+  test('rejects an empty list of representativeQueries', () => {
+    expect(() =>
+      generateAICatalog({ entries: [{ ...weather, representativeQueries: [] }] }),
+    ).toThrow(
+      'Clerk error: generateAICatalog entries[0].representativeQueries must be a list of 1 to 20 sample requests',
+    );
   });
 
   test('copies them, so changing the options later changes nothing', () => {

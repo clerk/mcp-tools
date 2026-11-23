@@ -28,7 +28,7 @@ import {
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
 import {
   type StreamableHttpHandlerOptions,
-  assertCompactSchemasOption,
+  readStreamableHttpHandlerOptions,
   compactTransportToolsList,
 } from '../compact-schemas';
 import {
@@ -518,8 +518,7 @@ export function streamableHttpHandler<
     'WebStandardStreamableHTTPServerTransport',
     'webStandardStreamableHttp.js',
   );
-  assertCompactSchemasOption('streamableHttpHandler', options);
-  const compactSchemas = options?.compactSchemas ?? true;
+  const compactSchemas = readStreamableHttpHandlerOptions('streamableHttpHandler', options);
 
   return async (c: Context) => {
     if (c.req.method !== 'POST') {

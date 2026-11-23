@@ -145,6 +145,60 @@ describe('compactJsonSchema', () => {
     expect(verdicts(ajv.compile(compactJsonSchema(schema)), values)).toEqual(expected);
   });
 
+  // Draft-07 `dependencies`: a schema value is a subschema and is compacted, a list of property names is kept
+  test('compacts the schema values of draft-07 dependencies and validates the same', () => {
+    const schema = {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: {
+        card: { type: 'string' },
+        billing: { type: 'string' },
+        name: { type: 'string' },
+      },
+      dependencies: {
+        card: {
+          properties: {
+            billing: { type: 'string' },
+            meta: { type: 'object', additionalProperties: {} },
+          },
+          required: ['billing'],
+          additionalProperties: {},
+        },
+        name: ['card'],
+      },
+    };
+    expect(compactJsonSchema(schema)).toEqual({
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: {
+        card: { type: 'string' },
+        billing: { type: 'string' },
+        name: { type: 'string' },
+      },
+      dependencies: {
+        card: {
+          properties: { billing: { type: 'string' }, meta: { type: 'object' } },
+          required: ['billing'],
+        },
+        name: ['card'],
+      },
+    });
+    const ajv = new Ajv({ strict: false });
+    const values = [
+      {},
+      { card: 'x', billing: 'y' },
+      { card: 'x', billing: 'y', meta: { any: 1 }, extra: true },
+      { name: 'n', card: 'x', billing: 'y' },
+      { card: 'x' },
+      { card: 'x', billing: 1 },
+      { name: 'n' },
+      { card: 'x', billing: 'y', meta: 'not an object' },
+    ];
+    const expected = [true, true, true, true, false, false, false, false];
+    expect(verdicts(ajv.compile(schema), values)).toEqual(expected);
+    expect(verdicts(ajv.compile(compactJsonSchema(schema)), values)).toEqual(expected);
+  });
+
   // The control for the case above: dropping that empty `additionalProperties` would reject `{ a: 1, b: 2 }`
   test('an empty additionalProperties changes what unevaluatedProperties accepts', () => {
     const ajv = new Ajv2020({ strict: false });

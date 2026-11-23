@@ -23,7 +23,7 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
-import { compactToolsListResponse } from '../compact-schemas';
+import { compactToolsListResponse, readCompactSchemas } from '../compact-schemas';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
@@ -392,10 +392,7 @@ export function withClerkMcpAuth(
     `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
   assertMcpAuthOptions('withClerkMcpAuth', options, nextOptionKeys);
-  if (options.compactSchemas !== undefined && typeof options.compactSchemas !== 'boolean') {
-    throw new Error('Clerk error: withClerkMcpAuth compactSchemas must be true or false');
-  }
-  const compactSchemas = options.compactSchemas ?? true;
+  const compactSchemas = readCompactSchemas('withClerkMcpAuth', options.compactSchemas);
 
   const authenticate = createBearerAuth(
     'withClerkMcpAuth from @clerk/mcp-tools/next',

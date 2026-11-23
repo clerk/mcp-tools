@@ -374,11 +374,14 @@ function effectivePublicAccess({
   discoverable,
   publicAccess,
 }: Pick<BaseAuthOptions, 'discoverable' | 'publicAccess'>): PublicAccess | undefined {
-  // `views` is on by default whenever the server is discoverable, which a list does only when it opens resources/list
+  // `views` is on by default whenever the server is discoverable, which a list is only when it opens the handshake,
+  // so a client without a token can connect, and resources/list, so it can find the views
   if (publicAccess?.methods !== undefined) {
     return {
       ...publicAccess,
-      views: publicAccess.views ?? publicAccess.methods.includes('resources/list'),
+      views:
+        publicAccess.views ??
+        (opensHandshake(publicAccess) && publicAccess.methods.includes('resources/list')),
     };
   }
   if (discoverable === false) return undefined;

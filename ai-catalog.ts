@@ -274,7 +274,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     }
     if (representativeQueries !== undefined && !isRepresentativeQueries(representativeQueries)) {
       fail(
-        `${at}.representativeQueries must be a list of up to ${MAX_REPRESENTATIVE_QUERIES} sample requests, each with more than whitespace and no control characters, such as ['What is the weather in Paris?', 'Will it rain tomorrow?']. ARD recommends 2 to 5`,
+        `${at}.representativeQueries must be a list of 1 to ${MAX_REPRESENTATIVE_QUERIES} sample requests, each with more than whitespace and no control characters, such as ['What is the weather in Paris?', 'Will it rain tomorrow?']. ARD recommends 2 to 5`,
       );
     }
     if (trustManifest !== undefined && trustManifest !== null && !isTrustManifest(trustManifest)) {
@@ -361,6 +361,7 @@ function isRepresentativeQueries(value: unknown): boolean {
   if (!Array.isArray(value)) return false;
   const queries = Array.from(value as unknown[]);
   return (
+    queries.length > 0 &&
     queries.length <= MAX_REPRESENTATIVE_QUERIES &&
     queries.every((_, index) => index in value) &&
     queries.every(isDisplayName)

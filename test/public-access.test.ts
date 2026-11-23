@@ -507,6 +507,11 @@ describe('MCP App views on a server with publicAccess', () => {
       name: 'a methods list without resources/list',
       options: { publicAccess: { methods: ['initialize'] } },
     },
+    // No client without a token can connect to such a server, so its views stay behind a token too
+    {
+      name: 'a methods list with resources/list but no handshake',
+      options: { publicAccess: { methods: ['resources/list'] } },
+    },
   ] satisfies { name: string; options: ServerOptions }[])(
     'challenges a view read without a token with $name',
     async ({ options }) => {

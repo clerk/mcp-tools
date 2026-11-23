@@ -1,6 +1,7 @@
 // Lossless compaction of the tool schemas a `tools/list` result carries, applied to the JSON the MCP SDK already
 // produced, so it covers raw Zod shapes, Standard Schema and JSON Schema alike, on MCP SDK 1.x and 2.x, without
 // importing the SDK or a schema library.
+import { assertKnownKeys, type Fail, failFor, isPlainObject } from './discovery-options';
 
 /**
  * A JSON Schema object, as a `tools/list` result carries it in a tool's `inputSchema` or `outputSchema`.
@@ -34,18 +35,17 @@ const SUBSCHEMA_MAP_KEYWORDS = new Set([
   '$defs',
   'definitions',
   'dependentSchemas',
+  // Draft-07: each value is a subschema or a list of property names, which compaction leaves as it is
+  'dependencies',
 ]);
 
-const isObject = (value: unknown): value is JsonSchemaObject =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isEmptySchema = (value: unknown) => isObject(value) && Object.keys(value).length === 0;
+const isEmptySchema = (value: unknown) => isPlainObject(value) && Object.keys(value).length === 0;
 
 // An empty `additionalProperties` marks every other property as evaluated, which `unevaluatedProperties` reads, so
 // with that keyword anywhere in the schema dropping it could change what the schema accepts
 function mentionsUnevaluatedProperties(schema: unknown): boolean {
   if (Array.isArray(schema)) return schema.some(mentionsUnevaluatedProperties);
-  if (!isObject(schema)) return false;
+  if (!isPlainObject(schema)) return false;
   return Object.entries(schema).some(
     ([keyword, value]) =>
       keyword === 'unevaluatedProperties' || mentionsUnevaluatedProperties(value),
@@ -53,7 +53,7 @@ function mentionsUnevaluatedProperties(schema: unknown): boolean {
 }
 
 function compactNode(schema: unknown, dropEmptyAdditional: boolean): unknown {
-  if (!isObject(schema)) return schema;
+  if (!isPlainObject(schema)) return schema;
   const compactSub = (value: unknown) => compactNode(value, dropEmptyAdditional);
   return Object.fromEntries(
     Object.entries(schema).flatMap(([keyword, value]): [string, unknown][] => {
@@ -63,7 +63,7 @@ function compactNode(schema: unknown, dropEmptyAdditional: boolean): unknown {
       if (SUBSCHEMA_LIST_KEYWORDS.has(keyword) && Array.isArray(value)) {
         return [[keyword, value.map(compactSub)]];
       }
-      if (SUBSCHEMA_MAP_KEYWORDS.has(keyword) && isObject(value)) {
+      if (SUBSCHEMA_MAP_KEYWORDS.has(keyword) && isPlainObject(value)) {
         return [
           [
             keyword,
@@ -87,7 +87,7 @@ function compactNode(schema: unknown, dropEmptyAdditional: boolean): unknown {
  * @returns A compacted copy of the schema
  */
 export function compactJsonSchema(schema: JsonSchemaObject): JsonSchemaObject {
-  if (!isObject(schema)) return schema;
+  if (!isPlainObject(schema)) return schema;
   const { $schema, ...rest } = schema;
   const root = $schema === DEFAULT_DIALECT ? rest : schema;
   return compactNode(root, !mentionsUnevaluatedProperties(root)) as JsonSchemaObject;
@@ -95,15 +95,19 @@ export function compactJsonSchema(schema: JsonSchemaObject): JsonSchemaObject {
 
 // A `tools/list` result with each tool's schemas compacted
 function compactToolsListResult(result: unknown): unknown {
-  if (!isObject(result) || !Array.isArray(result.tools)) return result;
+  if (!isPlainObject(result) || !Array.isArray(result.tools)) return result;
   return {
     ...result,
     tools: result.tools.map((tool: unknown) => {
-      if (!isObject(tool)) return tool;
+      if (!isPlainObject(tool)) return tool;
       return {
         ...tool,
-        ...(isObject(tool.inputSchema) && { inputSchema: compactJsonSchema(tool.inputSchema) }),
-        ...(isObject(tool.outputSchema) && { outputSchema: compactJsonSchema(tool.outputSchema) }),
+        ...(isPlainObject(tool.inputSchema) && {
+          inputSchema: compactJsonSchema(tool.inputSchema),
+        }),
+        ...(isPlainObject(tool.outputSchema) && {
+          outputSchema: compactJsonSchema(tool.outputSchema),
+        }),
       };
     }),
   };
@@ -118,13 +122,14 @@ export function toolsListCompactor() {
   const pending = new Set<RequestId>();
   const record = (message: unknown) => {
     for (const item of Array.isArray(message) ? message : [message]) {
-      if (isObject(item) && item.method === 'tools/list' && item.id !== undefined) {
+      if (isPlainObject(item) && item.method === 'tools/list' && item.id !== undefined) {
         pending.add(item.id as RequestId);
       }
     }
   };
   const compactOne = (item: unknown) => {
-    if (!isObject(item) || !('result' in item) || !pending.has(item.id as RequestId)) return item;
+    if (!isPlainObject(item) || !('result' in item) || !pending.has(item.id as RequestId))
+      return item;
     pending.delete(item.id as RequestId);
     return { ...item, result: compactToolsListResult(item.result) };
   };
@@ -220,25 +225,40 @@ export type StreamableHttpHandlerOptions = {
 };
 
 /**
- * Throws a `Clerk error:` message unless `options` is `undefined` or a `StreamableHttpHandlerOptions` object.
+ * Reads a `compactSchemas` option, the one check every entry point that takes it shares.
+ * @param caller - The entry point named in the message, such as `withClerkMcpAuth`
+ * @param compactSchemas - The option's value, unchecked
+ * @returns Whether to compact, `true` when it is left out. It throws a `Clerk error:` for a value that is not a
+ * boolean.
+ */
+export function readCompactSchemas(caller: string, compactSchemas: unknown): boolean {
+  if (compactSchemas === undefined) return true;
+  if (typeof compactSchemas === 'boolean') return compactSchemas;
+  return failFor(caller)('compactSchemas must be true or false');
+}
+
+const handlerOptionKeys: ReadonlySet<string> = new Set<keyof StreamableHttpHandlerOptions>([
+  'compactSchemas',
+]);
+
+/**
+ * Reads the options of an adapter's `streamableHttpHandler`.
  * @param caller - The entry point named in the message, such as `streamableHttpHandler`
  * @param options - The options, unchecked
+ * @returns Whether to compact the tool schemas. It throws a `Clerk error:` unless `options` is `undefined` or a
+ * `StreamableHttpHandlerOptions` object.
  */
-export function assertCompactSchemasOption(caller: string, options: unknown) {
-  if (options === undefined) return;
-  if (!isObject(options)) {
-    throw new Error(
-      `Clerk error: ${caller} takes an options object, such as { compactSchemas: false }`,
-    );
-  }
-  const unknownKey = Object.keys(options).find((key) => key !== 'compactSchemas');
-  if (unknownKey !== undefined) {
-    throw new Error(`Clerk error: ${caller} has no ${unknownKey} option. It takes compactSchemas`);
-  }
-  const { compactSchemas } = options;
-  if (compactSchemas !== undefined && typeof compactSchemas !== 'boolean') {
-    throw new Error(`Clerk error: ${caller} compactSchemas must be true or false`);
-  }
+export function readStreamableHttpHandlerOptions(caller: string, options: unknown): boolean {
+  if (options === undefined) return true;
+  const fail: Fail = failFor(caller);
+  if (!isPlainObject(options)) fail('takes an options object, such as { compactSchemas: false }');
+  assertKnownKeys(fail, options, {
+    allowed: handlerOptionKeys,
+    generated: new Set(),
+    generatedMessage: () => '',
+    unknownMessage: (key) => `has no ${key} option. It takes compactSchemas`,
+  });
+  return readCompactSchemas(caller, options.compactSchemas);
 }
 
 /**
@@ -262,9 +282,10 @@ type ConnectableServer = { connect(transport: never): Promise<void> };
  * ```
  */
 export function compactToolSchemas<Server extends ConnectableServer>(server: Server): Server {
-  if (!isObject(server) || typeof server.connect !== 'function') {
-    throw new Error(
-      'Clerk error: compactToolSchemas takes an MCP server with connect(), such as new McpServer(...) from the MCP SDK',
+  // An `McpServer` is a class instance, which `isPlainObject` rejects
+  if (typeof server !== 'object' || server === null || typeof server.connect !== 'function') {
+    failFor('compactToolSchemas')(
+      'takes an MCP server with connect(), such as new McpServer(...) from the MCP SDK',
     );
   }
   const connect = server.connect.bind(server) as (transport: object) => Promise<void>;

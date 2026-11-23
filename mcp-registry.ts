@@ -47,11 +47,11 @@ export type RegistryServerJson = {
   readonly $schema: typeof REGISTRY_SERVER_SCHEMA;
   readonly name: string;
   readonly version: string;
-  readonly title?: string;
+  readonly title?: string | undefined;
   readonly description: string;
-  readonly websiteUrl?: string;
-  readonly repository?: Readonly<ServerCardRepository>;
-  readonly icons?: readonly Readonly<ServerCardIcon>[];
+  readonly websiteUrl?: string | undefined;
+  readonly repository?: Readonly<ServerCardRepository> | undefined;
+  readonly icons?: readonly Readonly<ServerCardIcon>[] | undefined;
   readonly remotes: readonly { readonly type: 'streamable-http'; readonly url: string }[];
 };
 
@@ -213,14 +213,14 @@ function assertRegistryRules(fail: Fail, card: ServerCard, cards: readonly Serve
  */
 export type McpRegistryAuthHandlerOptions = {
   /**
-   * The raw 32-byte Ed25519 public key in standard, padded base64: 43 characters and one `=`, as
+   * The raw 32-byte Ed25519 public key in standard, padded base64, 44 characters: 43 base64 characters and one trailing `=`, as
    * `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints. Only the public key belongs here.
    */
   publicKey: string;
 };
 
-// The registry decodes `p` as standard, padded base64 and needs the raw 32-byte key, whose only such encoding is 43
-// characters and one `=`. An SPKI DER export, URL-safe, or unpadded base64 fails login.
+// The registry decodes `p` as standard, padded base64 and needs the raw 32-byte key, whose only such encoding is 44
+// characters: 43 base64 characters and one trailing `=`. An SPKI DER export, URL-safe, or unpadded base64 fails login.
 const ED25519_PUBLIC_KEY = /^[A-Za-z0-9+/]{43}=$/;
 const REGISTRY_AUTH_ALLOW = 'GET, HEAD';
 const registryAuthKeys = new Set(['publicKey']);
@@ -252,7 +252,7 @@ export function mcpRegistryAuthResponder(
   const { publicKey } = options;
   if (typeof publicKey !== 'string' || !ED25519_PUBLIC_KEY.test(publicKey)) {
     fail(
-      'publicKey must be a raw 32-byte Ed25519 public key in standard base64, 43 characters and one =, as `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints. An SPKI DER export, URL-safe, or unpadded base64 is rejected by the registry',
+      'publicKey must be a raw 32-byte Ed25519 public key in standard, padded base64, 44 characters: 43 base64 characters and one trailing =, as `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints. An SPKI DER export, URL-safe, or unpadded base64 is rejected by the registry',
     );
   }
   const body = `v=MCPv1; k=ed25519; p=${publicKey as string}`;

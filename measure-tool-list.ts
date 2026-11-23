@@ -1,5 +1,6 @@
 // Measures what a `tools/list` result costs a client: its size in characters and an approximate token count.
-import { compactTransportToolsList } from './compact-schemas';
+import { compactTransportToolsList, readCompactSchemas } from './compact-schemas';
+import { failFor, isPlainObject } from './discovery-options';
 
 /**
  * The size of one tool in a `tools/list` result, in characters of JSON, as `measureToolList` reports it.
@@ -76,8 +77,11 @@ type JsonRpcMessage = {
   error?: { message?: string };
 };
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+const CALLER = 'measureToolList';
+
+// The protocol revision the in-memory client initializes with. Every revision an MCP SDK 1.x or 2.x server
+// negotiates lists the same tools, so the measurement doesn't depend on it.
+const MEASURING_PROTOCOL_VERSION = '2025-11-25';
 
 const serializedLength = (value: unknown) =>
   value === undefined ? 0 : JSON.stringify(value).length;
@@ -110,8 +114,8 @@ async function listTools(
       transport.onmessage?.({ jsonrpc: '2.0', id, method, params });
     });
     if (reply.error || !reply.result) {
-      throw new Error(
-        `Clerk error: measureToolList could not read the server's ${method}: ${reply.error?.message ?? 'no result'}`,
+      return failFor(CALLER)(
+        `could not read the server's ${method}: ${reply.error?.message ?? 'no result'}`,
       );
     }
     return reply.result;
@@ -119,9 +123,9 @@ async function listTools(
 
   try {
     await request('initialize', {
-      protocolVersion: '2025-11-25',
+      protocolVersion: MEASURING_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'measureToolList', version: '0.0.0' },
+      clientInfo: { name: CALLER, version: '0.0.0' },
     });
     transport.onmessage?.({ jsonrpc: '2.0', method: 'notifications/initialized' });
     const tools: Record<string, unknown>[] = [];
@@ -169,17 +173,23 @@ export async function measureToolList(
   input: MeasurableServer | ToolsListResult,
   options: MeasureToolListOptions | undefined = undefined,
 ): Promise<ToolListMeasurement> {
-  const compactSchemas = options?.compactSchemas ?? true;
-  if (typeof compactSchemas !== 'boolean') {
-    throw new Error('Clerk error: measureToolList compactSchemas must be true or false');
-  }
+  const compactSchemas = readCompactSchemas(CALLER, options?.compactSchemas);
   let result: unknown = input;
-  if (isObject(input) && typeof (input as { connect?: unknown }).connect === 'function') {
+  // An `McpServer` is a class instance, which `isPlainObject` rejects
+  if (
+    typeof input === 'object' &&
+    input !== null &&
+    typeof (input as { connect?: unknown }).connect === 'function'
+  ) {
     result = await listTools(input as MeasurableServer, compactSchemas);
   }
-  if (!isObject(result) || !Array.isArray(result.tools) || !result.tools.every(isObject)) {
-    throw new Error(
-      'Clerk error: measureToolList takes an MCP server, such as new McpServer(...) with its tools registered, or a tools/list result such as client.listTools() returns',
+  if (
+    !isPlainObject(result) ||
+    !Array.isArray(result.tools) ||
+    !result.tools.every(isPlainObject)
+  ) {
+    return failFor(CALLER)(
+      'takes an MCP server, such as new McpServer(...) with its tools registered, or a tools/list result such as client.listTools() returns',
     );
   }
   const tools = result.tools.map(measureTool);

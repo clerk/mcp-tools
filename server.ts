@@ -170,7 +170,7 @@ export type PublicAccess = {
   /**
    * Whether a `resources/read` without a token may ask for an MCP App view template, any URI with the `ui://`
    * scheme. On by default when the server is discoverable: `discoverable` left out or `true`, or a `methods` list
-   * that opens `resources/list`. MCP Apps (2026-01-26) lets a host prefetch and cache a view before any tool runs, so
+   * that opens `resources/list` and `initialize` or `server/discover`, so a client without a token can connect. MCP Apps (2026-01-26) lets a host prefetch and cache a view before any tool runs, so
    * before the user has signed in, and a scanner reads it to check the view. A view template is shared HTML: user data
    * reaches it only through the result of an authenticated tool call. Set `views: false` when your server renders
    * per-user data into a template, so every view needs a token; `resources` can still open single views by URI.

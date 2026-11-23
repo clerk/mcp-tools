@@ -1,5 +1,6 @@
 // End to end: `tools/list` as an MCP client reads it from servers the adapters serve, with schema compaction on by
-// default and off with `compactSchemas: false`, on MCP SDK 1.x and 2.x.
+// default and off with `compactSchemas: false`, on MCP SDK 1.x and 2.x, and tool calls the client validates against
+// the schemas it listed, which accept and reject the same either way.
 import { McpServer as McpServerV1 } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { WebStandardStreamableHTTPServerTransport as WebStandardTransportV1 } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -52,6 +53,7 @@ function registerTools(server: Registrar) {
     },
     ok,
   );
+  // Its output carries a key the loose output schema allows only through the `additionalProperties` compaction drops
   server.registerTool(
     'standard_schema',
     {
@@ -59,7 +61,10 @@ function registerTools(server: Registrar) {
       inputSchema: z.object({ id: z.string() }),
       outputSchema: z.looseObject({ count: z.number() }),
     },
-    ok,
+    async () => ({
+      content: [{ type: 'text' as const, text: '{"count":1,"note":"extra"}' }],
+      structuredContent: { count: 1, note: 'extra' },
+    }),
   );
 }
 
@@ -205,7 +210,10 @@ const nextServer = (options: Options) => {
   return withMetadata(route);
 };
 
-async function expressSchemas(options: Options) {
+async function expressServe<T>(
+  options: Options,
+  use: (fetchImpl: (input: string | URL, init?: RequestInit) => Promise<Response>) => Promise<T>,
+) {
   const app = express();
   app.all(
     '/mcp',
@@ -222,7 +230,7 @@ async function expressSchemas(options: Options) {
     ),
   );
   return withListening(app, (baseUrl) =>
-    listedSchemas(
+    use(
       withMetadata((req) => {
         const url = new URL(req.url);
         return fetch(`${baseUrl}${url.pathname}`, {
@@ -236,46 +244,129 @@ async function expressSchemas(options: Options) {
   );
 }
 
+type FetchImpl = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
 const SERVERS: {
   name: string;
   dialect: string;
-  schemas: (options: Options) => Promise<unknown>;
+  serve: <T>(options: Options, use: (fetchImpl: FetchImpl) => Promise<T>) => Promise<T>;
 }[] = [
   {
     name: 'Hono on SDK 2.x',
     dialect: SDK_V2_DIALECT,
-    schemas: (o) => listedSchemas(honoServer('v2', o)),
+    serve: (o, use) => use(honoServer('v2', o)),
   },
   {
     name: 'Hono on SDK 1.x',
     dialect: SDK_V1_DIALECT,
-    schemas: (o) => listedSchemas(honoServer('v1', o)),
+    serve: (o, use) => use(honoServer('v1', o)),
   },
-  { name: 'Express on SDK 1.x', dialect: SDK_V1_DIALECT, schemas: expressSchemas },
+  { name: 'Express on SDK 1.x', dialect: SDK_V1_DIALECT, serve: expressServe },
   // `mcp-handler`'s SDK copy writes the 2020-12 `$schema`
   {
     name: 'Next.js with mcp-handler',
     dialect: SDK_V2_DIALECT,
-    schemas: (o) => listedSchemas(nextServer(o)),
+    serve: (o, use) => use(nextServer(o)),
   },
 ];
 
 describe('tools/list schemas served through the adapters', () => {
-  test.each(SERVERS)('$name compacts them by default', async ({ dialect, schemas }) => {
-    expect(await schemas(undefined)).toEqual(compacted(dialect));
+  test.each(SERVERS)('$name compacts them by default', async ({ dialect, serve }) => {
+    expect(await serve(undefined, listedSchemas)).toEqual(compacted(dialect));
   });
 
   test.each(SERVERS)(
     '$name lists them verbatim with compactSchemas: false',
-    async ({ dialect, schemas }) => {
-      expect(await schemas({ compactSchemas: false })).toEqual(verbatim(dialect));
+    async ({ dialect, serve }) => {
+      expect(await serve({ compactSchemas: false }, listedSchemas)).toEqual(verbatim(dialect));
     },
   );
 
   test.each(SERVERS)(
     '$name compacts them with compactSchemas: true',
-    async ({ dialect, schemas }) => {
-      expect(await schemas({ compactSchemas: true })).toEqual(compacted(dialect));
+    async ({ dialect, serve }) => {
+      expect(await serve({ compactSchemas: true }, listedSchemas)).toEqual(compacted(dialect));
+    },
+  );
+});
+
+// Rewrites the structured content of every `tools/call` reply so it breaks the output schema, as a faulty server
+// would, to show the client checks it against the schema it listed
+function breakingToolOutput(fetchImpl: FetchImpl): FetchImpl {
+  return async (input, init) => {
+    const res = await fetchImpl(input, init);
+    if (typeof init?.body !== 'string' || !init.body.includes('"tools/call"')) return res;
+    const headers = new Headers(res.headers);
+    headers.delete('content-length');
+    const text = (await res.text()).replaceAll('"count":1', '"count":"one"');
+    return new Response(text, { status: res.status, headers });
+  };
+}
+
+type Outcome = 'accepted' | 'rejected';
+
+// How an MCP client fares calling `standard_schema` once it has listed the tools, which caches the output schemas it
+// validates results against
+async function callOutcomes(fetchImpl: FetchImpl) {
+  const { client, connected } = connectOAuthClient(MCP_URL, fetchImpl, TOKEN);
+  await connected;
+  const outcome = async (args: Record<string, unknown>): Promise<Outcome> => {
+    try {
+      const result = await client.callTool({ name: 'standard_schema', arguments: args });
+      return result.isError ? 'rejected' : 'accepted';
+    } catch {
+      return 'rejected';
+    }
+  };
+  try {
+    await client.listTools();
+    return {
+      validArguments: await outcome({ id: 'a' }),
+      invalidArguments: await outcome({ id: 5 }),
+    };
+  } finally {
+    await client.close();
+  }
+}
+
+// The client's error for output that breaks the output schema it listed, or `accepted`
+async function brokenOutputOutcome(fetchImpl: FetchImpl): Promise<string> {
+  const { client, connected } = connectOAuthClient(MCP_URL, breakingToolOutput(fetchImpl), TOKEN);
+  await connected;
+  try {
+    await client.listTools();
+    await client.callTool({ name: 'standard_schema', arguments: { id: 'a' } });
+    return 'accepted';
+  } catch (error) {
+    return (error as Error).message;
+  } finally {
+    await client.close();
+  }
+}
+
+describe('tool calls validate the same with compacted schemas', () => {
+  const modes: { mode: string; options: Options }[] = [
+    { mode: 'compaction on', options: undefined },
+    { mode: 'compactSchemas: false', options: { compactSchemas: false } },
+  ];
+  const cases = SERVERS.flatMap((server) => modes.map((mode) => ({ ...server, ...mode })));
+
+  test.each(cases)(
+    '$name with $mode accepts valid arguments and output and rejects invalid arguments',
+    async ({ serve, options }) => {
+      expect(await serve(options, callOutcomes)).toEqual({
+        validArguments: 'accepted',
+        invalidArguments: 'rejected',
+      });
+    },
+  );
+
+  test.each(cases)(
+    '$name with $mode rejects output that breaks the listed output schema',
+    async ({ serve, options }) => {
+      expect(await serve(options, brokenOutputOutcome)).toBe(
+        "MCP error -32602: Structured content does not match the tool's output schema: data/count must be number",
+      );
     },
   );
 });

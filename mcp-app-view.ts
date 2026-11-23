@@ -1,7 +1,11 @@
 // MCP App views: the `ui://` resources an MCP Apps host renders tool results in (MCP Apps 2026-01-26).
 // Built without `@modelcontextprotocol/ext-apps`, so a server needs no package besides its MCP SDK.
+import { assertKnownKeys, type Fail, failFor, isPlainObject } from './discovery-options';
 
-/** The media type MCP Apps 2026-01-26 requires of a view's `resources/read` content: "`mimeType` MUST be `text/html;profile=mcp-app`". */
+/**
+ * The media type MCP Apps 2026-01-26 requires of a view's `resources/read` content: "`mimeType` MUST be
+ * `text/html;profile=mcp-app`".
+ */
 const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
 
 const CSP_KEYS = ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'] as const;
@@ -15,21 +19,35 @@ type CspKey = (typeof CSP_KEYS)[number];
  * which would allow every origin, are rejected.
  */
 export type McpAppViewCsp = {
-  /** Origins for `fetch`, XHR, and WebSocket requests: CSP `connect-src`. */
+  /**
+   * Origins for `fetch`, XHR, and WebSocket requests: CSP `connect-src`.
+   */
   connectDomains?: readonly string[] | undefined;
-  /** Origins for images, scripts, stylesheets, fonts, and media: CSP `img-src`, `script-src`, and the rest. */
+  /**
+   * Origins for images, scripts, stylesheets, fonts, and media: CSP `img-src`, `script-src`, and the rest.
+   */
   resourceDomains?: readonly string[] | undefined;
-  /** Origins for nested iframes: CSP `frame-src`. */
+  /**
+   * Origins for nested iframes: CSP `frame-src`.
+   */
   frameDomains?: readonly string[] | undefined;
-  /** Origins the document's `<base>` may point at: CSP `base-uri`. */
+  /**
+   * Origins the document's `<base>` may point at: CSP `base-uri`.
+   */
   baseUriDomains?: readonly string[] | undefined;
 };
 
-/** Options for `mcpAppViewResource`. */
+/**
+ * Options for `mcpAppViewResource`.
+ */
 export type McpAppViewResourceOptions = {
-  /** The resource's name in `resources/list`. */
+  /**
+   * The resource's name in `resources/list`.
+   */
   name: string;
-  /** The view's URI, which MCP Apps requires to use the `ui://` scheme, such as `ui://my-server/user-card.html`. */
+  /**
+   * The view's URI, which MCP Apps requires to use the `ui://` scheme, such as `ui://my-server/user-card.html`.
+   */
   uri: `ui://${string}`;
   /**
    * The view's HTML5 document. It should start with `<!DOCTYPE html>` and declare
@@ -37,17 +55,27 @@ export type McpAppViewResourceOptions = {
    * published to anyone who can read the view.
    */
   html: string;
-  /** A human-readable title for `resources/list`. */
+  /**
+   * A human-readable title for `resources/list`.
+   */
   title?: string | undefined;
-  /** What the view shows, for `resources/list`. */
+  /**
+   * What the view shows, for `resources/list`.
+   */
   description?: string | undefined;
-  /** The origins the view may reach. Left out, or with every list empty, the host allows none. */
+  /**
+   * The origins the view may reach. Left out, or with every list empty, the host allows none.
+   */
   csp?: McpAppViewCsp | undefined;
-  /** Whether the host should draw a border and background around the view. Left out, the host decides. */
+  /**
+   * Whether the host should draw a border and background around the view. Left out, the host decides.
+   */
   prefersBorder?: boolean | undefined;
 };
 
-/** The `_meta.ui` of a view's `resources/read` content item. */
+/**
+ * The `_meta.ui` of a view's `resources/read` content item.
+ */
 type McpAppViewUiMeta = {
   csp?: Partial<Record<CspKey, string[]>>;
   prefersBorder?: boolean;
@@ -89,6 +117,8 @@ const ORIGIN = /^[a-z][a-z0-9+.-]*:\/\/(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::\
 const warnedUris = new Set<string>();
 
 const CALLER = 'mcpAppViewResource';
+const fail: Fail = failFor(CALLER);
+const noGeneratedKeys: ReadonlySet<string> = new Set();
 
 /**
  * An MCP App view (MCP Apps 2026-01-26) as arguments for `server.registerResource(...view)`, on MCP SDK 1.x or
@@ -132,63 +162,48 @@ export function mcpAppViewResource(options: McpAppViewResourceOptions): McpAppVi
 }
 
 function assertOptions(options: unknown): asserts options is McpAppViewResourceOptions {
-  if (typeof options !== 'object' || options === null || Array.isArray(options)) {
-    throw new Error(`Clerk error: ${CALLER} takes an options object`);
-  }
-  const unknownKey = Object.keys(options).find((key) => !optionKeys.has(key));
-  if (unknownKey !== undefined) {
-    throw new Error(
-      `Clerk error: ${CALLER} has no ${unknownKey} option. It takes any of ${[...optionKeys].join(', ')}`,
-    );
-  }
-  const { name, uri, html, title, description, csp, prefersBorder } = options as Record<
-    keyof McpAppViewResourceOptions,
-    unknown
-  >;
-  if (typeof name !== 'string' || name.trim() === '') {
-    throw new Error(`Clerk error: ${CALLER} name must be a non-empty string`);
-  }
+  if (!isPlainObject(options)) fail('takes an options object');
+  assertKnownKeys(fail, options, {
+    allowed: optionKeys,
+    generated: noGeneratedKeys,
+    generatedMessage: () => '',
+    unknownMessage: (key) => `has no ${key} option. It takes any of ${[...optionKeys].join(', ')}`,
+  });
+  const { name, uri, html, title, description, csp, prefersBorder } = options;
+  if (typeof name !== 'string' || name.trim() === '') fail('name must be a non-empty string');
   // MCP Apps 2026-01-26, UI Resource Format: "URI MUST start with `ui://` scheme"
   if (typeof uri !== 'string' || !uri.startsWith('ui://') || uri.length === 'ui://'.length) {
-    throw new Error(
-      `Clerk error: ${CALLER} uri must be a ui:// URI, such as ui://my-server/view.html`,
-    );
+    fail('uri must be a ui:// URI, such as ui://my-server/view.html');
   }
-  if (typeof html !== 'string') {
-    throw new Error(`Clerk error: ${CALLER} html must be the view's HTML document, as a string`);
-  }
+  if (typeof html !== 'string') fail("html must be the view's HTML document, as a string");
   for (const [key, value] of [
     ['title', title],
     ['description', description],
   ] as const) {
-    if (value !== undefined && typeof value !== 'string') {
-      throw new Error(`Clerk error: ${CALLER} ${key} must be a string`);
-    }
+    if (value !== undefined && typeof value !== 'string') fail(`${key} must be a string`);
   }
   if (prefersBorder !== undefined && typeof prefersBorder !== 'boolean') {
-    throw new Error(`Clerk error: ${CALLER} prefersBorder must be true or false`);
+    fail('prefersBorder must be true or false');
   }
   if (csp === undefined) return;
-  if (typeof csp !== 'object' || csp === null || Array.isArray(csp)) {
-    throw new Error(
-      `Clerk error: ${CALLER} csp must be an object, such as { resourceDomains: ['https://cdn.example.com'] }`,
-    );
+  if (!isPlainObject(csp)) {
+    fail("csp must be an object, such as { resourceDomains: ['https://cdn.example.com'] }");
   }
-  const unknownCspKey = Object.keys(csp).find((key) => !cspKeys.has(key));
-  if (unknownCspKey !== undefined) {
-    throw new Error(
-      `Clerk error: ${CALLER} csp has no ${unknownCspKey} option. It takes any of ${CSP_KEYS.join(', ')}`,
-    );
-  }
+  assertKnownKeys(fail, csp, {
+    allowed: cspKeys,
+    generated: noGeneratedKeys,
+    generatedMessage: () => '',
+    unknownMessage: (key) => `csp has no ${key} option. It takes any of ${CSP_KEYS.join(', ')}`,
+  });
   for (const key of CSP_KEYS) {
-    const origins = (csp as Record<CspKey, unknown>)[key];
+    const origins = csp[key];
     if (origins === undefined) continue;
     if (
       !Array.isArray(origins) ||
       !origins.every((origin) => typeof origin === 'string' && ORIGIN.test(origin))
     ) {
-      throw new Error(
-        `Clerk error: ${CALLER} csp.${key} must list origins, such as https://api.example.com or https://*.example.com, without a path. \`*\` and a bare scheme such as https: would allow every origin`,
+      fail(
+        `csp.${key} must list origins, such as https://api.example.com or https://*.example.com, without a path. \`*\` and a bare scheme such as https: would allow every origin`,
       );
     }
   }

@@ -29,7 +29,7 @@ import {
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
 import {
   type StreamableHttpHandlerOptions,
-  assertCompactSchemasOption,
+  readStreamableHttpHandlerOptions,
   compactTransportToolsList,
 } from '../compact-schemas';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
@@ -539,8 +539,7 @@ export function streamableHttpHandler<
     'StreamableHTTPServerTransport',
     'streamableHttp.js',
   );
-  assertCompactSchemasOption('streamableHttpHandler', options);
-  const compactSchemas = options?.compactSchemas ?? true;
+  const compactSchemas = readStreamableHttpHandlerOptions('streamableHttpHandler', options);
 
   return async (req: express.Request, res: express.Response) => {
     if (req.method !== 'POST') {
