@@ -347,6 +347,29 @@ export {
 
 Point the homepage at it with a `Link` header from `ardLinkHeader()`, `</.well-known/ard.json>; rel="ard"`, for example in `next.config.js` `headers()` or the homepage's route; see [ARD discovery](../README.md#ard-discovery).
 
+### `mcpRegistryAuthHandler(options)`
+
+Route handler that serves the MCP Registry's [HTTP domain proof](../README.md#publish-to-the-mcp-registry), `v=MCPv1; k=ed25519; p=<publicKey>`, at `/.well-known/mcp-registry-auth`. `publicKey` is the raw 32-byte Ed25519 public key in standard, padded base64 (44 characters ending in one `=`); any other form throws a `Clerk error:` when the handler is created. `GET` and `HEAD` get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, other methods a JSON `405` with `Allow: GET, HEAD`, and it never redirects.
+
+```ts
+// app/.well-known/mcp-registry-auth/route.ts
+import { mcpRegistryAuthHandler } from '@clerk/mcp-tools/next';
+
+const handler = mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! });
+
+export {
+  handler as GET,
+  handler as HEAD,
+  handler as OPTIONS,
+  handler as POST,
+  handler as PUT,
+  handler as PATCH,
+  handler as DELETE,
+};
+```
+
+Export it for every method, as `serverCardHandler`, so each gets the same answer as on the other adapters. Leave the route out of `auth.protect()` in `clerkMiddleware()`, and keep `trailingSlash` off for it: a redirect to `/.well-known/mcp-registry-auth/` fails the registry's check.
+
 ### `completeOAuthHandler`
 
 A request handler for OAuth callback endpoints that completes the OAuth flow by exchanging authorization codes for tokens. It is exported from `@clerk/mcp-tools/next/client`, which, like `@clerk/mcp-tools/client`, needs `@modelcontextprotocol/sdk` 1.x installed:

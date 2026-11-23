@@ -1,0 +1,5 @@
+---
+'@clerk/mcp-tools': minor
+---
+
+Add MCP Registry helpers. `generateRegistryServerJson` (in `@clerk/mcp-tools/server` and every adapter) builds the `server.json` that `mcp-publisher publish` sends to the official MCP Registry from the same options as the Server Card, so the card and the registry entry can't drift: one streamable HTTP remote per `resourceUrl`, the 2025-12-11 server schema, and the registry's own limits (https icons, website, and remotes, listed icon media types, GitHub or GitLab repositories, no `latest` or version the registry reads as a range, such as `1.0.0-next`) checked with `Clerk error:` messages. `mcpRegistryAuthHandler({ publicKey })` in the Hono, Express, and Next.js adapters serves the registry's HTTP domain proof at `/.well-known/mcp-registry-auth` as `text/plain`, GET and HEAD only, never redirected or cached, and rejects a key that isn't a raw 32-byte Ed25519 key in padded base64 when it is created. The README's new "Publish to the MCP Registry" section covers the namespace rule, HTTP and DNS proof, `mcp-publisher login http` and `publish`, immutable versions, and subdomain endpoints.

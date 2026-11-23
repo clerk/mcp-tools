@@ -13,6 +13,13 @@ import {
   ardLinkHeader,
   serverCardHandler,
 } from './hono';
+import {
+  type McpRegistryAuthHandlerOptions,
+  type RegistryServerJson,
+  type RegistryServerJsonOptions,
+  generateRegistryServerJson,
+  mcpRegistryAuthHandler,
+} from './hono';
 import * as next from './next';
 import * as expressAdapter from './express';
 
@@ -223,5 +230,58 @@ describe('ARD discovery types', () => {
     expectTypeOf(ardLinkHeader).toEqualTypeOf<(target?: string) => string>();
     expectTypeOf(next.ardLinkHeader).toEqualTypeOf(ardLinkHeader);
     expectTypeOf(expressAdapter.ardLinkHeader).toEqualTypeOf(ardLinkHeader);
+  });
+});
+
+describe('MCP Registry types', () => {
+  const card = {
+    name: 'com.example/weather',
+    version: '1.2.0',
+    description: 'Forecasts.',
+    resourceUrl: 'https://mcp.example.com/mcp',
+  };
+
+  test('generateRegistryServerJson takes the Server Card options, with one URL or a list', () => {
+    const serverJson = generateRegistryServerJson(card);
+    generateRegistryServerJson({
+      ...card,
+      resourceUrl: ['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'],
+    });
+    expectTypeOf(serverJson).toEqualTypeOf<RegistryServerJson>();
+    expectTypeOf(serverJson.remotes).toEqualTypeOf<
+      readonly { readonly type: 'streamable-http'; readonly url: string }[]
+    >();
+    expectTypeOf<RegistryServerJsonOptions['resourceUrl']>().toEqualTypeOf<
+      string | readonly string[]
+    >();
+  });
+
+  test('generateRegistryServerJson rejects generated fields and handler options', () => {
+    // @ts-expect-error remotes are generated
+    generateRegistryServerJson({ ...card, remotes: [] });
+    // @ts-expect-error $schema is generated
+    generateRegistryServerJson({ ...card, $schema: 'https://example.com/schema.json' });
+    // @ts-expect-error resourceUrl is required
+    generateRegistryServerJson({
+      name: card.name,
+      version: card.version,
+      description: card.description,
+    });
+  });
+
+  test('mcpRegistryAuthHandler takes only a publicKey on every adapter', () => {
+    const publicKey = '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=';
+    expectTypeOf(mcpRegistryAuthHandler({ publicKey })).parameters.toEqualTypeOf<[Context]>();
+    expectTypeOf(next.mcpRegistryAuthHandler({ publicKey })).toEqualTypeOf<
+      (req: Request) => Response
+    >();
+    expectTypeOf(expressAdapter.mcpRegistryAuthHandler({ publicKey })).parameters.toEqualTypeOf<
+      [express.Request, express.Response]
+    >();
+    expectTypeOf<McpRegistryAuthHandlerOptions>().toEqualTypeOf<{ publicKey: string }>();
+    // @ts-expect-error publicKey is required
+    mcpRegistryAuthHandler({});
+    // @ts-expect-error only Ed25519 keys are served
+    mcpRegistryAuthHandler({ publicKey, algorithm: 'ecdsap384' });
   });
 });

@@ -25,6 +25,7 @@ import {
   ardResponder,
   serverCardResponder,
 } from '../discovery-response';
+import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
 import {
   type ClerkOAuthClient,
   type McpAuthError,
@@ -50,6 +51,7 @@ declare module 'hono' {
 export * from '../server';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
+export type { McpRegistryAuthHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -299,6 +301,27 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions) {
  */
 export function ardHandler(options: AICatalogHandlerOptions) {
   return discoveryHandler(ardResponder('ardHandler', options));
+}
+
+/**
+ * A Hono handler that serves the official MCP Registry's HTTP domain proof, the `v=MCPv1; k=ed25519; p=<key>` record
+ * `mcp-publisher login http --domain example.com` has the registry fetch from `/.well-known/mcp-registry-auth` on the
+ * domain, to grant its `com.example/*` namespace. It validates the key when it is created, so a malformed key fails at
+ * startup instead of at login, and it needs no Clerk keys or MCP SDK.
+ *
+ * GET and HEAD get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, so a removed key is
+ * not served from a cache, and never a redirect, which the registry does not follow. Any other method gets a 405
+ * allowing GET and HEAD. Serve it on the domain itself, at a public address, without a WAF challenge in front.
+ * @see https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/authentication.mdx#http-authentication
+ * @param options - See `McpRegistryAuthHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` for a key that is not a raw 32-byte Ed25519 key in padded base64.
+ * @example
+ * ```ts
+ * app.all('/.well-known/mcp-registry-auth', mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! }));
+ * ```
+ */
+export function mcpRegistryAuthHandler(options: McpRegistryAuthHandlerOptions) {
+  return discoveryHandler(mcpRegistryAuthResponder('mcpRegistryAuthHandler', options));
 }
 
 function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswer) {

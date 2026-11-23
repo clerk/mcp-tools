@@ -221,6 +221,36 @@ app.get('/', (c) => {
 });
 ```
 
+#### Publish to the MCP Registry
+
+The [official MCP Registry](https://registry.modelcontextprotocol.io) lists servers by a reverse-DNS `name` whose namespace you prove you own. Publishing is an authenticated step you run yourself with [`mcp-publisher`](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/quickstart.mdx); this package builds the file you publish and serves the domain proof, and makes no request to the registry.
+
+- **Namespace.** A server named `com.example/weather` needs proof that you control `example.com`. HTTP proof grants exactly `com.example/*`; DNS proof also grants subdomain namespaces such as `com.example.mcp/*`. GitHub login grants only `io.github.<user-or-org>/*`. Use the card's `name` as the registry name, so the two never differ.
+- **HTTP or DNS proof.** Both sign with an Ed25519 key pair you generate once. DNS proof is a `v=MCPv1; k=ed25519; p=<key>` TXT record on the apex of the domain. HTTP proof is the same record served at `https://example.com/.well-known/mcp-registry-auth`, which each adapter's `mcpRegistryAuthHandler` serves: `text/plain`, `GET` and `HEAD` only, never a redirect (the registry follows none), and never cached, so a key you remove stops working. `publicKey` is the raw 32-byte public key in standard, padded base64, 44 characters ending in one `=`, as `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints; any other form throws a `Clerk error:` when the handler is created. The registry fetches it from Google Cloud, so keep WAF and bot challenges off that path. Only the public key goes on the server; keep the private key with whoever publishes.
+- **Log in and publish.** `mcp-publisher login http --domain example.com`, with the private key's hex in `MCP_PRIVATE_KEY` (or `--private-key-file`), then `mcp-publisher publish` in the directory with `server.json`.
+- **Versions are immutable.** A published version can't be changed or republished, so bump `version` for every publish and update the card at the same time.
+- **Subdomain endpoints.** The registry does not check that a remote URL is on the proven domain, so `com.example/weather` may list `https://mcp.example.com/mcp`; prove the apex, `example.com`.
+
+`generateRegistryServerJson` takes the same options as `serverCardHandler` (without `maxAge`) and builds a `server.json` for the registry's [2025-12-11 server schema](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json), with one streamable HTTP remote for each `resourceUrl`. On top of the card's rules it enforces the registry's: https `icons` (at most 255 characters, `image/png`, `image/jpeg`, `image/jpg`, `image/svg+xml`, or `image/webp`, sizes `WxH` or `any`), an https `websiteUrl`, https remotes off `localhost`, a `github` or `gitlab` `repository`, and a version that is neither `latest` nor what the registry reads as a range, which includes a dotted version with an `x`, `X`, or `*` anywhere, such as `1.0.0-next`. The card's `_meta` is left out, since the registry drops every `_meta` key but its own. Keep the options in one module and write the file with a short script, so the card and the registry entry come from the same source:
+
+```ts
+// scripts/write-server-json.ts, run before `mcp-publisher publish`
+import { writeFileSync } from 'node:fs';
+import { generateRegistryServerJson } from '@clerk/mcp-tools/server';
+import { serverCard } from '../src/server-card-options';
+
+writeFileSync(
+  'server.json',
+  `${JSON.stringify(generateRegistryServerJson(serverCard), null, 2)}\n`,
+);
+```
+
+For framework-specific implementations, see:
+
+- [Express.js implementation](./express/README.md#mcpregistryauthhandler)
+- [Hono implementation](./hono/README.md#mcpregistryauthhandleroptions)
+- [Next.js implementation](./next/README.md#mcpregistryauthhandleroptions)
+
 #### Creating an MCP endpoint
 
 To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters, since each framework has its own way of handling request and response objects, which are critical parts of implementing the MCP protocol:
@@ -1130,6 +1160,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** The `Link` header value that points ARD clients at the catalog from the homepage, `</.well-known/ard.json>; rel="ard"` by default (ARD v0.91 section 5.1). See [ARD discovery](#ard-discovery). It throws a `Clerk error:` for a target that isn't a path starting with one `/` or an absolute http or https URL without credentials, or that holds whitespace, control characters, `<`, `>`, or `"`.
   - **Params:** `target?: string`
   - **Returns:** `string`
+
+- `generateRegistryServerJson`
+  - **Description:** Generates the `server.json` for the official MCP Registry from the Server Card options, as described in [Publish to the MCP Registry](#publish-to-the-mcp-registry): the card's `name`, `version`, `description`, `title`, `websiteUrl`, `icons`, and `repository`, the 2025-12-11 `$schema`, and one streamable HTTP remote for each `resourceUrl`. It throws a `Clerk error:` for anything the card can't have and for what the registry rejects: a non-https icon, website, or remote, a `localhost` remote, an icon media type or size the schema doesn't list, a repository off GitHub and GitLab, or the version `latest`. It fetches nothing. The document is frozen.
+  - **Params:** `RegistryServerJsonOptions`
+  - **Returns:** `RegistryServerJson`
 
 - `McpAuthError`
   - **Description:** The error `mcpAuth` and `withClerkMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express and Next.js answer `{"error":"server_error"}` with that status, or `500`, and log the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers and logs the same way.

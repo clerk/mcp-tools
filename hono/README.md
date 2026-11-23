@@ -331,6 +331,19 @@ app.get('/', (c) => {
 });
 ```
 
+### `mcpRegistryAuthHandler(options)`
+
+Handler that serves the MCP Registry's [HTTP domain proof](../README.md#publish-to-the-mcp-registry), `v=MCPv1; k=ed25519; p=<publicKey>`, at `/.well-known/mcp-registry-auth`. `publicKey` is the raw 32-byte Ed25519 public key in standard, padded base64 (44 characters ending in one `=`); any other form throws a `Clerk error:` when the handler is created. `GET` and `HEAD` get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, other methods a JSON `405` with `Allow: GET, HEAD`, and it never redirects.
+
+```ts
+import { mcpRegistryAuthHandler } from '@clerk/mcp-tools/hono';
+
+app.all(
+  '/.well-known/mcp-registry-auth',
+  mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! }),
+);
+```
+
 ### `streamableHttpHandler(createServer, Transport)`
 
 Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` as `Transport`, from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` on SDK 1.x or from `@modelcontextprotocol/server` on SDK 2.x, with `McpServer` from the same SDK: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than a Hono `404`.

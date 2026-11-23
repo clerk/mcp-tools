@@ -399,6 +399,11 @@ export {
   generateServerCard,
 } from './server-card';
 export {
+  type RegistryServerJson,
+  type RegistryServerJsonOptions,
+  generateRegistryServerJson,
+} from './mcp-registry';
+export {
   type AICatalog,
   type AICatalogAttestation,
   type AICatalogEntry,
