@@ -35,7 +35,7 @@ export type AICatalogEntryOptions = {
   /**
    * Sample natural-language requests the server answers, such as `What is the weather in Paris?`, from which an
    * Agentic Resource Discovery (ARD) v0.91 registry builds its search index ("4.2 Entry Terms"). ARD recommends 2 to 5;
-   * up to 20 are accepted, each with more than whitespace and no control characters. Omit it to publish none.
+   * from 1 to 20 are accepted, each with more than whitespace and no control characters. Omit it to publish none.
    */
   representativeQueries?: readonly string[] | undefined;
   /**

@@ -146,7 +146,7 @@ export type PublicAccess = {
    * one and not the other leaves some clients unable to connect, and `tools`, `resources`, and `prompts` need the
    * list to name at least one. An open list method shows its whole list, so with `tools/list` open anyone can read
    * the name, description, and input schema of every tool, the protected ones included. It never opens a call, but a
-   * list that opens `resources/list` turns `views` on by default, as `discoverable` does. With
+   * list that opens `resources/list` and either handshake turns `views` on by default, as `discoverable` does. With
    * `initialize` or `server/discover` open, a GET without a token gets a 405 rather than the 401, and a
    * `subscriptions/listen` (protocol revision 2026-07-28) is open when every resource in its `resourceSubscriptions`
    * is one `resources` opens.

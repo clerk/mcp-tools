@@ -378,7 +378,7 @@ app.get('/', (_req, res) => {
 
 ### `mcpRegistryAuthHandler`
 
-Express handler that serves the MCP Registry's [HTTP domain proof](../README.md#publish-to-the-mcp-registry), `v=MCPv1; k=ed25519; p=<publicKey>`, at `/.well-known/mcp-registry-auth`. `publicKey` is the raw 32-byte Ed25519 public key in standard, padded base64 (44 characters ending in one `=`); any other form throws a `Clerk error:` when the handler is created. `GET` and `HEAD` get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, other methods a JSON `405` with `Allow: GET, HEAD`, and it never redirects.
+Express handler that serves the MCP Registry's [HTTP domain proof](../README.md#publish-to-the-mcp-registry), `v=MCPv1; k=ed25519; p=<publicKey>`, at `/.well-known/mcp-registry-auth`. `publicKey` is the raw 32-byte Ed25519 public key in standard, padded base64 (44 characters: 43 base64 characters and one trailing `=`); any other form throws a `Clerk error:` when the handler is created. `GET` and `HEAD` get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, other methods a JSON `405` with `Allow: GET, HEAD`, and it never redirects.
 
 ```ts
 import { mcpRegistryAuthHandler } from '@clerk/mcp-tools/express';
