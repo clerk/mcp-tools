@@ -314,11 +314,11 @@ app.all('/.well-known/oauth-authorization-server', authorizationServerMetadataHa
 
 **Note:** This handler requires the `CLERK_PUBLISHABLE_KEY` environment variable to be set, as it uses Clerk's public configuration to generate the metadata. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable.
 
-## Discovery (beta)
+## Discovery
 
 ### `serverCardHandler`
 
-Express handler that serves an MCP [Server Card](../README.md#discovery-server-cards-beta) (beta). It takes the `generateServerCard` options, with `resourceUrl` as one URL or a list with one for each origin, plus `maxAge`, the seconds the card may be reused before revalidation (default `3600`; `0` for `public, no-cache`). It validates them and generates the card when it is created, throwing a `Clerk error:` for anything the card can't have, so it needs no Clerk keys or MCP SDK, and later changes to the options change nothing. Mount it with `app.all` so `OPTIONS` and other methods reach it:
+Express handler that serves an MCP [Server Card](../README.md#discovery-server-cards). It takes the `generateServerCard` options, with `resourceUrl` as one URL or a list with one for each origin, plus `maxAge`, the seconds the card may be reused before revalidation (default `3600`; `0` for `public, no-cache`). It validates them and generates the card when it is created, throwing a `Clerk error:` for anything the card can't have, so it needs no Clerk keys or MCP SDK, and later changes to the options change nothing. Mount it with `app.all` so `OPTIONS` and other methods reach it:
 
 ```ts
 import { serverCardHandler } from '@clerk/mcp-tools/express';
@@ -342,7 +342,7 @@ Express writes the discovery answer's headers over earlier values, including `Ca
 
 ### `aiCatalogHandler`
 
-Express handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs-beta), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
+Express handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
 
 ```ts
 import { aiCatalogHandler } from '@clerk/mcp-tools/express';
