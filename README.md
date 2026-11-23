@@ -100,14 +100,16 @@ For framework-specific implementations, see:
 - [Hono implementation](./hono/README.md#authorizationservermetadatahandler)
 - [Next.js implementation](./next/README.md#authorizationservermetadatahandler)
 
-#### Discovery: Server Cards (beta)
+<a id="discovery-server-cards-beta"></a>
 
-A [Server Card](https://github.com/modelcontextprotocol/ext-server-card) is a public JSON document that tells an MCP client what your server is and where to connect, before it connects or signs in. Server Cards are a **beta** MCP extension, and so is this API: it follows the extension as pinned at commit `526201b`, and publishing a card does not mean every MCP host will find or use it.
+#### Discovery: Server Cards
+
+A [Server Card](https://github.com/modelcontextprotocol/ext-server-card) is a public JSON document that tells an MCP client what your server is and where to connect, before it connects or signs in. Server Cards are a draft MCP extension, and this API follows it as pinned at commit `526201b`. Publishing a card does not mean every MCP host will find or use it.
 
 `generateServerCard` builds a card from a supported subset of the extension, and each adapter's `serverCardHandler` serves one (Hono, Express, and Next.js):
 
 - **Required:** `name`, in reverse-DNS form with one slash, such as `com.example/weather`; `version`, one version such as `1.2.0` in 1 to 255 Unicode code points, not a range; and a `description` of 1 to 100 characters.
-- **Optional:** `title`, `websiteUrl`, `icons`, `repository`, and `_meta`. HTTP URLs in `websiteUrl`, `icons[].src`, and `repository.url` must not contain a username or password; website fragments remain allowed. If supplied, `repository.subfolder` must be a nonempty clean relative path from the repository root, such as `packages/server`: no URL scheme, absolute path, backslashes, leading or trailing `/`, empty segments, or `.` or `..` segments. Each `_meta` key needs a namespace of your own, such as `com.example/tier` (MCP 2025-11-25 reserves prefixes whose second label is `modelcontextprotocol` or `mcp`, such as `io.modelcontextprotocol/` and `dev.mcp/`; while this API is beta, the older forward-DNS forms in the pinned Server Card schema, such as `modelcontextprotocol.io/` and `mcp.dev/`, are rejected too, labels compared without case; `com.example.mcp/` is not reserved), and each value must be JSON.
+- **Optional:** `title`, `websiteUrl`, `icons`, `repository`, and `_meta`. HTTP URLs in `websiteUrl`, `icons[].src`, and `repository.url` must not contain a username or password; website fragments remain allowed. If supplied, `repository.subfolder` must be a nonempty clean relative path from the repository root, such as `packages/server`: no URL scheme, absolute path, backslashes, leading or trailing `/`, empty segments, or `.` or `..` segments. Each `_meta` key needs a namespace of your own, such as `com.example/tier` (MCP 2025-11-25 reserves prefixes whose second label is `modelcontextprotocol` or `mcp`, such as `io.modelcontextprotocol/` and `dev.mcp/`; the older forward-DNS forms in the pinned Server Card schema, such as `modelcontextprotocol.io/` and `mcp.dev/`, are rejected too, labels compared without case; `com.example.mcp/` is not reserved), and each value must be JSON.
 - **Generated:** `$schema`, and `remotes`, one static streamable HTTP remote at `resourceUrl`. Setting either, or any other key, throws a `Clerk error:`. SSE remotes, URL templates, and header inputs are not supported.
 
 The card's `name` identifies the server; it is not a URL. `resourceUrl` is the URL clients connect to. The card is public and is cached, so never put credentials, tokens, or user data in it.
@@ -138,9 +140,11 @@ For framework-specific implementations, see:
 - [Hono implementation](./hono/README.md#servercardhandleroptions)
 - [Next.js implementation](./next/README.md#servercardhandleroptions)
 
-#### Discovery: AI Catalogs (beta)
+<a id="discovery-ai-catalogs-beta"></a>
 
-An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API is **beta** as well: it follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
+#### Discovery: AI Catalogs
+
+An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
 
 `generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
@@ -248,7 +252,7 @@ Pass the same object to `mcpAuth` (`withClerkMcpAuth` in Next.js) and to `protec
 
 The example uses `challengeScopes`, not `requiredScopes`. `requiredScopes` makes every request with a token need those scopes, and answers a token without them with a `403`. `challengeScopes` only adds them to the challenges, the `401` and a `403` that `requiredScopes` causes, so the first sign-in asks for them without making them a condition of every request. Use `requiredScopes` for scopes no request may go without.
 
-- `discoverable`: `true`, the default, opens `initialize` with the `notifications/initialized` notification that follows it, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` without a token, so a client on any protocol revision can connect and list. It never opens a call. `false` requires a token for every MCP request, as version 0.9 did. It is only about these MCP methods: protected resource metadata and the [Server Card](#discovery-server-cards-beta) are public either way, and it has nothing to do with OAuth token introspection (RFC 7662).
+- `discoverable`: `true`, the default, opens `initialize` with the `notifications/initialized` notification that follows it, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` without a token, so a client on any protocol revision can connect and list. It never opens a call. `false` requires a token for every MCP request, as version 0.9 did. It is only about these MCP methods: protected resource metadata and the [Server Card](#discovery-server-cards) are public either way, and it has nothing to do with OAuth token introspection (RFC 7662).
 - `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
 - `resources`: the resources a `resources/read` may ask for without a token. `true` opens every resource, and a list opens only the URIs it names. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
 - `prompts`: the prompts a `prompts/get` may ask for without a token. `true` opens every prompt, and a list opens only the prompts it names.
@@ -1040,12 +1044,12 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Returns:** `string | undefined`
 
 - `generateServerCard`
-  - **Description:** Generates an MCP [Server Card](https://github.com/modelcontextprotocol/ext-server-card) (beta) from the supported subset described in [Discovery: Server Cards](#discovery-server-cards-beta): the required `name`, `version`, and `description`, the optional `title`, `websiteUrl`, `icons`, `repository`, and namespaced JSON `_meta`, and one generated streamable HTTP remote at `resourceUrl`. It throws a `Clerk error:` for an unknown key, a `$schema` or `remotes` of its own, or a value the card can't have. The card is frozen, and later changes to the options don't reach it.
+  - **Description:** Generates an MCP [Server Card](https://github.com/modelcontextprotocol/ext-server-card) from the supported subset described in [Discovery: Server Cards](#discovery-server-cards): the required `name`, `version`, and `description`, the optional `title`, `websiteUrl`, `icons`, `repository`, and namespaced JSON `_meta`, and one generated streamable HTTP remote at `resourceUrl`. It throws a `Clerk error:` for an unknown key, a `$schema` or `remotes` of its own, or a value the card can't have. The card is frozen, and later changes to the options don't reach it.
   - **Params:** `ServerCardOptions`
   - **Returns:** `ServerCard`
 
 - `generateAICatalog`
-  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) (beta) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs-beta): `specVersion` `0.9` and one entry for each `{ identifier, displayName, url, trustManifest? }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
+  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs): `specVersion` `0.9` and one entry for each `{ identifier, displayName, url, trustManifest? }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
   - **Params:** `AICatalogOptions`
   - **Returns:** `AICatalog`
 

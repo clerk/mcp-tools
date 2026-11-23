@@ -258,7 +258,7 @@ export { handler as GET, corsHandler as OPTIONS };
 
 ### `serverCardHandler(options)`
 
-Route handler that serves an MCP [Server Card](../README.md#discovery-server-cards-beta) (beta). It takes the `generateServerCard` options, with `resourceUrl` as one URL or a list with one for each origin, plus `maxAge`, the seconds the card may be reused before revalidation (default `3600`; `0` for `public, no-cache`). It validates them and generates the card when it is created, throwing a `Clerk error:` for anything the card can't have, so it needs no Clerk keys, `@clerk/nextjs`, or MCP SDK, and later changes to the options change nothing. Importing it adds no route.
+Route handler that serves an MCP [Server Card](../README.md#discovery-server-cards). It takes the `generateServerCard` options, with `resourceUrl` as one URL or a list with one for each origin, plus `maxAge`, the seconds the card may be reused before revalidation (default `3600`; `0` for `public, no-cache`). It validates them and generates the card when it is created, throwing a `Clerk error:` for anything the card can't have, so it needs no Clerk keys, `@clerk/nextjs`, or MCP SDK, and later changes to the options change nothing. Importing it adds no route.
 
 Next.js only calls a route's exported methods, so export the one handler for each of them. It answers its own CORS preflight, with the same headers as the other adapters' discovery handlers, so export it as `OPTIONS` too rather than `metadataCorsHandler`. Without an `OPTIONS` export, Next.js answers the preflight itself with no CORS headers, and without the other exports, it answers those methods with a bare `405`:
 
@@ -288,7 +288,7 @@ export {
 
 ### `aiCatalogHandler(options)`
 
-Route handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs-beta) (beta) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Export it for each method, as `serverCardHandler`, from the route for `/.well-known/ard.json`, and re-export that route from `/.well-known/ai-catalog.json`, so both [catalog paths](../README.md#discovery-ai-catalogs-beta) serve it:
+Route handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Export it for each method, as `serverCardHandler`, from the route for `/.well-known/ard.json`, and re-export that route from `/.well-known/ai-catalog.json`, so both [catalog paths](../README.md#discovery-ai-catalogs) serve it:
 
 ```ts
 // app/.well-known/ard.json/route.ts
