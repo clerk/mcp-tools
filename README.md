@@ -371,7 +371,7 @@ function handlerFor(authInfo: AuthInfo | undefined) {
   return isAdmin(authInfo) ? handlers.admin : handlers.member;
 }
 
-const authHandler = withClerkMcpAuth(
+const authedHandler = withClerkMcpAuth(
   (req) => handlerFor((req as Request & { auth?: AuthInfo }).auth)(req),
   mcpAuthOptions,
 );
@@ -467,9 +467,9 @@ const handler = createMcpHandler(
 
 // Tokens must carry this URL in their `aud` claim. `withClerkMcpAuth` also sets the `resourceMetadataUrl` the step-up
 // challenge needs.
-const authHandler = withClerkMcpAuth(handler, { resourceUrl: 'https://app.example.com/mcp' });
+const authedHandler = withClerkMcpAuth(handler, { resourceUrl: 'https://app.example.com/mcp' });
 
-export { authHandler as GET, authHandler as POST, authHandler as DELETE };
+export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE };
 ```
 
 - Pass `browserSessionInstructions(destinationUrl)` as the server `instructions`. Some MCP clients, such as Codex, show agents only the server instructions until the agent searches for a tool, so without them an agent may open your app in a browser and stop at the sign-in page.

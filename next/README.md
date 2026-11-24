@@ -81,9 +81,9 @@ const handler = createMcpHandler((server) => {
   );
 });
 
-const authHandler = withClerkMcpAuth(handler, mcpAuthOptions);
+const authedHandler = withClerkMcpAuth(handler, mcpAuthOptions);
 
-export { authHandler as GET, authHandler as POST, authHandler as DELETE };
+export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE };
 ```
 
 Tools read the verified auth info as `ctx.http?.authInfo`, as `@modelcontextprotocol/server` 2.x passes it. It is `undefined` for a request that [`discoverable` or `publicAccess`](#public-access) let through without a token, and with `verifyToken` it is whatever your function returns, so `isClerkAuthInfo` is `false` there.
@@ -104,8 +104,8 @@ const corsHeaders = {
   'Access-Control-Expose-Headers': 'WWW-Authenticate',
 };
 
-async function corsAuthHandler(req: Request) {
-  const response = await authHandler(req);
+async function corsAuthedHandler(req: Request) {
+  const response = await authedHandler(req);
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(corsHeaders)) headers.set(name, value);
   return new Response(response.body, {
@@ -120,9 +120,9 @@ function preflight() {
 }
 
 export {
-  corsAuthHandler as GET,
-  corsAuthHandler as POST,
-  corsAuthHandler as DELETE,
+  corsAuthedHandler as GET,
+  corsAuthedHandler as POST,
+  corsAuthedHandler as DELETE,
   preflight as OPTIONS,
 };
 ```
@@ -152,7 +152,7 @@ import { withClerkMcpAuth } from '@clerk/mcp-tools/next';
 import { mcpAuthOptions } from '@/lib/mcp';
 import { logAuthFailure } from '@/lib/logging';
 
-const authHandler = withClerkMcpAuth(handler, {
+const authedHandler = withClerkMcpAuth(handler, {
   ...mcpAuthOptions,
   onAuthFailure(failure, req) {
     after(() => logAuthFailure(failure, req));
@@ -167,7 +167,7 @@ Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add y
 For any other authorization server, pass `verifyToken` instead of `clerkClient`:
 
 ```ts
-const authHandler = withClerkMcpAuth(handler, {
+const authedHandler = withClerkMcpAuth(handler, {
   // Returns the auth info, with the token's `expiresAt` and `clientId`, or catches its JWT library's errors and
   // returns `undefined` for a token it rejects
   verifyToken: async (token, req) => verifyMyToken(token),
