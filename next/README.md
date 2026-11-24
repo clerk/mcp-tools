@@ -104,7 +104,7 @@ const corsHeaders = {
   'Access-Control-Expose-Headers': 'WWW-Authenticate',
 };
 
-async function corsAuthHandler(req: Request) {
+async function corsAuthedHandler(req: Request) {
   const response = await authedHandler(req);
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(corsHeaders)) headers.set(name, value);
@@ -120,9 +120,9 @@ function preflight() {
 }
 
 export {
-  corsAuthHandler as GET,
-  corsAuthHandler as POST,
-  corsAuthHandler as DELETE,
+  corsAuthedHandler as GET,
+  corsAuthedHandler as POST,
+  corsAuthedHandler as DELETE,
   preflight as OPTIONS,
 };
 ```
