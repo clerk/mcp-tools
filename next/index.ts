@@ -248,7 +248,7 @@ type McpAuthFailureOption = {
  * `clerkMiddleware()` instead, or runs in keyless mode, passes `clerkClient: () => clerkClient()` from
  * `@clerk/nextjs/server`, with the MCP route in the middleware's matcher. With `verifyToken`, that function verifies
  * each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure` is
- * available either way. `reporting` turns on tool call reporting. The deprecated `withClerkMcpAuth` takes the
+ * available either way. `reporting` turns on MCP activity reporting. The deprecated `withClerkMcpAuth` takes the
  * same options without it.
  */
 export type McpAuthOptions = McpAuthFailureOption &

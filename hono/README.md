@@ -22,7 +22,7 @@ The tools in `@clerk/mcp-tools/tools`, such as `submitFeedbackTool`, also import
 
 ### With Clerk Authentication
 
-An MCP server takes two calls from this package: `clerkInstrumentHandler` on the route, which authenticates each request, and `clerkInstrumentServer` where the server is created, which lets Clerk [report its tool calls](#reporting-tool-calls).
+An MCP server takes two calls from this package: `clerkInstrumentHandler` on the route, which authenticates each request, and `clerkInstrumentServer` where the server is created, which lets Clerk [report its MCP activity](#reporting-mcp-activity).
 
 ```ts
 import { Hono } from 'hono';
@@ -175,7 +175,7 @@ A Hono handler that authenticates each MCP request, then serves it with `handler
 
 `mcpAuth(options)`, the middleware it replaces, is deprecated. It takes the same options except `reporting`, which it refuses with a `Clerk error:`, since it never sees a tool call. Each option below applies to both.
 
-- `reporting`: `true`, or an options object, to report each tool call to Clerk. Off by default. See [Reporting tool calls](#reporting-tool-calls).
+- `reporting`: `true`, or an options object, to report MCP activity to Clerk: tool calls, auth failures, and initialize, list, resource read and prompt get requests. Off by default. See [Reporting MCP activity](#reporting-mcp-activity).
 - `resourceUrl`: the exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. Required unless you pass `verifyToken`. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge, with `c.get('mcpAuthFailure')` set to `misdirected_request`. Under Clerk verification that URL is the audience, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/hono`. The challenge's `resource_metadata` is derived from it. A single URL is used whatever origin the request has, so it works behind a proxy as it is. Only a list is matched against the request's origin, which comes from `c.req.url`: behind a proxy that terminates TLS or rewrites `Host`, as with Node.js behind nginx, that is the origin the app sees, not the public one, and every request gets a `421`. Rebuild the request URL from `X-Forwarded-*` headers you trust before this middleware. Never list the internal URLs: each listed URL is an audience and a metadata `resource`, and clients connect to the public one. With `verifyToken`, set `resourceUrl` for the verifier's reported `resource` to be checked, and pass the same value to the metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, or to `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` when building your own route. Without `resourceUrl`, a URL derived from the request is used only to locate metadata, can differ from the public URL behind a proxy, and is not checked against the verifier's reported `resource`.
 - `requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry, so the new grant keeps the old access. The `401` challenge lists them in its `scope`. The `403` asks for those scopes by name, so enable each `requiredScopes` and `challengeScopes` entry for the OAuth application in Clerk: a scope it can't be granted is missing from the new token too, and the client gets the `403` again.
 - `challengeScopes`: more scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them. When a token lacks a `requiredScopes` entry, the `403` lists the granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry. List each tool's `requireAdditionalScopes` scopes here to have the client reauthorize once instead of twice. A token that lacks only `challengeScopes` entries is let through.
@@ -282,7 +282,7 @@ server.registerTool(
 
 See [Step-up for your own tools](../README.md#step-up-for-your-own-tools) in the main guide.
 
-### Reporting tool calls
+### Reporting MCP activity
 
 With `reporting`, Clerk records each tool call your MCP server answers: the tool, whether it succeeded, how long it took, and who called it. The calls show up in your instance's MCP analytics and audit log. Tool arguments and results are never sent.
 

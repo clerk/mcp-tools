@@ -563,7 +563,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
 
     expect(sink.fetch).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
-      'Clerk warning: clerkInstrumentHandler needs the CLERK_SECRET_KEY environment variable or reporting.secretKey to report tool calls, so they are not reported',
+      'Clerk warning: clerkInstrumentHandler needs the CLERK_SECRET_KEY environment variable or reporting.secretKey to report MCP activity, so nothing is reported',
     );
   });
 
@@ -1513,6 +1513,50 @@ describe('reporting options', () => {
     );
   });
 
+  test('warn once for a tools function that throws on a tool call, and once more on an auth failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sink = reportSink();
+    const reporting = resolveReporting<undefined>('clerkInstrumentHandler', {
+      fetch: sink.fetch,
+      secretKey: SECRET_KEY,
+      tools: () => {
+        throw new RangeError('no list');
+      },
+    });
+    const context = beginToolCallContext({
+      caller: 'clerkInstrumentHandler',
+      reporting,
+      authInfo: { token: 'token', clientId: 'client', scopes: [] },
+      request: undefined,
+      defaultIpAddress: () => undefined,
+      userAgent: () => undefined,
+      env: { secretKey: undefined, apiUrl: undefined },
+    })!;
+
+    for (let i = 0; i < 2; i++) {
+      expect(context.startToolCall('ping', 'acme-mcp')).toBeUndefined();
+      await reportAuthFailure({
+        caller: 'clerkInstrumentHandler',
+        reporting,
+        answer: { failure: { reason: 'missing_token' }, status: 401, authInfo: undefined },
+        body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'ping' } },
+        request: undefined,
+        defaultIpAddress: () => undefined,
+        userAgent: () => undefined,
+        env: { secretKey: undefined, apiUrl: undefined },
+      });
+    }
+
+    expect(warn.mock.calls).toEqual([
+      [
+        'Clerk warning: clerkInstrumentHandler reporting.tools threw RangeError, so the call to ping was not reported',
+      ],
+      [
+        'Clerk warning: clerkInstrumentHandler reporting.tools threw RangeError, so an auth failure was reported without the name of ping',
+      ],
+    ]);
+  });
+
   test('clerkInstrumentHandler checks reporting when it is created', () => {
     expect(() =>
       honoAdapter.clerkInstrumentHandler(sdkV2Handler(), {
@@ -1785,7 +1829,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
         event: { reason: 'misdirected_request', http_status: 421 },
       },
     ])(
-      'reports $name, and answers it as before',
+      'are sent for $name, which is answered as before',
       async ({ authorization, options, url, status, event }) => {
         const sink = reportSink();
         const answer = await sendToAdapter(
@@ -1825,7 +1869,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       },
     );
 
-    test('reports nothing when reporting is off', async () => {
+    test('are not sent when reporting is off', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
       const answer = await sendToAdapter(adapter, {}, RESOURCE_URL, authFailureInit(undefined));
 
@@ -1835,7 +1879,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       ).toEqual([]);
     });
 
-    test('reports no method or tool name it cannot read, or that the Backend API would refuse', async () => {
+    test('leave out a method or tool name they cannot read, or that the Backend API would refuse', async () => {
       const sink = reportSink();
       const reporting = { fetch: sink.fetch, secretKey: SECRET_KEY };
       const init = authFailureInit(undefined);
@@ -1877,7 +1921,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       expect(JSON.stringify(sink.bodies)).not.toContain('hunter2');
     });
 
-    test('reports the method of the first message in a batch, and leaves out a tool reporting.tools filters', async () => {
+    test('carry the method of the first message in a batch, and leave out a tool reporting.tools filters', async () => {
       const sink = reportSink();
       await sendToAdapter(
         adapter,
@@ -1901,7 +1945,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       expect(sink.events()[0]).not.toHaveProperty('tool_name');
     });
 
-    test('reports the protocol version a request names in its _meta', async () => {
+    test('carry the protocol version a request names in its _meta', async () => {
       const sink = reportSink();
       await sendToAdapter(
         adapter,
@@ -1928,7 +1972,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       expectGoldenShape(sink.bodies, { exact: adapter === 'hono' });
     });
 
-    test('reports no identity for a 403 when identity is off, or IP address and user agent when they are', async () => {
+    test('leave out the identity of a 403 when identity is off, and the IP address and user agent when they are', async () => {
       const sink = reportSink();
       await sendToAdapter(
         adapter,
@@ -1991,6 +2035,58 @@ describe('auth failure reports under a burst of refused requests', () => {
         'Clerk warning: clerkInstrumentHandler reports at most 100 auth failures a minute, so it dropped some',
       ],
     ]);
+  });
+
+  test('are each sent before a waitUntil promise resolves, even when one arrives as the last drain finishes', async () => {
+    // The draining request's last batch is answered in a macrotask, and another refused request arrives one
+    // microtask later on each run, so that the runs cover the end of the drain
+    const runs = Array.from({ length: 40 }, async (_, ticks) => {
+      const sent: unknown[] = [];
+      let calls = 0;
+      let follower: Promise<{ drain: Promise<void> | undefined }> | undefined;
+      const reporting = resolveReporting<undefined>('clerkInstrumentHandler', {
+        secretKey: `${SECRET_KEY}_${ticks}`,
+        fetch: async (_input: unknown, init?: RequestInit) => {
+          const call = ++calls;
+          sent.push(...(JSON.parse(String(init?.body)) as ReportBody).events.map((e) => e.method));
+          if (call === 1) void refuse('resources/list');
+          await new Promise<void>((resolve) =>
+            setImmediate(() => {
+              resolve();
+              if (call !== 2) return;
+              follower = (async () => {
+                for (let i = 0; i < ticks; i++) await Promise.resolve();
+                return { drain: (await refuse('tools/list'))?.() };
+              })();
+            }),
+          );
+          return new Response(null, { status: 202 });
+        },
+      });
+      const refuse = (method: string) =>
+        reportAuthFailure({
+          caller: 'clerkInstrumentHandler',
+          reporting,
+          answer: { failure: { reason: 'missing_token' }, status: 401, authInfo: undefined },
+          body: { jsonrpc: '2.0', id: 1, method },
+          request: undefined,
+          defaultIpAddress: () => undefined,
+          userAgent: () => undefined,
+          env: { secretKey: undefined, apiUrl: undefined },
+        });
+
+      await (
+        await refuse('tools/call')
+      )?.();
+      await (
+        await follower
+      )?.drain;
+      return sent;
+    });
+
+    for (const sent of await Promise.all(runs)) {
+      expect(sent).toEqual(['tools/call', 'resources/list', 'tools/list']);
+    }
   });
 
   test('never drop a waiting tool call to make room for an auth failure', async () => {

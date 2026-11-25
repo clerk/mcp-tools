@@ -60,7 +60,7 @@ export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
  * Options for `clerkInstrumentHandler`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
  * its audience, and `clerkClient` defaults to `clerkClient` from `@clerk/express`. With `verifyToken`, that function
  * verifies each token with the Express request, `resourceUrl` is optional, and `clerkClient` is not allowed.
- * `reporting` turns on tool call reporting. The deprecated `mcpAuth` takes the same options without it.
+ * `reporting` turns on MCP activity reporting. The deprecated `mcpAuth` takes the same options without it.
  */
 export type McpAuthOptions = MiddlewareAuthOptions<express.Request> &
   ReportingOption<express.Request>;

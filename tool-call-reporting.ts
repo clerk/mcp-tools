@@ -1,4 +1,5 @@
-// Reports MCP tool calls to the Clerk Backend API. Not a package entry point.
+// Reports MCP activity to the Clerk Backend API: tool calls, auth failures, and initialize, list, resource read and
+// prompt get requests. Not a package entry point.
 import { version } from './package.json';
 import type { AuthInfo } from './mcp-types';
 import type { McpAuthFailure } from './server';
@@ -12,10 +13,9 @@ import { hasClerkVerification } from './clerk-auth-info';
 import { ERROR_CODE_META_KEY } from './mcp-tool';
 
 /**
- * What `reporting` sends to Clerk for each tool call, and where. `reporting: true` is the same as `{}`:
- * every field below at its default. Each report has the tool's name, the MCP server's name, whether the call
- * succeeded, the error code of a failed call, how long it took, and when it was made. Tool arguments and results are
- * never sent.
+ * What `reporting` sends to Clerk for each MCP event, and where. `reporting: true` is the same as `{}`: every field
+ * below at its default. A tool call's report has the tool's name, the MCP server's name, whether the call succeeded,
+ * the error code of a failed call, how long it took, and when it was made. Tool arguments and results are never sent.
  * @typeParam Req - The framework's request: the Express request, the Hono context, or the Next.js `Request`
  */
 export type ReportingOptions<Req = never> = {
@@ -67,8 +67,9 @@ export type ReportingOption<Req> = {
   /**
    * Reports each tool call that `clerkInstrumentHandler` authenticated and a `clerkInstrumentServer` server answered
    * to Clerk, where it shows up in the instance's MCP analytics and audit log, along with that server's `initialize`,
-   * list, resource read and prompt get requests, and each request it answered with a 401, 403 or 421. `true` reports with the defaults of `ReportingOptions`, and an options object turns individual
-   * fields off. Off by default. Calls without a token, which `publicAccess` lets through, are not reported.
+   * list, resource read and prompt get requests, and each request it answered with a 401, 403 or 421. `true` reports
+   * with the defaults of `ReportingOptions`, and an options object turns individual fields off. Off by default. Calls
+   * without a token, which `publicAccess` lets through, are not reported.
    */
   reporting?: boolean | ReportingOptions<Req> | undefined;
 };
@@ -481,25 +482,18 @@ export function beginToolCallContext<Req>({
       ...(handler && { handler_ms: handler.handlerMs }),
     };
   };
-  const serverNameField = (serverName: string | undefined) => {
-    const name = reporting?.serverName ?? serverName;
-    return name !== undefined && SERVER_NAME_PATTERN.test(name) ? { server_name: name } : {};
-  };
   const context: ToolCallContext = {
     connected: false,
     startToolCall(toolName, serverName, requestKey, protocolVersion) {
       if (!reporter || !reporting || !details) return undefined;
-      if (reporting.tools) {
-        try {
-          if (!reporting.tools(toolName)) return undefined;
-        } catch (error) {
-          warnOnce(
-            'tools-threw',
-            `Clerk warning: ${caller} reporting.tools threw ${safeErrorName(error)}, so the call to ${TOOL_NAME_PATTERN.test(toolName) ? toolName : 'a tool'} was not reported`,
-          );
-          return undefined;
-        }
-      }
+      const allowed = toolsAllow(
+        caller,
+        reporting,
+        toolName,
+        'tool-call',
+        `the call to ${TOOL_NAME_PATTERN.test(toolName) ? toolName : 'a tool'} was not reported`,
+      );
+      if (!allowed) return undefined;
       if (!TOOL_NAME_PATTERN.test(toolName)) {
         warnOnce(
           'tool-name',
@@ -514,7 +508,7 @@ export function beginToolCallContext<Req>({
           type: 'tool_call',
           occurred_at: occurredAt,
           tool_name: toolName,
-          ...serverNameField(serverName),
+          ...serverNameField(reporting, serverName),
           ...protocolVersionField(protocolVersion),
           ...handledFields(outcome, takeHandler(requestKey), startedAt),
           ...details,
@@ -536,7 +530,7 @@ export function beginToolCallContext<Req>({
         reporter.enqueue({
           ...fields,
           occurred_at: occurredAt,
-          ...serverNameField(serverName),
+          ...serverNameField(reporting, serverName),
           ...handled,
           ...details,
         } as McpEvent);
@@ -624,12 +618,10 @@ export async function reportAuthFailure<Req>({
         ? first.params.name
         : undefined;
     const code = failure.cause?.code;
-    const { serverName } = reporting;
     reporter.enqueue({
       type: 'auth_failure',
       occurred_at: occurredAt,
-      ...(serverName !== undefined &&
-        SERVER_NAME_PATTERN.test(serverName) && { server_name: serverName }),
+      ...serverNameField(reporting, undefined),
       reason: failure.reason,
       http_status: status,
       // A verifier's code is an identifier, such as `token-expired`, never its message
@@ -653,19 +645,46 @@ export async function reportAuthFailure<Req>({
   }
 }
 
-// Whether `reporting.tools` lets a tool's name be reported. A name the Backend API would refuse never is.
+// Whether `reporting.tools` lets a tool's name be reported in an auth failure. A name the Backend API would refuse
+// never is.
 function isReportedTool<Req>(caller: string, reporting: ToolCallReporting<Req>, toolName: string) {
-  if (!TOOL_NAME_PATTERN.test(toolName)) return false;
+  return (
+    TOOL_NAME_PATTERN.test(toolName) &&
+    toolsAllow(
+      caller,
+      reporting,
+      toolName,
+      'auth-failure',
+      `an auth failure was reported without the name of ${toolName}`,
+    )
+  );
+}
+
+// Whether `reporting.tools` lets a tool be reported. One that throws does not, with a one-time warning of what was
+// left out, kept apart for tool calls and auth failures so that neither warning hides the other.
+function toolsAllow<Req>(
+  caller: string,
+  reporting: ToolCallReporting<Req>,
+  toolName: string,
+  kind: 'tool-call' | 'auth-failure',
+  leftOut: string,
+): boolean {
   if (!reporting.tools) return true;
   try {
     return reporting.tools(toolName);
   } catch (error) {
     warnOnce(
-      'tools-threw',
-      `Clerk warning: ${caller} reporting.tools threw ${safeErrorName(error)}, so an auth failure was reported without the name of ${toolName}`,
+      `tools-threw-${kind}`,
+      `Clerk warning: ${caller} reporting.tools threw ${safeErrorName(error)}, so ${leftOut}`,
     );
     return false;
   }
+}
+
+// The `server_name` of a report: the `serverName` option, or else the name the server was created with
+function serverNameField<Req>(reporting: ToolCallReporting<Req>, serverName: string | undefined) {
+  const name = reporting.serverName ?? serverName;
+  return name !== undefined && SERVER_NAME_PATTERN.test(name) ? { server_name: name } : {};
 }
 
 /**
@@ -788,7 +807,7 @@ function reporterFor<Req>(
   if (!secretKey?.trim()) {
     warnOnce(
       'secret-key',
-      `Clerk warning: ${caller} needs the CLERK_SECRET_KEY environment variable or reporting.secretKey to report tool calls, so they are not reported`,
+      `Clerk warning: ${caller} needs the CLERK_SECRET_KEY environment variable or reporting.secretKey to report MCP activity, so nothing is reported`,
     );
     return undefined;
   }
@@ -806,7 +825,7 @@ function reporterFor<Req>(
   } catch {
     warnOnce(
       'api-url',
-      `Clerk warning: ${caller} cannot report tool calls because CLERK_API_URL does not use HTTPS or loopback HTTP`,
+      `Clerk warning: ${caller} cannot report MCP activity because CLERK_API_URL does not use HTTPS or loopback HTTP`,
     );
     return undefined;
   }
@@ -876,9 +895,9 @@ function createReporter(
   }
 
   function enqueueAuthFailure(event: McpEvent) {
-    const now = Date.now();
-    if (now - authWindowStart >= AUTH_FAILURE_WINDOW_MS) {
-      authWindowStart = now;
+    const enqueuedAt = Date.now();
+    if (enqueuedAt - authWindowStart >= AUTH_FAILURE_WINDOW_MS) {
+      authWindowStart = enqueuedAt;
       authWindowCount = 0;
     }
     if (authWindowCount >= MAX_AUTH_FAILURES_PER_WINDOW) {
@@ -916,15 +935,19 @@ function createReporter(
     },
     flush,
     // One caller at a time waits, then sends until no auth failure is left, all from its own context: on Cloudflare
-    // Workers its `waitUntil` keeps the timer and the requests alive, and no request waits on another's I/O
+    // Workers its `waitUntil` keeps the timer and the requests alive, and no request waits on another's I/O. It stops
+    // draining in the same step as its last look at the queue, so an auth failure that arrives after it starts a drain
+    // of its own, and never waits for a timer that may not run.
     drainAuthFailures() {
       if (draining) return undefined;
       draining = (async () => {
-        await new Promise((resolve) => setTimeout(resolve, FLUSH_DELAY_MS));
-        while (authFailures.length > 0 && inFlight < MAX_IN_FLIGHT) await flush();
-      })().finally(() => {
-        draining = undefined;
-      });
+        try {
+          await new Promise((resolve) => setTimeout(resolve, FLUSH_DELAY_MS));
+          while (authFailures.length > 0 && inFlight < MAX_IN_FLIGHT) await flush();
+        } finally {
+          draining = undefined;
+        }
+      })();
       return draining;
     },
     pending,

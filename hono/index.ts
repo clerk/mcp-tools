@@ -68,7 +68,7 @@ export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
  * Options for `clerkInstrumentHandler`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
  * its audience, and `clerkClient` defaults to one built from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the
  * app's environment. With `verifyToken`, that function verifies each token with the Hono context, `resourceUrl` is
- * optional, and `clerkClient` is not allowed. `reporting` turns on tool call reporting. The deprecated `mcpAuth`
+ * optional, and `clerkClient` is not allowed. `reporting` turns on MCP activity reporting. The deprecated `mcpAuth`
  * takes the same options without it.
  */
 export type McpAuthOptions = MiddlewareAuthOptions<Context> & ReportingOption<Context>;
