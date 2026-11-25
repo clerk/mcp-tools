@@ -1,6 +1,10 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { McpServer as McpServerV2, createMcpHandler } from '@modelcontextprotocol/server';
+import {
+  McpServer as McpServerV2,
+  ResourceTemplate as ResourceTemplateV2,
+  createMcpHandler,
+} from '@modelcontextprotocol/server';
 import express from 'express';
 import { Hono } from 'hono';
 import { createMcpHandler as createVercelMcpHandler } from 'mcp-handler';
@@ -57,7 +61,11 @@ function reportSink(status = 202) {
     bodies.push(JSON.parse(String(init?.body)) as ReportBody);
     return Response.json({ object: 'mcp_event_ingestion', accepted: 1 }, { status });
   });
-  return { fetch, bodies, requests, calls: () => bodies.flatMap((body) => body.events) };
+  const events = (type?: string) =>
+    bodies
+      .flatMap((body) => body.events)
+      .filter((event) => type === undefined || event.type === type);
+  return { fetch, bodies, requests, events, calls: () => events('tool_call') };
 }
 
 const typesOf = (value: object) =>
@@ -66,13 +74,17 @@ const typesOf = (value: object) =>
 const REQUIRED_FIELDS: Record<string, string[]> = {
   tool_call: ['type', 'occurred_at', 'tool_name', 'status', 'duration_ms'],
   auth_failure: ['type', 'occurred_at', 'reason', 'http_status'],
+  client_initialized: ['type', 'occurred_at'],
+  list_request: ['type', 'occurred_at', 'method'],
+  resource_read: ['type', 'occurred_at', 'status', 'duration_ms'],
+  prompt_get: ['type', 'occurred_at', 'prompt_name', 'status', 'duration_ms'],
 };
 
 /**
  * Checks each batch against the golden batch that the bapi-proxy suite in clerk/cloudflare-workers posts to
- * `POST /v1/mcp_events`: every field an event sends is in a golden event of its type (and, for a tool call, its
- * status), with the same type, and the required fields are there. `exact` requires a golden event with exactly the
- * event's fields.
+ * `POST /v1/mcp_events`: every field an event sends is in a golden event of its type (and, for an event with a
+ * status, its status), with the same type, and the required fields are there. `exact` requires a golden event with
+ * exactly the event's fields.
  */
 function expectGoldenShape(bodies: ReportBody[], { exact = false } = {}) {
   expect(bodies.length).toBeGreaterThan(0);
@@ -84,7 +96,7 @@ function expectGoldenShape(bodies: ReportBody[], { exact = false } = {}) {
       const match = (golden.events as Record<string, unknown>[]).find(
         (candidate) =>
           candidate.type === event.type &&
-          (event.type !== 'tool_call' || candidate.status === event.status) &&
+          (event.status === undefined || candidate.status === event.status) &&
           (exact
             ? Object.keys(candidate).sort().join() === [...keys].sort().join()
             : keys.every((key) => key in candidate)),
@@ -859,6 +871,391 @@ describe('tool handler outcomes', () => {
   });
 });
 
+const PRIVATE_ID = 'cus_9f2hunter2';
+const PROMPT_ARGUMENT = 'Ada from payroll';
+const RESOURCE_TEXT = 'owner=ada; plan=enterprise';
+
+type Sink = ReturnType<typeof reportSink>;
+
+// Registers through the methods each MCP SDK version shares, so one list serves both
+function registerEverything(server: McpServer | McpServerV2, sdk: 'v1' | 'v2') {
+  registerTools(server);
+  const target = server as unknown as McpServer;
+  const Template = (
+    sdk === 'v1' ? ResourceTemplate : ResourceTemplateV2
+  ) as typeof ResourceTemplate;
+  const read = async (uri: URL) => ({ contents: [{ uri: uri.href, text: RESOURCE_TEXT }] });
+  target.registerResource('app-config', 'config://app', { mimeType: 'text/plain' }, read);
+  target.registerResource(
+    'customer-profile',
+    new Template('customers://{customerId}/profile', { list: undefined }),
+    { mimeType: 'text/plain' },
+    read,
+  );
+  target.registerResource('broken-config', 'config://broken', {}, async () => {
+    throw new RangeError(THROWN_TEXT);
+  });
+  target.registerPrompt(
+    'greet',
+    { argsSchema: (sdk === 'v1' ? { name: z.string() } : z.object({ name: z.string() })) as never },
+    (({ name }: { name: string }) => ({
+      messages: [
+        { role: 'user', content: { type: 'text', text: `Hello ${name}` } },
+        { role: 'assistant', content: { type: 'text', text: 'Hi' } },
+      ],
+    })) as never,
+  );
+  target.registerPrompt('broken_prompt', { description: 'Throws' }, () => {
+    throw new TypeError(THROWN_TEXT);
+  });
+}
+
+function everythingV2Handler(setup = (server: McpServerV2) => registerEverything(server, 'v2')) {
+  return createMcpHandler(() => {
+    const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+    clerkInstrumentServer(server);
+    setup(server);
+    return server;
+  });
+}
+
+async function useEverything(
+  fetchApp: (input: string | URL, init?: RequestInit) => Promise<Response>,
+  mcpUrl = RESOURCE_URL,
+) {
+  const { client, connected } = connectOAuthClient(new URL(mcpUrl), fetchApp, 'token');
+  await connected;
+  await client.listTools();
+  await client.listResources();
+  await client.listResourceTemplates();
+  await client.listPrompts();
+  await client.readResource({ uri: 'config://app' });
+  await client.readResource({ uri: `customers://${PRIVATE_ID}/profile` });
+  await expect(client.readResource({ uri: `secret://${PRIVATE_ID}/notes` })).rejects.toThrow();
+  await expect(client.readResource({ uri: 'config://broken' })).rejects.toThrow();
+  await client.getPrompt({ name: 'greet', arguments: { name: PROMPT_ARGUMENT } });
+  await expect(client.getPrompt({ name: 'broken_prompt' })).rejects.toThrow();
+  await expect(client.getPrompt({ name: 'missing_prompt' })).rejects.toThrow();
+  await client.close();
+}
+
+const expectedRequestEvents = (base: Record<string, unknown>) => {
+  const event = (fields: Record<string, unknown>) => ({
+    occurred_at: expect.any(Number),
+    server_name: 'acme-mcp',
+    user_id: USER_ID,
+    client_id: CLIENT_ID,
+    oauth_access_token_id: TOKEN_ID,
+    user_agent: USER_AGENT,
+    ...base,
+    ...fields,
+  });
+  const timed = { duration_ms: expect.any(Number), handler_ms: expect.any(Number) };
+  return [
+    event({
+      type: 'client_initialized',
+      client_name: 'e2e',
+      client_version: '0.0.0',
+      requested_protocol_version: '2025-11-25',
+      protocol_version: '2025-11-25',
+    }),
+    event({ type: 'list_request', method: 'tools/list', item_count: 2 }),
+    event({ type: 'list_request', method: 'resources/list', item_count: 2 }),
+    event({ type: 'list_request', method: 'resources/templates/list', item_count: 1 }),
+    event({ type: 'list_request', method: 'prompts/list', item_count: 2 }),
+    event({ type: 'resource_read', resource_name: 'app-config', status: 'success', ...timed }),
+    event({
+      type: 'resource_read',
+      resource_name: 'customer-profile',
+      resource_uri_template: 'customers://{customerId}/profile',
+      status: 'success',
+      ...timed,
+    }),
+    event({
+      type: 'resource_read',
+      resource_uri_scheme: 'secret',
+      status: 'error',
+      error_code: 'not_found',
+      duration_ms: expect.any(Number),
+    }),
+    event({
+      type: 'resource_read',
+      resource_name: 'broken-config',
+      status: 'error',
+      error_code: 'thrown:RangeError',
+      ...timed,
+    }),
+    event({
+      type: 'prompt_get',
+      prompt_name: 'greet',
+      status: 'success',
+      message_count: 2,
+      ...timed,
+    }),
+    event({
+      type: 'prompt_get',
+      prompt_name: 'broken_prompt',
+      status: 'error',
+      error_code: 'thrown:TypeError',
+      ...timed,
+    }),
+    event({
+      type: 'prompt_get',
+      prompt_name: 'missing_prompt',
+      status: 'error',
+      error_code: 'not_found',
+      duration_ms: expect.any(Number),
+    }),
+  ];
+};
+
+// No URI a client asked for, argument, result or error text is ever sent
+function expectNoRequestData(sink: Sink) {
+  const sent = JSON.stringify(sink.bodies);
+  for (const text of [
+    PRIVATE_ID,
+    'config://',
+    'secret://',
+    PROMPT_ARGUMENT,
+    'Hello',
+    RESOURCE_TEXT,
+    THROWN_TEXT,
+    'hunter2',
+    'not found',
+    '"arguments"',
+  ]) {
+    expect(sent).not.toContain(text);
+  }
+}
+
+const REQUEST_EVENT_COUNT = 12;
+
+describe.each<{
+  adapter: string;
+  run: (sink: Sink) => Promise<Record<string, unknown>>;
+}>([
+  {
+    adapter: 'hono, MCP SDK 2.x',
+    run: async (sink) => {
+      const app = honoApp(everythingV2Handler(), {
+        reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      });
+      await useEverything(app.fetch);
+      await app.settled();
+      return { ip_address: '203.0.113.7' };
+    },
+  },
+  {
+    adapter: 'express, MCP SDK 2.x',
+    run: async (sink) => {
+      const app = express();
+      app.use(express.json());
+      app.all(
+        '/mcp',
+        expressAdapter.clerkInstrumentHandler(everythingV2Handler(), {
+          resourceUrl: RESOURCE_URL,
+          clerkClient,
+          reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+        }),
+      );
+      await withListening(app, (baseUrl) =>
+        useEverything((input, init) => fetch(input, withUserAgent(init)), `${baseUrl}/mcp`),
+      );
+      return { ip_address: '127.0.0.1' };
+    },
+  },
+  {
+    adapter: 'express, MCP SDK 1.x',
+    run: async (sink) => {
+      const app = sdkV1ExpressApp((server) => {
+        clerkInstrumentServer(server);
+        registerEverything(server, 'v1');
+      }, sink);
+      await withListening(app, (baseUrl) =>
+        useEverything((input, init) => fetch(input, withUserAgent(init)), `${baseUrl}/mcp`),
+      );
+      return { ip_address: '127.0.0.1' };
+    },
+  },
+  {
+    adapter: 'next, mcp-handler',
+    run: async (sink) => {
+      const handler = createVercelMcpHandler(
+        (server) => {
+          clerkInstrumentServer(server);
+          registerEverything(server as unknown as McpServerV2, 'v2');
+        },
+        { serverInfo: { name: 'acme-mcp', version: '1.0.0' } },
+      );
+      const route = nextAdapter.clerkInstrumentHandler(handler, {
+        resourceUrl: RESOURCE_URL,
+        clerkClient,
+        reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      });
+      await useEverything((input, init) => route(new Request(input, withUserAgent(init))));
+      return {};
+    },
+  },
+])('request reports from clerkInstrumentServer on $adapter', ({ run }) => {
+  test('report initialize, list, resource read and prompt get events, and none of their data', async () => {
+    const sink = reportSink();
+    const base = await run(sink);
+
+    await vi.waitFor(() => expect(sink.events()).toHaveLength(REQUEST_EVENT_COUNT), {
+      timeout: 3000,
+    });
+    expect(sink.events()).toEqual(expectedRequestEvents(base));
+    expectGoldenShape(sink.bodies);
+    expectNoRequestData(sink);
+  });
+});
+
+describe('request reports', () => {
+  test('name resources and prompts registered before clerkInstrumentServer only from the request', async () => {
+    const sink = reportSink();
+    const app = honoApp(
+      createMcpHandler(() => {
+        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+        registerEverything(server, 'v2');
+        clerkInstrumentServer(server);
+        return server;
+      }),
+      { reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+    );
+
+    await useEverything(app.fetch);
+    await app.settled();
+
+    const reads = sink.events('resource_read');
+    expect(
+      reads.map(({ resource_uri_scheme, status, error_code }) => ({
+        resource_uri_scheme,
+        status,
+        error_code,
+      })),
+    ).toEqual([
+      { resource_uri_scheme: 'config', status: 'success', error_code: undefined },
+      { resource_uri_scheme: 'customers', status: 'success', error_code: undefined },
+      { resource_uri_scheme: 'secret', status: 'error', error_code: 'jsonrpc:-32602' },
+      { resource_uri_scheme: 'config', status: 'error', error_code: 'jsonrpc:-32603' },
+    ]);
+    for (const read of reads) {
+      expect(read).not.toHaveProperty('resource_name');
+      expect(read).not.toHaveProperty('handler_ms');
+    }
+    expect(
+      sink.events('prompt_get').map(({ prompt_name, error_code, handler_ms }) => ({
+        prompt_name,
+        error_code,
+        handler_ms,
+      })),
+    ).toEqual([
+      { prompt_name: 'greet', error_code: undefined, handler_ms: undefined },
+      { prompt_name: 'broken_prompt', error_code: 'jsonrpc:-32603', handler_ms: undefined },
+      { prompt_name: 'missing_prompt', error_code: 'jsonrpc:-32602', handler_ms: undefined },
+    ]);
+    expectNoRequestData(sink);
+  });
+
+  test('report a client by the clientInfo of server/discover on protocol revision 2026-07-28', async () => {
+    const sink = reportSink();
+    const app = honoApp(everythingV2Handler(), {
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+    });
+    const modern = (id: number, method: string, params: Record<string, unknown> = {}) =>
+      app.fetch(RESOURCE_URL, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer token',
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-protocol-version': '2026-07-28',
+          'mcp-method': method,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method,
+          params: {
+            ...params,
+            _meta: {
+              'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+              'io.modelcontextprotocol/clientInfo': { name: 'Claude Code', version: '2.1.0' },
+              'io.modelcontextprotocol/clientCapabilities': {},
+            },
+          },
+        }),
+      });
+
+    const discovered = await modern(1, 'server/discover');
+    expect(discovered.status).toBe(200);
+    await discovered.text();
+    await (await modern(2, 'tools/list')).text();
+    await app.settled();
+
+    expect(sink.events()).toEqual([
+      expect.objectContaining({
+        type: 'client_initialized',
+        client_name: 'Claude Code',
+        client_version: '2.1.0',
+        requested_protocol_version: '2026-07-28',
+        protocol_version: '2026-07-28',
+      }),
+      expect.objectContaining({ type: 'list_request', method: 'tools/list', item_count: 2 }),
+    ]);
+    expectGoldenShape(sink.bodies);
+  });
+
+  test('leave out a client name, version or protocol version the Backend API would refuse', async () => {
+    const sink = reportSink();
+    const app = honoApp(everythingV2Handler(), {
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+    });
+
+    const response = await app.fetch(RESOURCE_URL, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: `2025-11-25 ${PRIVATE_ID}`,
+          capabilities: {},
+          clientInfo: { name: `agent\n${PRIVATE_ID}`, version: 'v'.repeat(200) },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    await app.settled();
+
+    const [initialized] = sink.events();
+    expect(initialized).toMatchObject({
+      type: 'client_initialized',
+      protocol_version: expect.any(String),
+    });
+    expect(initialized).not.toHaveProperty('client_name');
+    expect(initialized).not.toHaveProperty('client_version');
+    expect(initialized).not.toHaveProperty('requested_protocol_version');
+    expect(JSON.stringify(sink.bodies)).not.toContain(PRIVATE_ID);
+  });
+
+  test('send nothing when reporting is off', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const app = honoApp(everythingV2Handler());
+
+    await useEverything(app.fetch);
+    await app.settled();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('reporting options', () => {
   test('defaults every field on', () => {
     expect(resolveReporting('clerkInstrumentHandler', true)).toEqual({
@@ -1126,7 +1523,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
   'auth failure reports from clerkInstrumentHandler on %s',
   (adapter) => {
     const reported = (sink: ReturnType<typeof reportSink>, count = 1) =>
-      vi.waitFor(() => expect(sink.calls()).toHaveLength(count), { timeout: 3000 });
+      vi.waitFor(() => expect(sink.events()).toHaveLength(count), { timeout: 3000 });
 
     test.each([
       {
@@ -1181,7 +1578,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
         expect(answer).toEqual(unreported);
         expect(answer.status).toBe(status);
         await reported(sink, answer.received);
-        expect(sink.calls()).toEqual(
+        expect(sink.events()).toEqual(
           Array.from({ length: answer.received }, () => ({
             type: 'auth_failure',
             occurred_at: expect.any(Number),
@@ -1246,11 +1643,11 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       );
 
       await reported(sink, 3);
-      const [unreadable, unnamed, tooLarge] = sink.calls();
+      const [unreadable, unnamed, tooLarge] = sink.events();
       expect(unreadable).not.toHaveProperty('method');
       expect(unnamed).toMatchObject({ reason: 'missing_token', method: 'tools/call' });
       expect(tooLarge).not.toHaveProperty('method');
-      for (const event of sink.calls()) expect(event).not.toHaveProperty('tool_name');
+      for (const event of sink.events()) expect(event).not.toHaveProperty('tool_name');
       expect(JSON.stringify(sink.bodies)).not.toContain('hunter2');
     });
 
@@ -1274,8 +1671,8 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       );
 
       await reported(sink);
-      expect(sink.calls()[0]).toMatchObject({ method: 'tools/call', server_name: 'acme-mcp' });
-      expect(sink.calls()[0]).not.toHaveProperty('tool_name');
+      expect(sink.events()[0]).toMatchObject({ method: 'tools/call', server_name: 'acme-mcp' });
+      expect(sink.events()[0]).not.toHaveProperty('tool_name');
     });
 
     test('reports no identity for a 403 when identity is off, or IP address and user agent when they are', async () => {
@@ -1297,7 +1694,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       );
 
       await reported(sink);
-      expect(sink.calls()).toEqual([
+      expect(sink.events()).toEqual([
         {
           type: 'auth_failure',
           occurred_at: expect.any(Number),
@@ -1329,11 +1726,13 @@ describe('auth failure reports under a burst of refused requests', () => {
     await callTools(app.fetch);
     await app.settled();
 
-    const events = sink.calls();
+    const events = sink.events();
     expect(events.filter((event) => event.type === 'tool_call')).toHaveLength(2);
     expect(events.filter((event) => event.type === 'auth_failure')).toHaveLength(100);
-    // 102 events fit in two batches; one more for the tool calls' own flush at the end of their response
-    expect(sink.fetch.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(events.filter((event) => event.type === 'client_initialized')).toHaveLength(1);
+    // 103 events fit in two batches; one more each for the flushes at the end of the initialize and tool call
+    // responses
+    expect(sink.fetch.mock.calls.length).toBeLessThanOrEqual(4);
     expect(warn.mock.calls).toEqual([
       [
         'Clerk warning: clerkInstrumentHandler reports at most 100 auth failures a minute, so it dropped some',
@@ -1384,9 +1783,7 @@ describe('auth failure reports under a burst of refused requests', () => {
     }
     release();
     await context.flush();
-    await vi.waitFor(() =>
-      expect(sink.calls().filter((event) => event.type === 'auth_failure')).toHaveLength(100),
-    );
+    await vi.waitFor(() => expect(sink.events('auth_failure')).toHaveLength(100));
 
     const sent = new Set(sink.calls().map((event) => event.tool_name));
     expect(sent.has('tool_0')).toBe(true);
@@ -1430,8 +1827,8 @@ describe.each<'hono' | 'next'>(['hono', 'next'])(
         ),
       );
       controller.close();
-      await vi.waitFor(() => expect(sink.calls()).toHaveLength(1), { timeout: 3000 });
-      expect(sink.calls()[0]).toMatchObject({
+      await vi.waitFor(() => expect(sink.events()).toHaveLength(1), { timeout: 3000 });
+      expect(sink.events()[0]).toMatchObject({
         reason: 'invalid_token',
         method: 'tools/call',
         tool_name: 'ping',

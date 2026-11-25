@@ -66,8 +66,8 @@ export type ReportingOptions<Req = never> = {
 export type ReportingOption<Req> = {
   /**
    * Reports each tool call that `clerkInstrumentHandler` authenticated and a `clerkInstrumentServer` server answered
-   * to Clerk, where it shows up in the instance's MCP analytics and audit log, and each request it answered with a
-   * 401, 403 or 421. `true` reports with the defaults of `ReportingOptions`, and an options object turns individual
+   * to Clerk, where it shows up in the instance's MCP analytics and audit log, along with that server's `initialize`,
+   * list, resource read and prompt get requests, and each request it answered with a 401, 403 or 421. `true` reports with the defaults of `ReportingOptions`, and an options object turns individual
    * fields off. Off by default. Calls without a token, which `publicAccess` lets through, are not reported.
    */
   reporting?: boolean | ReportingOptions<Req> | undefined;
@@ -104,6 +104,14 @@ const SERVER_NAME_PATTERN = /^[A-Za-z0-9 _.:@/-]{1,128}$/;
 const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
 const METHOD_PATTERN = /^[A-Za-z0-9_./-]{1,64}$/;
 const VERIFIER_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+// A client names itself, so its name and version are kept only in these shapes
+const CLIENT_NAME_PATTERN = /^[A-Za-z0-9 _.:@()+/-]{1,128}$/;
+const CLIENT_VERSION_PATTERN = /^[A-Za-z0-9 _.:@()+/-]{1,64}$/;
+const PROTOCOL_VERSION_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
+// A resource template is the server's own string, such as `users://{id}/profile`: printable ASCII without spaces
+const URI_TEMPLATE_PATTERN = /^[!-~]{1,256}$/;
+const URI_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]{0,31}$/;
+const MAX_ITEM_COUNT = 1_000_000;
 const MAX_ERROR_CODE_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
@@ -219,6 +227,7 @@ type McpEventBase = {
   oauth_access_token_id?: string;
   ip_address?: string;
   user_agent?: string;
+  protocol_version?: string;
 };
 
 type ToolCallEvent = McpEventBase & {
@@ -239,7 +248,86 @@ type AuthFailureEvent = McpEventBase & {
   tool_name?: string;
 };
 
-type McpEvent = ToolCallEvent | AuthFailureEvent;
+type ClientInitializedEvent = McpEventBase & {
+  type: 'client_initialized';
+  client_name?: string;
+  client_version?: string;
+  requested_protocol_version?: string;
+};
+
+type ListRequestEvent = McpEventBase & {
+  type: 'list_request';
+  method: string;
+  item_count?: number;
+};
+
+type HandledRequestFields = {
+  status: 'success' | 'error';
+  error_code?: string;
+  duration_ms: number;
+  handler_ms?: number;
+};
+
+type ResourceReadEvent = McpEventBase &
+  HandledRequestFields & {
+    type: 'resource_read';
+    resource_name?: string;
+    resource_uri_template?: string;
+    resource_uri_scheme?: string;
+  };
+
+type PromptGetEvent = McpEventBase &
+  HandledRequestFields & {
+    type: 'prompt_get';
+    prompt_name: string;
+    message_count?: number;
+  };
+
+type RequestEvent = ClientInitializedEvent | ListRequestEvent | ResourceReadEvent | PromptGetEvent;
+
+type McpEvent = ToolCallEvent | AuthFailureEvent | RequestEvent;
+
+type WithoutBase<Event> = Event extends unknown
+  ? Omit<Event, keyof McpEventBase | keyof HandledRequestFields> &
+      Pick<McpEventBase, 'protocol_version'>
+  : never;
+
+/**
+ * The fields of a request event that the transport observes, before `ToolCallContext.startRequest` adds the time,
+ * outcome, server and caller. Each value is dropped unless it has the shape the Backend API accepts.
+ */
+export type RequestEventFields = WithoutBase<RequestEvent>;
+
+// The shape each observed value must have to be sent, matching `POST /v1/mcp_events`
+const REQUEST_FIELD_PATTERNS: Record<string, RegExp> = {
+  client_name: CLIENT_NAME_PATTERN,
+  client_version: CLIENT_VERSION_PATTERN,
+  requested_protocol_version: PROTOCOL_VERSION_PATTERN,
+  protocol_version: PROTOCOL_VERSION_PATTERN,
+  method: METHOD_PATTERN,
+  resource_name: SERVER_NAME_PATTERN,
+  resource_uri_template: URI_TEMPLATE_PATTERN,
+  resource_uri_scheme: URI_SCHEME_PATTERN,
+  prompt_name: SERVER_NAME_PATTERN,
+};
+
+const isCount = (value: unknown) =>
+  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_ITEM_COUNT;
+
+// The fields with the shape the Backend API accepts, or `undefined` when a required one is missing
+function validRequestFields(fields: RequestEventFields): RequestEventFields | undefined {
+  const valid = Object.fromEntries(
+    Object.entries(fields).filter(([key, value]) => {
+      if (key === 'type') return true;
+      if (key === 'item_count' || key === 'message_count') return isCount(value);
+      const pattern = REQUEST_FIELD_PATTERNS[key];
+      return pattern !== undefined && typeof value === 'string' && pattern.test(value);
+    }),
+  ) as RequestEventFields;
+  if (valid.type === 'list_request' && valid.method === undefined) return undefined;
+  if (valid.type === 'prompt_get' && valid.prompt_name === undefined) return undefined;
+  return valid;
+}
 
 type RequestDetails = Pick<
   McpEventBase,
@@ -266,6 +354,16 @@ export type ToolCallContext = {
     serverName: string | undefined,
     requestKey?: string | undefined,
   ): ((outcome: ToolCallOutcome) => void) | undefined;
+  /**
+   * Starts timing a request that is not a tool call, such as `initialize` or `resources/read`, or returns `undefined`
+   * when it is not reported.
+   * @returns A function that reports the request once it has a response, with the fields observed from it, and the
+   * outcome of a resource read or prompt get
+   */
+  startRequest(
+    serverName: string | undefined,
+    requestKey: string,
+  ): ((fields: RequestEventFields, outcome?: ToolCallOutcome) => void) | undefined;
   /**
    * Starts timing the handler of the call with `requestKey`, for that call's report.
    * @returns A function to call once the handler returns, with the error it threw, if any. A thrown error makes the
@@ -349,6 +447,34 @@ export function beginToolCallContext<Req>({
     reporting &&
     requestDetails(caller, reporting, authInfo, request, defaultIpAddress, userAgent);
   const handlers = new Map<string, HandlerRecord>();
+  const takeHandler = (requestKey: string | undefined) => {
+    if (requestKey === undefined) return undefined;
+    const handler = handlers.get(requestKey);
+    handlers.delete(requestKey);
+    return handler;
+  };
+  // The outcome, time and handler time of a handled request. A handler that threw makes it an error, whatever the
+  // response says.
+  const handledFields = (
+    outcome: ToolCallOutcome,
+    handler: HandlerRecord | undefined,
+    startedAt: number,
+  ): HandledRequestFields => {
+    const status = handler?.thrownErrorCode === undefined ? outcome.status : 'error';
+    const errorCode = handler?.thrownErrorCode ?? outcome.errorCode;
+    return {
+      status,
+      ...(status === 'error' &&
+        errorCode !== undefined &&
+        ERROR_CODE_PATTERN.test(errorCode) && { error_code: errorCode }),
+      duration_ms: elapsedMs(startedAt),
+      ...(handler && { handler_ms: handler.handlerMs }),
+    };
+  };
+  const serverNameField = (serverName: string | undefined) => {
+    const name = reporting?.serverName ?? serverName;
+    return name !== undefined && SERVER_NAME_PATTERN.test(name) ? { server_name: name } : {};
+  };
   const context: ToolCallContext = {
     connected: false,
     startToolCall(toolName, serverName, requestKey) {
@@ -371,27 +497,38 @@ export function beginToolCallContext<Req>({
         );
         return undefined;
       }
-      const name = reporting.serverName ?? serverName;
       const occurredAt = Date.now();
       const startedAt = now();
       return (outcome) => {
-        const handler = requestKey === undefined ? undefined : handlers.get(requestKey);
-        if (requestKey !== undefined) handlers.delete(requestKey);
-        const status = handler?.thrownErrorCode === undefined ? outcome.status : 'error';
-        const errorCode = handler?.thrownErrorCode ?? outcome.errorCode;
         reporter.enqueue({
           type: 'tool_call',
           occurred_at: occurredAt,
           tool_name: toolName,
-          ...(name !== undefined && SERVER_NAME_PATTERN.test(name) && { server_name: name }),
-          status,
-          ...(status === 'error' &&
-            errorCode !== undefined &&
-            ERROR_CODE_PATTERN.test(errorCode) && { error_code: errorCode }),
-          duration_ms: elapsedMs(startedAt),
-          ...(handler && { handler_ms: handler.handlerMs }),
+          ...serverNameField(serverName),
+          ...handledFields(outcome, takeHandler(requestKey), startedAt),
           ...details,
         });
+      };
+    },
+    startRequest(serverName, requestKey) {
+      if (!reporter || !details) return undefined;
+      const occurredAt = Date.now();
+      const startedAt = now();
+      return (observed, outcome) => {
+        const handler = takeHandler(requestKey);
+        const fields = validRequestFields(observed);
+        if (!fields) return;
+        const handled =
+          fields.type === 'resource_read' || fields.type === 'prompt_get'
+            ? handledFields(outcome ?? { status: 'success' }, handler, startedAt)
+            : {};
+        reporter.enqueue({
+          ...fields,
+          occurred_at: occurredAt,
+          ...serverNameField(serverName),
+          ...handled,
+          ...details,
+        } as McpEvent);
       };
     },
     startHandler(requestKey) {
