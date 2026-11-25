@@ -394,6 +394,19 @@ function serverNameOf(server: object): string | undefined {
   return typeof name === 'string' ? name : undefined;
 }
 
+// Whether the server has no tool named `name`. The MCP SDK's `McpServer` keeps every tool it serves, however it was
+// registered, in `_registeredTools` in 1.x and 2.x, which has no public accessor. A server without it, such as a
+// low-level `Server`, gives no answer, and neither does the set of tools `clerkInstrumentServer` wrapped, which misses
+// those registered before it.
+function isUnknownTool(server: object, name: string): boolean {
+  try {
+    const tools = (server as { _registeredTools?: unknown })._registeredTools;
+    return typeof tools === 'object' && tools !== null && !Object.hasOwn(tools, name);
+  } catch {
+    return false;
+  }
+}
+
 function requestKey(id: unknown): string | undefined {
   if (typeof id === 'number') return `n:${id}`;
   if (typeof id === 'string') return `s:${id}`;
@@ -428,7 +441,17 @@ function observeTransport(transport: unknown, server: object) {
             key,
             protocolVersionOf(server, params as Params),
           );
-          if (finish) pending.set(key, (response) => finish(toolCallOutcome(response)));
+          const unknown = isUnknownTool(server, toolName);
+          if (finish) {
+            pending.set(key, (response) => {
+              const outcome = toolCallOutcome(response);
+              finish(
+                unknown && outcome.status === 'error'
+                  ? { status: 'error', errorCode: 'not_found' }
+                  : outcome,
+              );
+            });
+          }
         }
       } else if (context && typeof method === 'string' && key !== undefined) {
         const observed = observeRequest(server, method, params as Params);

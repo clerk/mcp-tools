@@ -824,6 +824,66 @@ describe('tool handler outcomes', () => {
     expectNoErrorText(sink);
   });
 
+  test('report a call to a tool the server does not have as not_found, on MCP SDK 1.x and 2.x', async () => {
+    const callMissing = async (
+      fetchApp: (input: string | URL, init?: RequestInit) => Promise<Response>,
+      mcpUrl: string,
+    ) => {
+      const { client, connected } = connectOAuthClient(new URL(mcpUrl), fetchApp, 'token');
+      await connected;
+      await client.callTool({ name: 'missing' }).catch(() => undefined);
+      await client.callTool({ name: 'ping' });
+      await client.close();
+    };
+    const expected = [
+      { tool_name: 'missing', status: 'error', error_code: 'not_found', handler_ms: undefined },
+      {
+        tool_name: 'ping',
+        status: 'success',
+        error_code: undefined,
+        handler_ms: expect.any(Number),
+      },
+    ];
+
+    const v1Sink = reportSink();
+    const v1App = sdkV1ExpressApp((server) => {
+      clerkInstrumentServer(server);
+      registerTools(server);
+    }, v1Sink);
+    await withListening(v1App, (baseUrl) => callMissing(fetch, `${baseUrl}/mcp`));
+    await vi.waitFor(() => expect(v1Sink.calls()).toHaveLength(2), { timeout: 3000 });
+    expect(outcomesOf(v1Sink)).toEqual(expected);
+    expectGoldenShape(v1Sink.bodies);
+
+    const v2Sink = reportSink();
+    const v2App = honoApp(sdkV2Handler(), {
+      reporting: { fetch: v2Sink.fetch, secretKey: SECRET_KEY },
+    });
+    await callMissing(v2App.fetch, RESOURCE_URL);
+    await v2App.settled();
+    expect(outcomesOf(v2Sink)).toEqual(expected);
+    expectGoldenShape(v2Sink.bodies);
+  });
+
+  test('keep the outcome of an unknown tool on a server without a readable tool registry', async () => {
+    const sink = reportSink();
+    const app = sdkV1ExpressApp((server) => {
+      registerTools(server);
+      clerkInstrumentServer(server.server);
+    }, sink);
+
+    await withListening(app, async (baseUrl) => {
+      const { client, connected } = connectOAuthClient(new URL(`${baseUrl}/mcp`), fetch, 'token');
+      await connected;
+      await client.callTool({ name: 'missing' }).catch(() => undefined);
+      await client.close();
+    });
+
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(1), { timeout: 3000 });
+    expect(sink.calls()[0]).toMatchObject({ tool_name: 'missing', status: 'error' });
+    expect(sink.calls()[0]).not.toHaveProperty('error_code');
+  });
+
   test('time handlers that take arguments, on MCP SDK 1.x and 2.x', async () => {
     const throwWith = async ({ order }: { order: string }) => {
       throw new RangeError(order);
