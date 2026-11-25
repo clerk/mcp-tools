@@ -13,9 +13,10 @@ import { clerkInstrumentServer } from '../server';
 import {
   beginToolCallContext,
   normalizeIpAddress,
-  resolveReportToolCalls,
+  resolveReporting,
   toolCallOutcome,
 } from '../tool-call-reporting';
+import golden from './fixtures/mcp-events.golden.json';
 import { connectOAuthClient, withListening } from './mcp-harness';
 
 const RESOURCE_URL = 'https://mcp.example.com/mcp';
@@ -41,7 +42,7 @@ const clerkClient = {
   }),
 };
 
-type ReportBody = { tool_calls: Record<string, unknown>[]; sdk: { name: string; version: string } };
+type ReportBody = { events: Record<string, unknown>[]; sdk: { name: string; version: string } };
 
 function reportSink(status = 202) {
   const bodies: ReportBody[] = [];
@@ -52,9 +53,39 @@ function reportSink(status = 202) {
       authorization: new Headers(init?.headers).get('authorization'),
     });
     bodies.push(JSON.parse(String(init?.body)) as ReportBody);
-    return Response.json({ object: 'mcp_tool_call_ingestion', accepted: 1 }, { status });
+    return Response.json({ object: 'mcp_event_ingestion', accepted: 1 }, { status });
   });
-  return { fetch, bodies, requests, calls: () => bodies.flatMap((body) => body.tool_calls) };
+  return { fetch, bodies, requests, calls: () => bodies.flatMap((body) => body.events) };
+}
+
+const typesOf = (value: object) =>
+  Object.fromEntries(Object.entries(value).map(([key, field]) => [key, typeof field]));
+
+const REQUIRED_TOOL_CALL_FIELDS = ['type', 'occurred_at', 'tool_name', 'status', 'duration_ms'];
+
+/**
+ * Checks each batch against the golden batch that the bapi-proxy suite in clerk/cloudflare-workers posts to
+ * `POST /v1/mcp_events`: every field an event sends is in the golden event of its type and status, with the same
+ * type, and the required fields are there. `exact` also requires every golden field to be sent.
+ */
+function expectGoldenShape(bodies: ReportBody[], { exact = false } = {}) {
+  expect(bodies.length).toBeGreaterThan(0);
+  for (const body of bodies) {
+    expect(Object.keys(body).sort()).toEqual(Object.keys(golden).sort());
+    expect(typesOf(body.sdk)).toEqual(typesOf(golden.sdk));
+    for (const event of body.events) {
+      const match = golden.events.find(
+        (candidate) => candidate.type === event.type && candidate.status === event.status,
+      );
+      expect(
+        match,
+        `a golden ${String(event.type)} event with status ${String(event.status)}`,
+      ).toBeDefined();
+      if (exact) expect(typesOf(event)).toEqual(typesOf(match!));
+      else expect(typesOf(match!)).toMatchObject(typesOf(event));
+      expect(Object.keys(event)).toEqual(expect.arrayContaining(REQUIRED_TOOL_CALL_FIELDS));
+    }
+  }
 }
 
 function registerTools(
@@ -126,11 +157,12 @@ function honoApp(
 
 const expectedCalls = (overrides: Record<string, unknown> = {}) => [
   {
+    type: 'tool_call',
     tool_name: 'ping',
     server_name: 'acme-mcp',
     status: 'success',
     duration_ms: expect.any(Number),
-    called_at: expect.any(Number),
+    occurred_at: expect.any(Number),
     user_id: USER_ID,
     client_id: CLIENT_ID,
     oauth_access_token_id: TOKEN_ID,
@@ -138,12 +170,13 @@ const expectedCalls = (overrides: Record<string, unknown> = {}) => [
     ...overrides,
   },
   {
+    type: 'tool_call',
     tool_name: 'fail',
     server_name: 'acme-mcp',
     status: 'error',
     error_code: 'upstream_timeout',
     duration_ms: expect.any(Number),
-    called_at: expect.any(Number),
+    occurred_at: expect.any(Number),
     user_id: USER_ID,
     client_id: CLIENT_ID,
     oauth_access_token_id: TOKEN_ID,
@@ -161,14 +194,15 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
   test('reports each tool call to the Backend API once the response is over', async () => {
     vi.stubEnv('CLERK_SECRET_KEY', SECRET_KEY);
     const sink = reportSink();
-    const app = honoApp(sdkV2Handler(), { reportToolCalls: { fetch: sink.fetch } });
+    const app = honoApp(sdkV2Handler(), { reporting: { fetch: sink.fetch } });
 
     await callTools(app.fetch);
     await app.settled();
 
     expect(sink.calls()).toEqual(expectedCalls({ ip_address: '203.0.113.7' }));
+    expectGoldenShape(sink.bodies, { exact: true });
     expect(sink.requests[0]).toEqual({
-      url: 'https://api.clerk.com/v1/mcp_tool_calls',
+      url: 'https://api.clerk.com/v1/mcp_events',
       authorization: `Bearer ${SECRET_KEY}`,
     });
     expect(sink.bodies[0]!.sdk).toEqual({ name: '@clerk/mcp-tools', version: expect.any(String) });
@@ -177,7 +211,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
   test('reports a tool call on protocol revision 2026-07-28', async () => {
     const sink = reportSink();
     const app = honoApp(sdkV2Handler(), {
-      reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
     });
 
     const response = await app.fetch(RESOURCE_URL, {
@@ -215,7 +249,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
   test('leaves out each field and tool its options turn off', async () => {
     const sink = reportSink();
     const app = honoApp(sdkV2Handler(), {
-      reportToolCalls: {
+      reporting: {
         fetch: sink.fetch,
         secretKey: SECRET_KEY,
         ipAddress: false,
@@ -231,11 +265,12 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
 
     expect(sink.calls()).toEqual([
       {
+        type: 'tool_call',
         tool_name: 'ping',
         server_name: 'acme-production',
         status: 'success',
         duration_ms: expect.any(Number),
-        called_at: expect.any(Number),
+        occurred_at: expect.any(Number),
       },
     ]);
   });
@@ -244,7 +279,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
     const sink = reportSink();
     const addresses = ['2001:db8::1', 'not-an-address'];
     const app = honoApp(sdkV2Handler(), {
-      reportToolCalls: {
+      reporting: {
         fetch: sink.fetch,
         secretKey: SECRET_KEY,
         ipAddress: () => addresses.shift(),
@@ -257,7 +292,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
     expect(sink.calls().map((call) => call.ip_address)).toEqual(['2001:db8::1', undefined]);
   });
 
-  test('reports nothing when reportToolCalls is off', async () => {
+  test('reports nothing when reporting is off', async () => {
     const sink = reportSink();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const app = honoApp(sdkV2Handler());
@@ -273,7 +308,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sink = reportSink();
     const app = honoApp(sdkV2Handler(false), {
-      reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
     });
 
     await callTools(app.fetch);
@@ -290,7 +325,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
     const sink = reportSink();
     const app = honoApp(sdkV2Handler(), {
       publicAccess: { tools: ['ping'] },
-      reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
     });
 
     const { authorization: _, ...headers } = toolCallInit('ping').headers as Record<string, string>;
@@ -338,7 +373,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
       expressAdapter.clerkInstrumentHandler(sdkV2Handler(), {
         resourceUrl: RESOURCE_URL,
         clerkClient,
-        reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+        reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
       }),
     );
 
@@ -348,6 +383,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
 
     await vi.waitFor(() => expect(sink.calls()).toHaveLength(2), { timeout: 3000 });
     expect(sink.calls()).toEqual(expectedCalls({ ip_address: '127.0.0.1' }));
+    expectGoldenShape(sink.bodies);
   });
 
   test('reports the tool calls of an Express handler serving an MCP SDK 1.x transport', async () => {
@@ -369,7 +405,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
         {
           resourceUrl: RESOURCE_URL,
           clerkClient,
-          reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+          reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
         },
       ),
     );
@@ -380,13 +416,14 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
 
     await vi.waitFor(() => expect(sink.calls()).toHaveLength(2), { timeout: 3000 });
     expect(sink.calls()).toEqual(expectedCalls({ ip_address: '127.0.0.1' }));
+    expectGoldenShape(sink.bodies);
   });
 
-  test('mcpAuth refuses reportToolCalls, which it cannot see', () => {
+  test('mcpAuth refuses reporting, which it cannot see', () => {
     expect(() =>
       expressAdapter.mcpAuth({
         resourceUrl: RESOURCE_URL,
-        reportToolCalls: true,
+        reporting: true,
       } as expressAdapter.McpAuthOptions),
     ).toThrow(
       'Clerk error: mcpAuth cannot report tool calls. Serve the MCP route with clerkInstrumentHandler(handler, options)',
@@ -394,7 +431,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
     expect(() =>
       expressAdapter.mcpAuth({
         resourceUrl: RESOURCE_URL,
-        reportToolCalls: false,
+        reporting: false,
       } as expressAdapter.McpAuthOptions),
     ).not.toThrow();
   });
@@ -403,7 +440,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
     expect(() =>
       expressAdapter.protectedResourceMetadataHandler({
         resourceUrl: RESOURCE_URL,
-        reportToolCalls: true,
+        reporting: true,
       }),
     ).not.toThrow();
   });
@@ -446,13 +483,14 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
     const route = nextAdapter.clerkInstrumentHandler(handler, {
       resourceUrl: RESOURCE_URL,
       clerkClient,
-      reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
     });
 
     await callTools((input, init) => route(new Request(input, withUserAgent(init))));
 
     await vi.waitFor(() => expect(sink.calls()).toHaveLength(2), { timeout: 3000 });
     expect(sink.calls()).toEqual(expectedCalls());
+    expectGoldenShape(sink.bodies);
   });
 
   test('reports the address Vercel sets on x-real-ip', async () => {
@@ -461,7 +499,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
     const route = nextAdapter.clerkInstrumentHandler(sdkV2Handler(), {
       resourceUrl: RESOURCE_URL,
       clerkClient,
-      reportToolCalls: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
     });
     const init = toolCallInit('ping');
 
@@ -484,7 +522,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
     const route = nextAdapter.clerkInstrumentHandler(sdkV2Handler(), {
       resourceUrl: RESOURCE_URL,
       clerkClient,
-      reportToolCalls: { fetch: sink.fetch },
+      reporting: { fetch: sink.fetch },
     });
 
     const response = await route(new Request(RESOURCE_URL, toolCallInit('ping')));
@@ -492,23 +530,23 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
 
     expect(sink.fetch).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
-      'Clerk warning: clerkInstrumentHandler needs the CLERK_SECRET_KEY environment variable or reportToolCalls.secretKey to report tool calls, so they are not reported',
+      'Clerk warning: clerkInstrumentHandler needs the CLERK_SECRET_KEY environment variable or reporting.secretKey to report tool calls, so they are not reported',
     );
   });
 
-  test('withClerkMcpAuth refuses reportToolCalls', () => {
+  test('withClerkMcpAuth refuses reporting', () => {
     expect(() =>
       nextAdapter.withClerkMcpAuth(sdkV2Handler().fetch, {
         resourceUrl: RESOURCE_URL,
-        reportToolCalls: true,
+        reporting: true,
       } as nextAdapter.McpAuthOptions),
     ).toThrow('Clerk error: withClerkMcpAuth cannot report tool calls');
   });
 });
 
-describe('reportToolCalls options', () => {
+describe('reporting options', () => {
   test('defaults every field on', () => {
-    expect(resolveReportToolCalls('clerkInstrumentHandler', true)).toEqual({
+    expect(resolveReporting('clerkInstrumentHandler', true)).toEqual({
       ipAddress: true,
       userAgent: true,
       identity: true,
@@ -518,38 +556,30 @@ describe('reportToolCalls options', () => {
       apiUrl: undefined,
       fetch: undefined,
     });
-    expect(resolveReportToolCalls('clerkInstrumentHandler', false)).toBeUndefined();
-    expect(resolveReportToolCalls('clerkInstrumentHandler', undefined)).toBeUndefined();
+    expect(resolveReporting('clerkInstrumentHandler', false)).toBeUndefined();
+    expect(resolveReporting('clerkInstrumentHandler', undefined)).toBeUndefined();
   });
 
   test.each([
-    ['an unknown key', { ipAdress: false }, 'reportToolCalls has no ipAdress option'],
-    ['a string', 'yes', 'reportToolCalls must be true, false, or an options object'],
-    ['a non-boolean flag', { userAgent: 'no' }, 'reportToolCalls.userAgent must be a boolean'],
-    ['a tools list', { tools: ['ping'] }, 'reportToolCalls.tools must be a function'],
-    [
-      'a server name the API refuses',
-      { serverName: 'acme\nmcp' },
-      'reportToolCalls.serverName must be',
-    ],
-    [
-      'an HTTP API URL',
-      { apiUrl: 'http://api.clerk.com' },
-      'reportToolCalls.apiUrl must use HTTPS',
-    ],
+    ['an unknown key', { ipAdress: false }, 'reporting has no ipAdress option'],
+    ['a string', 'yes', 'reporting must be true, false, or an options object'],
+    ['a non-boolean flag', { userAgent: 'no' }, 'reporting.userAgent must be a boolean'],
+    ['a tools list', { tools: ['ping'] }, 'reporting.tools must be a function'],
+    ['a server name the API refuses', { serverName: 'acme\nmcp' }, 'reporting.serverName must be'],
+    ['an HTTP API URL', { apiUrl: 'http://api.clerk.com' }, 'reporting.apiUrl must use HTTPS'],
   ])('refuses %s when the handler is created', (_, value, message) => {
-    expect(() => resolveReportToolCalls('clerkInstrumentHandler', value)).toThrow(
+    expect(() => resolveReporting('clerkInstrumentHandler', value)).toThrow(
       `Clerk error: clerkInstrumentHandler ${message}`,
     );
   });
 
-  test('clerkInstrumentHandler checks reportToolCalls when it is created', () => {
+  test('clerkInstrumentHandler checks reporting when it is created', () => {
     expect(() =>
       honoAdapter.clerkInstrumentHandler(sdkV2Handler(), {
         resourceUrl: RESOURCE_URL,
-        reportToolCalls: { bogus: true } as never,
+        reporting: { bogus: true } as never,
       }),
-    ).toThrow('Clerk error: clerkInstrumentHandler reportToolCalls has no bogus option');
+    ).toThrow('Clerk error: clerkInstrumentHandler reporting has no bogus option');
   });
 });
 
@@ -558,7 +588,7 @@ describe('tool call reports', () => {
     const sink = reportSink();
     const context = beginToolCallContext({
       caller: 'clerkInstrumentHandler',
-      reporting: resolveReportToolCalls('clerkInstrumentHandler', {
+      reporting: resolveReporting('clerkInstrumentHandler', {
         fetch: sink.fetch,
         secretKey: SECRET_KEY,
       }),
@@ -572,7 +602,46 @@ describe('tool call reports', () => {
     for (let i = 0; i < 150; i++) context.startToolCall('ping', 'acme-mcp')!({ status: 'success' });
     await context.flush();
 
-    expect(sink.bodies.map((body) => body.tool_calls.length)).toEqual([100, 50]);
+    expect(sink.bodies.map((body) => body.events.length)).toEqual([100, 50]);
+  });
+
+  test('keep at most 1000 waiting while sends hang, dropping the oldest and warning once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sink = reportSink();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      await released;
+      return sink.fetch(input, init);
+    });
+    const context = beginToolCallContext({
+      caller: 'clerkInstrumentHandler',
+      reporting: resolveReporting('clerkInstrumentHandler', { fetch, secretKey: SECRET_KEY }),
+      authInfo: { token: 'token', clientId: 'client', scopes: [] },
+      request: undefined,
+      defaultIpAddress: () => undefined,
+      userAgent: () => undefined,
+      env: { secretKey: undefined, apiUrl: undefined },
+    })!;
+
+    for (let i = 0; i < 2500; i++)
+      context.startToolCall(`tool_${i}`, 'acme-mcp')!({ status: 'success' });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(10));
+    release();
+    await context.flush();
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(2000));
+
+    const sent = new Set(sink.calls().map((call) => call.tool_name));
+    expect(sent.has('tool_999')).toBe(true);
+    expect(sent.has('tool_1000')).toBe(false);
+    expect(sent.has('tool_1499')).toBe(false);
+    expect(sent.has('tool_1500')).toBe(true);
+    expect(sent.has('tool_2499')).toBe(true);
+    expect(warn.mock.calls).toEqual([
+      [
+        'Clerk warning: clerkInstrumentHandler dropped the oldest MCP events waiting to be sent, because 1000 were already waiting',
+      ],
+    ]);
   });
 
   test('warn once when the Backend API refuses them', async () => {
@@ -580,7 +649,7 @@ describe('tool call reports', () => {
     const sink = reportSink(401);
     const context = beginToolCallContext({
       caller: 'clerkInstrumentHandler',
-      reporting: resolveReportToolCalls('clerkInstrumentHandler', {
+      reporting: resolveReporting('clerkInstrumentHandler', {
         fetch: sink.fetch,
         secretKey: SECRET_KEY,
       }),
@@ -598,7 +667,7 @@ describe('tool call reports', () => {
 
     expect(warn.mock.calls).toEqual([
       [
-        'Clerk warning: clerkInstrumentHandler could not report 1 tool calls to Clerk, which answered with status 401. Check the secret key',
+        'Clerk warning: clerkInstrumentHandler could not report 1 MCP events to Clerk, which answered with status 401. Check the secret key',
       ],
     ]);
   });

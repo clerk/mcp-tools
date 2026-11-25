@@ -20,12 +20,12 @@ import {
   UnreadableBodyError,
 } from '../bearer-auth';
 import {
-  type ReportToolCallsOption,
+  type ReportingOption,
   beginToolCallContext,
   checkToolCallContext,
-  reportToolCallsKey,
-  resolveReportToolCalls,
-  withoutReportToolCalls,
+  reportingKey,
+  resolveReporting,
+  withoutReporting,
 } from '../tool-call-reporting';
 import {
   type AICatalogHandlerOptions,
@@ -57,10 +57,10 @@ export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
  * Options for `clerkInstrumentHandler`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
  * its audience, and `clerkClient` defaults to `clerkClient` from `@clerk/express`. With `verifyToken`, that function
  * verifies each token with the Express request, `resourceUrl` is optional, and `clerkClient` is not allowed.
- * `reportToolCalls` turns on tool call reporting. The deprecated `mcpAuth` takes the same options without it.
+ * `reporting` turns on tool call reporting. The deprecated `mcpAuth` takes the same options without it.
  */
 export type McpAuthOptions = MiddlewareAuthOptions<express.Request> &
-  ReportToolCallsOption<express.Request>;
+  ReportingOption<express.Request>;
 
 /**
  * What `clerkInstrumentHandler` serves: the handler `createMcpHandler` from MCP SDK 2.x (`@modelcontextprotocol/server`)
@@ -80,7 +80,7 @@ export type McpHandler =
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`. Reuse the
  * auth options here, adding `properties` only for the metadata handler, not `mcpAuth`. The handler reads
  * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and
- * ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`, and `reportToolCalls`.
+ * ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`, and `reporting`.
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
@@ -141,7 +141,7 @@ interface NodeStreamableHttpTransport {
  * @deprecated Use `clerkInstrumentHandler(handler, options)`, which authenticates the same way and can report tool calls
  */
 export function mcpAuth(options: MiddlewareAuthOptions<express.Request>) {
-  options = withoutReportToolCalls('mcpAuth', options);
+  options = withoutReporting('mcpAuth', options);
   assertMiddlewareAuthOptions(options);
   const authenticate = expressAuthenticator('mcpAuth', options);
 
@@ -293,7 +293,7 @@ export function authorizationServerMetadataHandler() {
  * ```
  */
 export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
-  assertProtectedResourceMetadataOptions(options, new Set([reportToolCallsKey]));
+  assertProtectedResourceMetadataOptions(options, new Set([reportingKey]));
 
   return (req: express.Request, res: express.Response): void => {
     if (req.method === 'OPTIONS') return void res.status(200).set(metadataCorsHeaders).end();
@@ -554,7 +554,7 @@ type NodeMcpHandler = (
  * to an origin no `resourceUrl` lists with a 421, recording the reason on `res.locals.mcpAuthFailure`. A request it
  * lets through reaches `handler` with its auth info on `req.auth`, where MCP SDK transports read it.
  *
- * With `reportToolCalls`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk. Reports
+ * With `reporting`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk. Reports
  * are sent in batches, about a second after a call or once 100 are waiting, with the `CLERK_SECRET_KEY` the app's
  * environment has.
  * @param handler - The handler `createMcpHandler` from `@modelcontextprotocol/server` returns, which needs
@@ -583,7 +583,7 @@ type NodeMcpHandler = (
  *   clerkInstrumentHandler(mcp, {
  *     resourceUrl: 'https://mcp.example.com/mcp',
  *     requiredScopes: ['profile', 'email'],
- *     reportToolCalls: true,
+ *     reporting: true,
  *   }),
  * );
  * ```
@@ -601,12 +601,9 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
     options,
     `Clerk error: clerkInstrumentHandler needs a resourceUrl to verify tokens with Clerk. Call it as clerkInstrumentHandler(handler, { resourceUrl: 'https://mcp.example.com/mcp' }), or as clerkInstrumentHandler(handler, { verifyToken }) with your own verifier`,
   );
-  const { reportToolCalls, ...authOptions } = options;
+  const { reporting: reportingOption, ...authOptions } = options;
   assertMcpAuthOptions('clerkInstrumentHandler', authOptions);
-  const reporting = resolveReportToolCalls<express.Request>(
-    'clerkInstrumentHandler',
-    reportToolCalls,
-  );
+  const reporting = resolveReporting<express.Request>('clerkInstrumentHandler', reportingOption);
   const authenticate = expressAuthenticator('clerkInstrumentHandler', authOptions);
   let nodeHandler: Promise<NodeMcpHandler> | undefined;
 

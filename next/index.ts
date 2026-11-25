@@ -23,13 +23,13 @@ import {
 } from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 import {
-  type ReportToolCallsOption,
+  type ReportingOption,
   beginToolCallContext,
   checkToolCallContext,
   onResponseEnd,
-  reportToolCallsKey,
-  resolveReportToolCalls,
-  withoutReportToolCalls,
+  reportingKey,
+  resolveReporting,
+  withoutReporting,
 } from '../tool-call-reporting';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
@@ -39,7 +39,7 @@ export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
  * plus `properties`. Reuse the auth options, such as those exported from `lib/mcp.ts`, adding `properties` only for
  * the metadata handler, not `clerkInstrumentHandler`. The handler reads `resourceUrl`, `requiredScopes`,
  * `challengeScopes`, and `properties`, and ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`,
- * `onAuthFailure`, and `reportToolCalls`.
+ * `onAuthFailure`, and `reporting`.
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
@@ -72,7 +72,7 @@ export function protectedResourceMetadataHandler(
     );
   }
   // `onAuthFailure` is the one key of `withClerkMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
-  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure', reportToolCallsKey]));
+  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure', reportingKey]));
 
   return (req: Request): Response => {
     const answer = protectedResourceMetadataAnswer(options, {
@@ -245,12 +245,12 @@ type McpAuthFailureOption = {
  * `clerkMiddleware()` instead, or runs in keyless mode, passes `clerkClient: () => clerkClient()` from
  * `@clerk/nextjs/server`, with the MCP route in the middleware's matcher. With `verifyToken`, that function verifies
  * each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure` is
- * available either way. `reportToolCalls` turns on tool call reporting. The deprecated `withClerkMcpAuth` takes the
+ * available either way. `reporting` turns on tool call reporting. The deprecated `withClerkMcpAuth` takes the
  * same options without it.
  */
 export type McpAuthOptions = McpAuthFailureOption &
   MiddlewareAuthOptions<Request> &
-  ReportToolCallsOption<Request>;
+  ReportingOption<Request>;
 
 /**
  * What `clerkInstrumentHandler` serves: the route handler `createMcpHandler` from `mcp-handler` returns, which reads
@@ -310,7 +310,7 @@ export function withClerkMcpAuth(
       `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next takes the route handler first. Call it as ${withClerkMcpAuthCallForm}`,
     );
   }
-  options = withoutReportToolCalls('withClerkMcpAuth', options);
+  options = withoutReporting('withClerkMcpAuth', options);
   // `mcp-handler`'s `withMcpAuth` takes a verifier function here, so code moved from it fails at startup
   assertVerifierOrResourceUrl(
     options,
@@ -418,7 +418,7 @@ const clerkInstrumentHandlerCallForm =
  * `handler` with its auth info, also set on `req.auth`, where `mcp-handler` reads it. Tools read it as
  * `ctx.http?.authInfo`.
  *
- * With `reportToolCalls`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with
+ * With `reporting`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with
  * `CLERK_SECRET_KEY`. The reports are sent with `after()` from `next/server` once the response is over, so serverless
  * functions keep running until they are sent.
  * @param handler - The route handler `createMcpHandler` from `mcp-handler` returns, the handler `createMcpHandler` from
@@ -442,7 +442,7 @@ const clerkInstrumentHandlerCallForm =
  * const authedHandler = clerkInstrumentHandler(handler, {
  *   resourceUrl: 'https://mcp.example.com/mcp',
  *   requiredScopes: ['profile', 'email'],
- *   reportToolCalls: true,
+ *   reporting: true,
  * });
  *
  * export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE };
@@ -464,9 +464,9 @@ export function clerkInstrumentHandler(
     options,
     `Clerk error: clerkInstrumentHandler from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${clerkInstrumentHandlerCallForm}`,
   );
-  const { reportToolCalls, ...authOptions } = options;
+  const { reporting: reportingOption, ...authOptions } = options;
   assertMcpAuthOptions('clerkInstrumentHandler', authOptions, new Set(['onAuthFailure']));
-  const reporting = resolveReportToolCalls<Request>('clerkInstrumentHandler', reportToolCalls);
+  const reporting = resolveReporting<Request>('clerkInstrumentHandler', reportingOption);
   const authenticate = nextAuthenticator(
     'clerkInstrumentHandler from @clerk/mcp-tools/next',
     'clerkInstrumentHandler',

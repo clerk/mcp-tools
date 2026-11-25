@@ -41,7 +41,7 @@ import {
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
   requiredScopes: ['profile', 'email'],
-  reportToolCalls: true,
+  reporting: true,
 } satisfies McpAuthOptions;
 
 function createServer() {
@@ -173,9 +173,9 @@ export default app;
 
 A Hono handler that authenticates each MCP request, then serves it with `handler`: the handler `createMcpHandler` from `@modelcontextprotocol/server` returns, or a function `(request, { authInfo }) => Response`. Mount it with `app.all`. It extracts the bearer token from the `Authorization` header, verifies it with Clerk, including that its audience is `resourceUrl`, or with your `verifyToken` function, passes the result to `handler`, and stores it in Hono context (`c.get('mcpAuth')`). Returns `401` with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, adding `error="invalid_token"` for a rejected token. A malformed `Bearer` credential, such as `Bearer a b`, and more than one `Authorization` header get that `401` challenge, not the `400` `invalid_request` that [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) recommends for a malformed request, so the client can still start authorization; they are the only departure from that section. Another scheme, such as `Basic`, gets the challenge without an error code, as that section says for an unsupported authentication method.
 
-`mcpAuth(options)`, the middleware it replaces, is deprecated. It takes the same options except `reportToolCalls`, which it refuses with a `Clerk error:`, since it never sees a tool call. Each option below applies to both.
+`mcpAuth(options)`, the middleware it replaces, is deprecated. It takes the same options except `reporting`, which it refuses with a `Clerk error:`, since it never sees a tool call. Each option below applies to both.
 
-- `reportToolCalls`: `true`, or an options object, to report each tool call to Clerk. Off by default. See [Reporting tool calls](#reporting-tool-calls).
+- `reporting`: `true`, or an options object, to report each tool call to Clerk. Off by default. See [Reporting tool calls](#reporting-tool-calls).
 - `resourceUrl`: the exact URL clients use for this endpoint, or a list of them, one for each origin, for a server that answers on several hostnames. Required unless you pass `verifyToken`. With a list, a request uses the URL with its origin, and a request to any other origin gets a `421 Misdirected Request` without a challenge, with `c.get('mcpAuthFailure')` set to `misdirected_request`. Under Clerk verification that URL is the audience, so a token issued for one listed URL doesn't pass on another. For a list, pick the metadata route's `resource` with `matchResourceUrl` from `@clerk/mcp-tools/hono`. The challenge's `resource_metadata` is derived from it. A single URL is used whatever origin the request has, so it works behind a proxy as it is. Only a list is matched against the request's origin, which comes from `c.req.url`: behind a proxy that terminates TLS or rewrites `Host`, as with Node.js behind nginx, that is the origin the app sees, not the public one, and every request gets a `421`. Rebuild the request URL from `X-Forwarded-*` headers you trust before this middleware. Never list the internal URLs: each listed URL is an audience and a metadata `resource`, and clients connect to the public one. With `verifyToken`, set `resourceUrl` for the verifier's reported `resource` to be checked, and pass the same value to the metadata route, as in `protectedResourceMetadataHandler({ resourceUrl })`, or to `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` when building your own route. Without `resourceUrl`, a URL derived from the request is used only to locate metadata, can differ from the public URL behind a proxy, and is not checked against the verifier's reported `resource`.
 - `requiredScopes`: scopes every request needs. A token without them gets a `403` with `error="insufficient_scope"` and a `scope` that lists the granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry, so the new grant keeps the old access. The `401` challenge lists them in its `scope`. The `403` asks for those scopes by name, so enable each `requiredScopes` and `challengeScopes` entry for the OAuth application in Clerk: a scope it can't be granted is missing from the new token too, and the client gets the `403` again.
 - `challengeScopes`: more scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them. When a token lacks a `requiredScopes` entry, the `403` lists the granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry. List each tool's `requireAdditionalScopes` scopes here to have the client reauthorize once instead of twice. A token that lacks only `challengeScopes` entries is let through.
@@ -284,11 +284,11 @@ See [Step-up for your own tools](../README.md#step-up-for-your-own-tools) in the
 
 ### Reporting tool calls
 
-With `reportToolCalls`, Clerk records each tool call your MCP server answers: the tool, whether it succeeded, how long it took, and who called it. The calls show up in your instance's MCP analytics and audit log. Tool arguments and results are never sent.
+With `reporting`, Clerk records each tool call your MCP server answers: the tool, whether it succeeded, how long it took, and who called it. The calls show up in your instance's MCP analytics and audit log. Tool arguments and results are never sent.
 
 It takes both calls from the [Quick Start](#with-clerk-authentication):
 
-- `clerkInstrumentHandler(handler, { ...options, reportToolCalls: true })` on the route knows who made each request.
+- `clerkInstrumentHandler(handler, { ...options, reporting: true })` on the route knows who made each request.
 - `clerkInstrumentServer(server)` where each MCP server is created sees each tool call. It replaces `connect` on that server object only, and changes nothing a client sees.
 
 A POST whose server was never passed to `clerkInstrumentServer` logs a one-time `Clerk warning:`, and so does an instrumented server answering a call that the deprecated `mcpAuth` authenticated.
@@ -305,7 +305,7 @@ Pass an options object instead of `true` to turn fields off, or to choose which 
 ```ts
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
-  reportToolCalls: {
+  reporting: {
     ipAddress: (c) => c.req.header('x-real-ip'),
     userAgent: false,
     identity: false,
@@ -323,11 +323,11 @@ const mcpAuthOptions = {
 - `apiUrl` - The Backend API origin. Defaults to `CLERK_API_URL`, then `https://api.clerk.com`.
 - `fetch` - Sends the reports. Defaults to the global `fetch`.
 
-Unknown keys and invalid values throw a `Clerk error:` when the handler is created. Reports go to the Backend API's `POST /v1/mcp_tool_calls` in batches of up to 100. On Cloudflare Workers, a request's reports are sent with `waitUntil` once its response is over; elsewhere they are sent about a second after a call, as soon as 100 are waiting, and before the process exits. Sending them never delays or fails an MCP request: a batch the Backend API refuses, or that can't reach it, is dropped with a one-time `Clerk warning:`. A call without a token, which `publicAccess` lets through, is not reported.
+Unknown keys and invalid values throw a `Clerk error:` when the handler is created. Reports go to the Backend API's `POST /v1/mcp_events` in batches of up to 100. On Cloudflare Workers, a request's reports are sent with `waitUntil` once its response is over; elsewhere they are sent about a second after a call, as soon as 100 are waiting, and before the process exits. Sending them never delays or fails an MCP request: a batch the Backend API refuses, or that can't reach it, is dropped with a one-time `Clerk warning:`. At most 1,000 reports wait to be sent while the Backend API is slow to answer; past that the oldest are dropped, with a one-time `Clerk warning:`. A call without a token, which `publicAccess` lets through, is not reported.
 
 ### `protectedResourceMetadataHandler(options?)`
 
-Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` in your own route. It takes the options you pass to `clerkInstrumentHandler`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient`, `verifyToken`, and `reportToolCalls`.
+Handler that returns OAuth 2.0 Protected Resource Metadata (RFC 9728) for the Clerk instance in `CLERK_PUBLISHABLE_KEY`. A value that isn't a Clerk publishable key throws a `Clerk error:` naming the variable. For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/hono` in your own route. It takes the options you pass to `clerkInstrumentHandler`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient`, `verifyToken`, and `reporting`.
 
 - `resourceUrl` (optional): the same value you pass to `clerkInstrumentHandler`, one URL or a list with one for each origin. The metadata's `resource` is then the URL `clerkInstrumentHandler` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
 - `requiredScopes` and `challengeScopes` (optional): the same values you pass to `clerkInstrumentHandler`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.

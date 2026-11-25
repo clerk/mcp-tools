@@ -40,7 +40,7 @@ const SERVER: Surface = {
     'McpPublicMethod',
     'McpResourceUrl',
     'PublicAccess',
-    'ReportToolCallsOptions',
+    'ReportingOptions',
     'ServerCard',
     'ServerCardIcon',
     'ServerCardOptions',

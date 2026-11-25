@@ -381,7 +381,7 @@ export { requireAdditionalScopes } from './scope-challenge';
 
 export { type InstrumentableMcpServer, clerkInstrumentServer } from './instrument-server';
 
-export type { ReportToolCallsOptions } from './tool-call-reporting';
+export type { ReportingOptions } from './tool-call-reporting';
 
 export { type McpResourceUrl, matchResourceUrl } from './resource-url';
 

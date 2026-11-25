@@ -388,12 +388,12 @@ Don't create the handler inside the route handler. MCP SDK 2.x counts the `subsc
 
 #### Reporting tool calls to Clerk
 
-With the `reportToolCalls` option of `clerkInstrumentHandler`, Clerk records each tool call your MCP server answers, for your instance's MCP analytics and audit log: the tool, the server, whether it succeeded and its error code, how long it took, and when, with the Clerk user, OAuth client, and access token of a token Clerk verified, and the client's IP address and `User-Agent`. Tool arguments and results are never sent. It is off by default.
+With the `reporting` option of `clerkInstrumentHandler`, Clerk records each tool call your MCP server answers, for your instance's MCP analytics and audit log: the tool, the server, whether it succeeded and its error code, how long it took, and when, with the Clerk user, OAuth client, and access token of a token Clerk verified, and the client's IP address and `User-Agent`. Tool arguments and results are never sent. It is off by default.
 
 ```ts
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
-  reportToolCalls: true,
+  reporting: true,
 } satisfies McpAuthOptions;
 
 function createServer() {
@@ -404,7 +404,7 @@ function createServer() {
 }
 ```
 
-The route knows who made each request, and `clerkInstrumentServer` sees each tool call, so reporting needs both; a server missing either logs a one-time `Clerk warning:`. `reportToolCalls` also takes an options object that turns off the IP address, `User-Agent`, or identity, picks which tools are reported, and names the server. Reports are sent to the Backend API in batches, after the response, and a failure to send them never affects an MCP request. See [Express](./express/README.md#reporting-tool-calls), [Hono](./hono/README.md#reporting-tool-calls), or [Next.js](./next/README.md#reporting-tool-calls) for where each adapter reads the IP address and how it sends the reports.
+The route knows who made each request, and `clerkInstrumentServer` sees each tool call, so reporting needs both; a server missing either logs a one-time `Clerk warning:`. `reporting` also takes an options object that turns off the IP address, `User-Agent`, or identity, picks which tools are reported, and names the server. Reports are sent to the Backend API in batches, after the response, and a failure to send them never affects an MCP request. See [Express](./express/README.md#reporting-tool-calls), [Hono](./hono/README.md#reporting-tool-calls), or [Next.js](./next/README.md#reporting-tool-calls) for where each adapter reads the IP address and how it sends the reports.
 
 #### Collecting feedback from agents
 
@@ -1046,7 +1046,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     ```
 
 - `clerkInstrumentServer`
-  - **Description:** Lets the `clerkInstrumentHandler` that serves an MCP server see its tool calls, to report them when its `reportToolCalls` option is on. Call it once on each server where it is created, before it connects: in the factory you give `createMcpHandler` from `@modelcontextprotocol/server`, or in the callback of `createMcpHandler` from `mcp-handler`. It replaces `connect` on that server object only, then wraps the `onmessage` and `send` of each transport it connects to, so it works the same on MCP SDK 1.x and 2.x and changes nothing a client sees. A second call on the same server does nothing. See [Reporting tool calls to Clerk](#reporting-tool-calls-to-clerk).
+  - **Description:** Lets the `clerkInstrumentHandler` that serves an MCP server see its tool calls, to report them when its `reporting` option is on. Call it once on each server where it is created, before it connects: in the factory you give `createMcpHandler` from `@modelcontextprotocol/server`, or in the callback of `createMcpHandler` from `mcp-handler`. It replaces `connect` on that server object only, then wraps the `onmessage` and `send` of each transport it connects to, so it works the same on MCP SDK 1.x and 2.x and changes nothing a client sees. A second call on the same server does nothing. See [Reporting tool calls to Clerk](#reporting-tool-calls-to-clerk).
   - **Params:** `server`, an MCP SDK `McpServer` or low-level `Server`
   - **Returns:** the same server
 

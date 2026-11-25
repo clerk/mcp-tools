@@ -31,7 +31,7 @@ const observedTransports = new WeakSet<object>();
 
 /**
  * Lets Clerk see the tool calls of an MCP server that `clerkInstrumentHandler` serves, to report them when its
- * `reportToolCalls` option is on. Call it once on each server where it is created, before the server connects: in the
+ * `reporting` option is on. Call it once on each server where it is created, before the server connects: in the
  * factory you give the MCP SDK's `createMcpHandler`, or in the callback of `createMcpHandler` from `mcp-handler`.
  * It changes nothing a client sees, and a second call on the same server does nothing.
  *

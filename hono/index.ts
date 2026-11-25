@@ -27,13 +27,13 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import {
-  type ReportToolCallsOption,
+  type ReportingOption,
   beginToolCallContext,
   checkToolCallContext,
   onResponseEnd,
-  reportToolCallsKey,
-  resolveReportToolCalls,
-  withoutReportToolCalls,
+  reportingKey,
+  resolveReporting,
+  withoutReporting,
 } from '../tool-call-reporting';
 import {
   type ClerkOAuthClient,
@@ -65,10 +65,10 @@ export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
  * Options for `clerkInstrumentHandler`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
  * its audience, and `clerkClient` defaults to one built from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the
  * app's environment. With `verifyToken`, that function verifies each token with the Hono context, `resourceUrl` is
- * optional, and `clerkClient` is not allowed. `reportToolCalls` turns on tool call reporting. The deprecated `mcpAuth`
+ * optional, and `clerkClient` is not allowed. `reporting` turns on tool call reporting. The deprecated `mcpAuth`
  * takes the same options without it.
  */
-export type McpAuthOptions = MiddlewareAuthOptions<Context> & ReportToolCallsOption<Context>;
+export type McpAuthOptions = MiddlewareAuthOptions<Context> & ReportingOption<Context>;
 
 /**
  * What `clerkInstrumentHandler` serves: the handler `createMcpHandler` from MCP SDK 2.x (`@modelcontextprotocol/server`)
@@ -88,7 +88,7 @@ export type McpHandler =
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`. Reuse the
  * auth options here, adding `properties` only for the metadata handler, not `mcpAuth`. The handler reads
  * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and
- * ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`, and `reportToolCalls`.
+ * ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`, and `reporting`.
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
@@ -191,7 +191,7 @@ async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>, caller:
  * ```
  */
 export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
-  assertProtectedResourceMetadataOptions(options, new Set([reportToolCallsKey]));
+  assertProtectedResourceMetadataOptions(options, new Set([reportingKey]));
 
   return (c: Context) => {
     if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
@@ -373,7 +373,7 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * ```
  */
 export function mcpAuth(options: MiddlewareAuthOptions<Context>): MiddlewareHandler {
-  options = withoutReportToolCalls('mcpAuth', options);
+  options = withoutReporting('mcpAuth', options);
   assertMiddlewareAuthOptions(options);
   const authenticate = honoAuthenticator('mcpAuth', options);
 
@@ -537,7 +537,7 @@ export function streamableHttpHandler<
  * to an origin no `resourceUrl` lists with a 421, recording the reason in the `mcpAuthFailure` context variable. A
  * request it lets through reaches `handler` with its auth info, which is also the `mcpAuth` context variable.
  *
- * With `reportToolCalls`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with the
+ * With `reporting`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with the
  * `CLERK_SECRET_KEY` the app's environment has. On Cloudflare Workers the reports are sent with `waitUntil` once the
  * response is over; elsewhere they are sent in batches, about a second after a call or once 100 are waiting.
  * @param handler - The handler `createMcpHandler` from `@modelcontextprotocol/server` returns, or a function that
@@ -564,7 +564,7 @@ export function streamableHttpHandler<
  *   clerkInstrumentHandler(mcp, {
  *     resourceUrl: 'https://mcp.example.com/mcp',
  *     requiredScopes: ['profile', 'email'],
- *     reportToolCalls: true,
+ *     reporting: true,
  *   }),
  * );
  * export default app;
@@ -583,9 +583,9 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
     options,
     `Clerk error: clerkInstrumentHandler needs a resourceUrl to verify tokens with Clerk. Call it as clerkInstrumentHandler(handler, { resourceUrl: 'https://mcp.example.com/mcp' }), or as clerkInstrumentHandler(handler, { verifyToken }) with your own verifier`,
   );
-  const { reportToolCalls, ...authOptions } = options;
+  const { reporting: reportingOption, ...authOptions } = options;
   assertMcpAuthOptions('clerkInstrumentHandler', authOptions);
-  const reporting = resolveReportToolCalls<Context>('clerkInstrumentHandler', reportToolCalls);
+  const reporting = resolveReporting<Context>('clerkInstrumentHandler', reportingOption);
   const authenticate = honoAuthenticator('clerkInstrumentHandler', authOptions);
 
   return async (c: Context): Promise<Response> => {

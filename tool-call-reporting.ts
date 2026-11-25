@@ -6,13 +6,13 @@ import { hasClerkVerification } from './clerk-auth-info';
 import { ERROR_CODE_META_KEY } from './mcp-tool';
 
 /**
- * What `reportToolCalls` sends to Clerk for each tool call, and where. `reportToolCalls: true` is the same as `{}`:
+ * What `reporting` sends to Clerk for each tool call, and where. `reporting: true` is the same as `{}`:
  * every field below at its default. Each report has the tool's name, the MCP server's name, whether the call
  * succeeded, the error code of a failed call, how long it took, and when it was made. Tool arguments and results are
  * never sent.
  * @typeParam Req - The framework's request: the Express request, the Hono context, or the Next.js `Request`
  */
-export type ReportToolCallsOptions<Req = never> = {
+export type ReportingOptions<Req = never> = {
   /**
    * Whether to send the IP address of the MCP client. `true`, the default, reads it where the adapter can trust it:
    * `req.ip` in Express, which follows the app's `trust proxy` setting; `cf-connecting-ip` on Cloudflare Workers and
@@ -55,19 +55,19 @@ export type ReportToolCallsOptions<Req = never> = {
 };
 
 /**
- * The `reportToolCalls` option every `clerkInstrumentHandler` takes, for the framework's request `Req`.
+ * The `reporting` option every `clerkInstrumentHandler` takes, for the framework's request `Req`.
  */
-export type ReportToolCallsOption<Req> = {
+export type ReportingOption<Req> = {
   /**
    * Reports each tool call that `clerkInstrumentHandler` authenticated and a `clerkInstrumentServer` server answered
    * to Clerk, where it shows up in the instance's MCP analytics and audit log. `true` reports with the defaults of
-   * `ReportToolCallsOptions`, and an options object turns individual fields off. Off by default. Calls without a
+   * `ReportingOptions`, and an options object turns individual fields off. Off by default. Calls without a
    * token, which `publicAccess` lets through, are not reported.
    */
-  reportToolCalls?: boolean | ReportToolCallsOptions<Req> | undefined;
+  reporting?: boolean | ReportingOptions<Req> | undefined;
 };
 
-export const reportToolCallsKey = 'reportToolCalls';
+export const reportingKey = 'reporting';
 
 export type ToolCallReporting<Req> = {
   ipAddress: boolean | ((request: Req) => string | null | undefined);
@@ -80,7 +80,7 @@ export type ToolCallReporting<Req> = {
   fetch: typeof fetch | undefined;
 };
 
-const reportToolCallsKeys: ReadonlySet<string> = new Set<keyof ReportToolCallsOptions>([
+const reportingKeys: ReadonlySet<string> = new Set<keyof ReportingOptions>([
   'ipAddress',
   'userAgent',
   'identity',
@@ -91,7 +91,7 @@ const reportToolCallsKeys: ReadonlySet<string> = new Set<keyof ReportToolCallsOp
   'fetch',
 ]);
 
-// Each pattern and limit matches the validation of `POST /v1/mcp_tool_calls`, which rejects a whole batch for one
+// Each pattern and limit matches the validation of `POST /v1/mcp_events`, which rejects a whole batch for one
 // invalid field, so a value that would fail it is dropped here instead.
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_./-]{1,128}$/;
 const SERVER_NAME_PATTERN = /^[A-Za-z0-9 _.:@/-]{1,128}$/;
@@ -105,37 +105,36 @@ const IPV4_PATTERN =
 const IPV6_PATTERN =
   /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
 
-const TOOL_CALLS_PATH = '/v1/mcp_tool_calls';
+const EVENTS_PATH = '/v1/mcp_events';
 const MAX_BATCH_SIZE = 100;
 const MAX_QUEUED = 1000;
+const MAX_IN_FLIGHT = 10;
 const FLUSH_DELAY_MS = 1000;
 const SDK = { name: '@clerk/mcp-tools', version };
 
 /**
- * Checks `reportToolCalls` when the handler is created.
+ * Checks `reporting` when the handler is created.
  * @returns The settings with defaults filled in, or `undefined` when reporting is off. It throws a `Clerk error:`
  * naming the first option that is not valid.
  */
-export function resolveReportToolCalls<Req>(
+export function resolveReporting<Req>(
   caller: string,
   value: unknown,
 ): ToolCallReporting<Req> | undefined {
   if (value === undefined || value === false) return undefined;
   if (value === true) value = {};
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(
-      `Clerk error: ${caller} reportToolCalls must be true, false, or an options object`,
-    );
+    throw new Error(`Clerk error: ${caller} reporting must be true, false, or an options object`);
   }
-  const unknownKey = Object.keys(value).find((key) => !reportToolCallsKeys.has(key));
+  const unknownKey = Object.keys(value).find((key) => !reportingKeys.has(key));
   if (unknownKey !== undefined) {
     throw new Error(
-      `Clerk error: ${caller} reportToolCalls has no ${unknownKey} option. It takes any of ${[...reportToolCallsKeys].join(', ')}`,
+      `Clerk error: ${caller} reporting has no ${unknownKey} option. It takes any of ${[...reportingKeys].join(', ')}`,
     );
   }
-  const options = value as ReportToolCallsOptions<Req>;
+  const options = value as ReportingOptions<Req>;
   const fail = (message: string): never => {
-    throw new Error(`Clerk error: ${caller} reportToolCalls.${message}`);
+    throw new Error(`Clerk error: ${caller} reporting.${message}`);
   };
   const flag = (name: 'userAgent' | 'identity') => {
     const option = options[name];
@@ -176,15 +175,15 @@ export function resolveReportToolCalls<Req>(
 }
 
 /**
- * Throws a `Clerk error:` when an entry point that cannot see tool calls is given `reportToolCalls`, and returns the
+ * Throws a `Clerk error:` when an entry point that cannot see tool calls is given `reporting`, and returns the
  * options without it.
  */
-export function withoutReportToolCalls<T extends object>(caller: string, options: T): T {
-  if (typeof options !== 'object' || options === null || !('reportToolCalls' in options)) {
+export function withoutReporting<T extends object>(caller: string, options: T): T {
+  if (typeof options !== 'object' || options === null || !('reporting' in options)) {
     return options;
   }
-  const { reportToolCalls, ...rest } = options as T & { reportToolCalls?: unknown };
-  if (reportToolCalls !== undefined && reportToolCalls !== false) {
+  const { reporting, ...rest } = options as T & { reporting?: unknown };
+  if (reporting !== undefined && reporting !== false) {
     throw new Error(
       `Clerk error: ${caller} cannot report tool calls. Serve the MCP route with clerkInstrumentHandler(handler, options), and call clerkInstrumentServer(server) where each server is created`,
     );
@@ -192,19 +191,31 @@ export function withoutReportToolCalls<T extends object>(caller: string, options
   return rest as T;
 }
 
-type ToolCallReport = {
-  tool_name: string;
+// The fields every event type shares, in the snake_case of `POST /v1/mcp_events`
+type McpEventBase = {
+  occurred_at: number;
   server_name?: string;
-  status: 'success' | 'error';
-  error_code?: string;
-  duration_ms: number;
   user_id?: string;
   client_id?: string;
   oauth_access_token_id?: string;
-  called_at: number;
   ip_address?: string;
   user_agent?: string;
 };
+
+type ToolCallEvent = McpEventBase & {
+  type: 'tool_call';
+  tool_name: string;
+  status: 'success' | 'error';
+  error_code?: string;
+  duration_ms: number;
+};
+
+type McpEvent = ToolCallEvent;
+
+type RequestDetails = Pick<
+  McpEventBase,
+  'user_id' | 'client_id' | 'oauth_access_token_id' | 'ip_address' | 'user_agent'
+>;
 
 export type ToolCallOutcome = { status: 'success' | 'error'; errorCode?: string | undefined };
 
@@ -286,7 +297,7 @@ export function beginToolCallContext<Req>({
         } catch (error) {
           warnOnce(
             'tools-threw',
-            `Clerk warning: ${caller} reportToolCalls.tools threw ${safeErrorName(error)}, so the call to ${TOOL_NAME_PATTERN.test(toolName) ? toolName : 'a tool'} was not reported`,
+            `Clerk warning: ${caller} reporting.tools threw ${safeErrorName(error)}, so the call to ${TOOL_NAME_PATTERN.test(toolName) ? toolName : 'a tool'} was not reported`,
           );
           return undefined;
         }
@@ -299,10 +310,12 @@ export function beginToolCallContext<Req>({
         return undefined;
       }
       const name = reporting.serverName ?? serverName;
-      const calledAt = Date.now();
+      const occurredAt = Date.now();
       const startedAt = now();
       return ({ status, errorCode }) => {
         reporter.enqueue({
+          type: 'tool_call',
+          occurred_at: occurredAt,
           tool_name: toolName,
           ...(name !== undefined && SERVER_NAME_PATTERN.test(name) && { server_name: name }),
           status,
@@ -310,7 +323,6 @@ export function beginToolCallContext<Req>({
             errorCode !== undefined &&
             ERROR_CODE_PATTERN.test(errorCode) && { error_code: errorCode }),
           duration_ms: Math.min(Math.max(Math.round(now() - startedAt), 0), MAX_DURATION_MS),
-          called_at: calledAt,
           ...details,
         });
       };
@@ -362,8 +374,8 @@ function requestDetails<Req>(
   request: Req,
   defaultIpAddress: () => string | null | undefined,
   userAgent: () => string | null | undefined,
-): Partial<ToolCallReport> {
-  const details: Partial<ToolCallReport> = {};
+): RequestDetails {
+  const details: RequestDetails = {};
   if (
     reporting.identity &&
     hasClerkVerification(authInfo) &&
@@ -386,7 +398,7 @@ function requestDetails<Req>(
     } catch (error) {
       warnOnce(
         'ip-address-threw',
-        `Clerk warning: ${caller} reportToolCalls.ipAddress threw ${safeErrorName(error)}, so no IP address was reported`,
+        `Clerk warning: ${caller} reporting.ipAddress threw ${safeErrorName(error)}, so no IP address was reported`,
       );
     }
     const ipAddress = normalizeIpAddress(address);
@@ -412,7 +424,7 @@ export function normalizeIpAddress(address: unknown): string | undefined {
 }
 
 type Reporter = {
-  enqueue(report: ToolCallReport): void;
+  enqueue(event: McpEvent): void;
   flush(): Promise<void>;
   pending(): number;
 };
@@ -429,7 +441,7 @@ function reporterFor<Req>(
   if (!secretKey?.trim()) {
     warnOnce(
       'secret-key',
-      `Clerk warning: ${caller} needs the CLERK_SECRET_KEY environment variable or reportToolCalls.secretKey to report tool calls, so they are not reported`,
+      `Clerk warning: ${caller} needs the CLERK_SECRET_KEY environment variable or reporting.secretKey to report tool calls, so they are not reported`,
     );
     return undefined;
   }
@@ -459,58 +471,71 @@ function createReporter(
   caller: string,
   client: ReturnType<typeof createBackendApiClient>,
 ): Reporter {
-  const queue: ToolCallReport[] = [];
+  const queue: McpEvent[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight = 0;
 
-  async function send(batch: ToolCallReport[]) {
+  async function send(batch: McpEvent[]) {
     try {
-      const response = await client.post(TOOL_CALLS_PATH, { tool_calls: batch, sdk: SDK });
+      const response = await client.post(EVENTS_PATH, { sdk: SDK, events: batch });
       await response.body?.cancel().catch(() => undefined);
       if (!response.ok) {
         warnOnce(
           `status-${response.status}`,
-          `Clerk warning: ${caller} could not report ${batch.length} tool calls to Clerk, which answered with status ${response.status}${response.status === 401 || response.status === 403 ? '. Check the secret key' : ''}`,
+          `Clerk warning: ${caller} could not report ${batch.length} MCP events to Clerk, which answered with status ${response.status}${response.status === 401 || response.status === 403 ? '. Check the secret key' : ''}`,
         );
       }
     } catch (error) {
       warnOnce(
         `send-${safeErrorName(error)}`,
-        `Clerk warning: ${caller} could not report ${batch.length} tool calls to Clerk: ${safeErrorName(error)}`,
+        `Clerk warning: ${caller} could not report ${batch.length} MCP events to Clerk: ${safeErrorName(error)}`,
       );
     }
   }
 
+  function schedule() {
+    if (timer !== undefined) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      void flush();
+    }, FLUSH_DELAY_MS);
+    (timer as { unref?: () => void }).unref?.();
+  }
+
   // Each call takes its own batches and awaits only its own requests: on Cloudflare Workers, a request must not wait
-  // on I/O that another request started
+  // on I/O that another request started. While MAX_IN_FLIGHT batches are being sent, events wait in the queue, which
+  // drops its oldest once full, so a Backend API that stops answering cannot grow memory without bound.
   async function flush() {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
-    while (queue.length > 0) await send(queue.splice(0, MAX_BATCH_SIZE));
+    while (queue.length > 0 && inFlight < MAX_IN_FLIGHT) {
+      inFlight++;
+      try {
+        await send(queue.splice(0, MAX_BATCH_SIZE));
+      } finally {
+        inFlight--;
+      }
+    }
+    if (queue.length > 0) schedule();
   }
 
   const reporter: Reporter = {
-    enqueue(report) {
+    enqueue(event) {
       if (queue.length >= MAX_QUEUED) {
+        queue.shift();
         warnOnce(
           'queue-full',
-          `Clerk warning: ${caller} dropped tool call reports because ${MAX_QUEUED} were already waiting to be sent`,
+          `Clerk warning: ${caller} dropped the oldest MCP events waiting to be sent, because ${MAX_QUEUED} were already waiting`,
         );
-        return;
       }
-      queue.push(report);
-      if (queue.length >= MAX_BATCH_SIZE) {
+      queue.push(event);
+      if (queue.length >= MAX_BATCH_SIZE && inFlight < MAX_IN_FLIGHT) {
         void flush();
         return;
       }
-      if (timer === undefined) {
-        timer = setTimeout(() => {
-          timer = undefined;
-          void flush();
-        }, FLUSH_DELAY_MS);
-        (timer as { unref?: () => void }).unref?.();
-      }
+      schedule();
     },
     flush,
     pending: () => queue.length,

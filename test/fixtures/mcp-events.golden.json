@@ -1,0 +1,35 @@
+{
+  "sdk": {
+    "name": "@clerk/mcp-tools",
+    "version": "1.0.0"
+  },
+  "events": [
+    {
+      "type": "tool_call",
+      "occurred_at": 1795605600000,
+      "server_name": "acme-mcp",
+      "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "client_id": "Ab12Cd34Ef56Gh78",
+      "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "tool_name": "ping",
+      "status": "success",
+      "duration_ms": 12
+    },
+    {
+      "type": "tool_call",
+      "occurred_at": 1795605600250,
+      "server_name": "acme-mcp",
+      "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "client_id": "Ab12Cd34Ef56Gh78",
+      "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "tool_name": "fail",
+      "status": "error",
+      "error_code": "upstream_timeout",
+      "duration_ms": 30
+    }
+  ]
+}

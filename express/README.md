@@ -37,7 +37,7 @@ import {
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
   requiredScopes: ['profile', 'email'],
-  reportToolCalls: true,
+  reporting: true,
 } satisfies McpAuthOptions;
 
 function createServer() {
@@ -175,7 +175,7 @@ app.listen(3000);
 
 An Express handler that authenticates each MCP request, then serves it with `handler`: the handler `createMcpHandler` from `@modelcontextprotocol/server` returns, which it runs through `toNodeHandler` from `@modelcontextprotocol/node`, or an Express handler of your own. By default it verifies OAuth access tokens with Clerk, including that their audience is this endpoint. Pass `verifyToken` to verify tokens with your own function instead. Mount it with `app.all`, after `express.json()`.
 
-`mcpAuth(options)`, the middleware it replaces, is deprecated. It takes the same options except `reportToolCalls`, which it refuses with a `Clerk error:`, since it never sees a tool call.
+`mcpAuth(options)`, the middleware it replaces, is deprecated. It takes the same options except `reporting`, which it refuses with a `Clerk error:`, since it never sees a tool call.
 
 **Options:**
 
@@ -186,7 +186,7 @@ An Express handler that authenticates each MCP request, then serves it with `han
 - `publicAccess` (optional) - What else a request without a token may do: `tools` (tool names), and `resources` and `prompts` (`true`, or a list of resource URIs or prompt names), on top of what `discoverable` opens. See [Public access](#public-access).
 - `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `clerkInstrumentHandler` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here, or a function that returns one (or a promise of one), which is called once per request. A value without `authenticateRequest` throws a `Clerk error:` when `clerkInstrumentHandler` is called. Create it with both `secretKey` and `publishableKey`. Without this option, a missing `CLERK_SECRET_KEY` or `CLERK_PUBLISHABLE_KEY` makes every request throw a `Clerk error:` naming it, as in the Hono adapter. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
 - `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it. The result must have a finite `expiresAt`, in seconds since the epoch, and a non-empty `clientId`, or the token gets the `401` `invalid_token` challenge, with an `McpTokenVerificationError` cause whose `code` is `token-claims-missing` and whose `message` names the missing field. [MCP authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-handling), 2025-06-18 and later, has servers validate tokens as [OAuth 2.1 section 5.2](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13#section-5.2) describes, which includes checking that the token is not expired, and [RFC 9068 section 2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) makes `exp` and `client_id` REQUIRED in a JWT access token. JWT libraries such as `jsonwebtoken` and `jose` check `exp` only when the token has one, so pass it through as `expiresAt`. Auth info from `toClerkAuthInfo` is treated as Clerk-verified, so it passes without an `expiresAt` or a `clientId`, since Clerk checks those itself: build it only from a request state returned by `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`, using `requestState.toAuth()`, never from `auth({ acceptsToken: 'oauth_token' })` alone, a cached result, or a hand-built one. Otherwise use the built-in Clerk path, `clerkInstrumentHandler(handler, { clerkClient, resourceUrl })`. Catch the errors your JWT library throws for a token it rejects, such as `JWTExpired` from `jose` or `TokenExpiredError` from `jsonwebtoken`, and return `undefined` or throw an `McpTokenVerificationError`, so the token gets the `401` `invalid_token` challenge, which [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) gives an expired or invalid token, and the client can get a new one. Any other error the function throws means the token could not be verified at all: it gets the JSON `{"error":"server_error"}` answer, with a `500` unless the error has a `429` or `5xx` `status`, and the client keeps the token.
-- `reportToolCalls` (optional) - `true`, or an options object, to report each tool call to Clerk. Off by default. See [Reporting tool calls](#reporting-tool-calls).
+- `reporting` (optional) - `true`, or an options object, to report each tool call to Clerk. Off by default. See [Reporting tool calls](#reporting-tool-calls).
 
 **Example:**
 
@@ -269,11 +269,11 @@ app.all(
 
 ## Reporting tool calls
 
-With `reportToolCalls`, Clerk records each tool call your MCP server answers: the tool, whether it succeeded, how long it took, and who called it. The calls show up in your instance's MCP analytics and audit log. Tool arguments and results are never sent.
+With `reporting`, Clerk records each tool call your MCP server answers: the tool, whether it succeeded, how long it took, and who called it. The calls show up in your instance's MCP analytics and audit log. Tool arguments and results are never sent.
 
 It takes both calls from the [Quick Start](#example-with-clerk-authentication):
 
-- `clerkInstrumentHandler(handler, { ...options, reportToolCalls: true })` on the route knows who made each request.
+- `clerkInstrumentHandler(handler, { ...options, reporting: true })` on the route knows who made each request.
 - `clerkInstrumentServer(server)` where each MCP server is created sees each tool call. It replaces `connect` on that server object only, and changes nothing a client sees.
 
 A POST whose server was never passed to `clerkInstrumentServer` logs a one-time `Clerk warning:`, and so does an instrumented server answering a call that the deprecated `mcpAuth` authenticated.
@@ -290,7 +290,7 @@ Pass an options object instead of `true` to turn fields off, or to choose which 
 ```ts
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
-  reportToolCalls: {
+  reporting: {
     ipAddress: false,
     userAgent: false,
     identity: false,
@@ -308,7 +308,7 @@ const mcpAuthOptions = {
 - `apiUrl` - The Backend API origin. Defaults to `CLERK_API_URL`, then `https://api.clerk.com`.
 - `fetch` - Sends the reports. Defaults to the global `fetch`.
 
-Unknown keys and invalid values throw a `Clerk error:` when the handler is created. Reports go to the Backend API's `POST /v1/mcp_tool_calls` in batches of up to 100: about a second after a call, as soon as 100 are waiting, and before the process exits. Sending them never delays or fails an MCP request: a batch the Backend API refuses, or that can't reach it, is dropped with a one-time `Clerk warning:`. A call without a token, which `publicAccess` lets through, is not reported.
+Unknown keys and invalid values throw a `Clerk error:` when the handler is created. Reports go to the Backend API's `POST /v1/mcp_events` in batches of up to 100: about a second after a call, as soon as 100 are waiting, and before the process exits. Sending them never delays or fails an MCP request: a batch the Backend API refuses, or that can't reach it, is dropped with a one-time `Clerk warning:`. At most 1,000 reports wait to be sent while the Backend API is slow to answer; past that the oldest are dropped, with a one-time `Clerk warning:`. A call without a token, which `publicAccess` lets through, is not reported.
 
 ## Protected Resource Metadata
 
@@ -316,7 +316,7 @@ Unknown keys and invalid values throw a `Clerk error:` when the handler is creat
 
 Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express` in your own route.
 
-**Options:** the options you pass to `clerkInstrumentHandler`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient`, `verifyToken`, and `reportToolCalls`.
+**Options:** the options you pass to `clerkInstrumentHandler`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient`, `verifyToken`, and `reporting`.
 
 - `resourceUrl` (optional) - The same value you pass to `clerkInstrumentHandler`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `clerkInstrumentHandler` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
 - `requiredScopes` and `challengeScopes` (optional) - The same values you pass to `clerkInstrumentHandler`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
