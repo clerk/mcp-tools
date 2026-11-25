@@ -109,6 +109,11 @@ const EVENTS_PATH = '/v1/mcp_events';
 const MAX_BATCH_SIZE = 100;
 const MAX_QUEUED = 1000;
 const MAX_IN_FLIGHT = 10;
+// The Backend API answers 403 to an instance that MCP analytics is not enabled for
+const STATUS_HINTS: Partial<Record<number, string>> = {
+  401: '. Check the secret key',
+  403: '. MCP analytics may not be enabled for this instance',
+};
 const FLUSH_DELAY_MS = 1000;
 const SDK = { name: '@clerk/mcp-tools', version };
 
@@ -482,7 +487,7 @@ function createReporter(
       if (!response.ok) {
         warnOnce(
           `status-${response.status}`,
-          `Clerk warning: ${caller} could not report ${batch.length} MCP events to Clerk, which answered with status ${response.status}${response.status === 401 || response.status === 403 ? '. Check the secret key' : ''}`,
+          `Clerk warning: ${caller} could not report ${batch.length} MCP events to Clerk, which answered with status ${response.status}${STATUS_HINTS[response.status] ?? ''}`,
         );
       }
     } catch (error) {

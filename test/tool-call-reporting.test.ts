@@ -644,9 +644,12 @@ describe('tool call reports', () => {
     ]);
   });
 
-  test('warn once when the Backend API refuses them', async () => {
+  test.each([
+    [401, '. Check the secret key'],
+    [403, '. MCP analytics may not be enabled for this instance'],
+  ])('warn once when the Backend API refuses them with %i', async (status, hint) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const sink = reportSink(401);
+    const sink = reportSink(status);
     const context = beginToolCallContext({
       caller: 'clerkInstrumentHandler',
       reporting: resolveReporting('clerkInstrumentHandler', {
@@ -667,7 +670,7 @@ describe('tool call reports', () => {
 
     expect(warn.mock.calls).toEqual([
       [
-        'Clerk warning: clerkInstrumentHandler could not report 1 MCP events to Clerk, which answered with status 401. Check the secret key',
+        `Clerk warning: clerkInstrumentHandler could not report 1 MCP events to Clerk, which answered with status ${status}${hint}`,
       ],
     ]);
   });
