@@ -5,7 +5,7 @@ import {
   McpServer as McpServerV2,
   WebStandardStreamableHTTPServerTransport as WebStandardStreamableHTTPServerTransportV2,
 } from '@modelcontextprotocol/server';
-import { describe, test } from 'vitest';
+import { describe, expectTypeOf, test } from 'vitest';
 
 import { streamableHttpHandler as expressStreamableHttpHandler } from './express';
 import { streamableHttpHandler as honoStreamableHttpHandler } from './hono';
@@ -32,5 +32,27 @@ describe('the streamableHttpHandler transport argument', () => {
     honoStreamableHttpHandler(createServer, StreamableHTTPServerTransport);
     // @ts-expect-error the web-standard transport takes a Request instead of a Node.js request and response
     expressStreamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport);
+  });
+});
+
+// The deprecated handler takes no options, so it has nowhere to take `reporting`: clerkInstrumentHandler reports
+describe('the streamableHttpHandler arguments', () => {
+  const createServer = () => new McpServer({ name: 'test-server', version: '1.0.0' });
+
+  test('are only the server factory and the transport class, with no options to take reporting', () => {
+    expectTypeOf<Parameters<typeof honoStreamableHttpHandler>['length']>().toEqualTypeOf<2>();
+    expectTypeOf<Parameters<typeof expressStreamableHttpHandler>['length']>().toEqualTypeOf<2>();
+    honoStreamableHttpHandler(
+      createServer,
+      WebStandardStreamableHTTPServerTransport,
+      // @ts-expect-error streamableHttpHandler cannot report: serve the route with clerkInstrumentHandler instead
+      { reporting: true },
+    );
+    expressStreamableHttpHandler(
+      createServer,
+      StreamableHTTPServerTransport,
+      // @ts-expect-error streamableHttpHandler cannot report: serve the route with clerkInstrumentHandler instead
+      { reporting: true },
+    );
   });
 });
