@@ -31,8 +31,8 @@ export type ReportingOptions<Req = never> = {
    */
   userAgent?: boolean | undefined;
   /**
-   * Whether to send the Clerk user ID, OAuth client ID, and access token ID of a token Clerk verified. Defaults to
-   * `true`. Tokens a `verifyToken` function verified never send them.
+   * Whether to send the Clerk user ID, OAuth client ID, access token ID, and organization ID of a token Clerk
+   * verified. Defaults to `true`. Tokens a `verifyToken` function verified never send them.
    */
   identity?: boolean | undefined;
   /**
@@ -115,6 +115,7 @@ const MAX_ITEM_COUNT = 1_000_000;
 const MAX_ERROR_CODE_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
+const ORG_ID_PATTERN = /^org_\w{27}$/;
 const MAX_USER_AGENT_LENGTH = 512;
 const MAX_DURATION_MS = 24 * 60 * 60 * 1000;
 const IPV4_PATTERN =
@@ -225,6 +226,7 @@ type McpEventBase = {
   user_id?: string;
   client_id?: string;
   oauth_access_token_id?: string;
+  org_id?: string;
   ip_address?: string;
   user_agent?: string;
   protocol_version?: string;
@@ -332,7 +334,7 @@ function validRequestFields(fields: RequestEventFields): RequestEventFields | un
 
 type RequestDetails = Pick<
   McpEventBase,
-  'user_id' | 'client_id' | 'oauth_access_token_id' | 'ip_address' | 'user_agent'
+  'user_id' | 'client_id' | 'oauth_access_token_id' | 'org_id' | 'ip_address' | 'user_agent'
 >;
 
 export type ToolCallOutcome = { status: 'success' | 'error'; errorCode?: string | undefined };
@@ -706,11 +708,17 @@ function requestDetails<Req>(
     hasClerkVerification(authInfo) &&
     authInfo.extra?.verifiedBy === 'clerk'
   ) {
-    const { userId, auth } = authInfo.extra as { userId?: unknown; auth?: { id?: unknown } };
+    const { userId, auth } = authInfo.extra as {
+      userId?: unknown;
+      auth?: { id?: unknown; orgId?: unknown };
+    };
     if (typeof userId === 'string' && USER_ID_PATTERN.test(userId)) details.user_id = userId;
     if (ID_PATTERN.test(authInfo.clientId)) details.client_id = authInfo.clientId;
     if (typeof auth?.id === 'string' && ID_PATTERN.test(auth.id)) {
       details.oauth_access_token_id = auth.id;
+    }
+    if (typeof auth?.orgId === 'string' && ORG_ID_PATTERN.test(auth.orgId)) {
+      details.org_id = auth.orgId;
     }
   }
   if (reporting.ipAddress) {

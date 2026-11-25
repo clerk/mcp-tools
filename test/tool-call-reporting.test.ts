@@ -29,6 +29,7 @@ const RESOURCE_URL = 'https://mcp.example.com/mcp';
 const USER_ID = 'user_2xhFjEI5X2qWRvtV13BzSj8H6Dk';
 const TOKEN_ID = 'oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk';
 const CLIENT_ID = 'Ab12Cd34Ef56Gh78';
+const ORG_ID = 'org_2xhFjEI5X2qWRvtV13BzSj8H6Dk';
 const USER_AGENT = 'claude-code/2.1.0';
 const SECRET_KEY = 'sk_test_reporting';
 
@@ -42,10 +43,18 @@ const clerkClient = {
       subject: USER_ID,
       userId: USER_ID,
       clientId: CLIENT_ID,
+      orgId: ORG_ID,
       scopes: ['profile'],
       getToken: async () => 'token',
     }),
   }),
+};
+
+const IDENTITY = {
+  user_id: USER_ID,
+  client_id: CLIENT_ID,
+  oauth_access_token_id: TOKEN_ID,
+  org_id: ORG_ID,
 };
 
 type ReportBody = { events: Record<string, unknown>[]; sdk: { name: string; version: string } };
@@ -186,9 +195,7 @@ const expectedCalls = (overrides: Record<string, unknown> = {}) => [
     duration_ms: expect.any(Number),
     handler_ms: expect.any(Number),
     occurred_at: expect.any(Number),
-    user_id: USER_ID,
-    client_id: CLIENT_ID,
-    oauth_access_token_id: TOKEN_ID,
+    ...IDENTITY,
     user_agent: USER_AGENT,
     ...overrides,
   },
@@ -201,9 +208,7 @@ const expectedCalls = (overrides: Record<string, unknown> = {}) => [
     duration_ms: expect.any(Number),
     handler_ms: expect.any(Number),
     occurred_at: expect.any(Number),
-    user_id: USER_ID,
-    client_id: CLIENT_ID,
-    oauth_access_token_id: TOKEN_ID,
+    ...IDENTITY,
     user_agent: USER_AGENT,
     ...overrides,
   },
@@ -943,9 +948,7 @@ const expectedRequestEvents = (base: Record<string, unknown>) => {
   const event = (fields: Record<string, unknown>) => ({
     occurred_at: expect.any(Number),
     server_name: 'acme-mcp',
-    user_id: USER_ID,
-    client_id: CLIENT_ID,
-    oauth_access_token_id: TOKEN_ID,
+    ...IDENTITY,
     user_agent: USER_AGENT,
     ...base,
     ...fields,
@@ -1630,8 +1633,6 @@ const ADDRESSES: Record<AuthFailureAdapter, Record<string, string>> = {
   express: { ip_address: '127.0.0.1' },
   next: {},
 };
-
-const IDENTITY = { user_id: USER_ID, client_id: CLIENT_ID, oauth_access_token_id: TOKEN_ID };
 
 describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
   'auth failure reports from clerkInstrumentHandler on %s',
