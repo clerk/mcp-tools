@@ -274,13 +274,13 @@ With `reporting`, Clerk records each tool call your MCP server answers: the tool
 It takes both calls from the [Quick Start](#example-with-clerk-authentication):
 
 - `clerkInstrumentHandler(handler, { ...options, reporting: true })` on the route knows who made each request.
-- `clerkInstrumentServer(server)` where each MCP server is created sees each tool call. It replaces `connect` on that server object only, and changes nothing a client sees.
+- `clerkInstrumentServer(server)` where each MCP server is created sees each tool call. It replaces `connect` on that server object only, and changes nothing a client sees. Call it before registering tools: it also wraps `registerTool`, and `tool` on MCP SDK 1.x, to time each handler and tell a throw from a returned error. A tool registered before it, or whose callback is replaced with `update({ callback })`, is reported without either.
 
 A POST whose server was never passed to `clerkInstrumentServer` logs a one-time `Clerk warning:`, and so does an instrumented server answering a call that the deprecated `mcpAuth` authenticated.
 
 Each report has:
 
-- The tool's name, the server's name, whether the call succeeded, how long it took, and when it was made. A failed call also has its error code: the `_meta['clerk.com/error_code']` of an error result, as the prebuilt tools set it, or `jsonrpc:<code>` for a JSON-RPC error.
+- The tool's name, the server's name, whether the call succeeded, how long it took and how long its handler ran, and when it was made. A failed call also has its error code: the `_meta['clerk.com/error_code']` of an error result, as the prebuilt tools set it, `thrown:<name>` for a handler that threw, with the error's `name` and never its message, or `jsonrpc:<code>` for a JSON-RPC error.
 - The Clerk user ID, OAuth client ID, and access token ID, for a token Clerk verified. A token `verifyToken` verified sends none of them.
 - The client's IP address, from `req.ip`, which follows the app's `trust proxy` setting. Behind a proxy, set `trust proxy` for it to be the client's address.
 - The client's `User-Agent`, up to 512 characters.

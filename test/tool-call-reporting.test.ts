@@ -5,6 +5,7 @@ import express from 'express';
 import { Hono } from 'hono';
 import { createMcpHandler as createVercelMcpHandler } from 'mcp-handler';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { z } from 'zod/v4';
 import * as expressAdapter from '../express';
 import * as honoAdapter from '../hono';
 import { ERROR_CODE_META_KEY } from '../mcp-tool';
@@ -750,6 +751,60 @@ describe('tool handler outcomes', () => {
         handler_ms: expect.any(Number),
       },
     ]);
+  });
+
+  test('time handlers that take arguments, on MCP SDK 1.x and 2.x', async () => {
+    const throwWith = async ({ order }: { order: string }) => {
+      throw new RangeError(order);
+    };
+    const callWithArguments = async (
+      fetchApp: (input: string | URL, init?: RequestInit) => Promise<Response>,
+      mcpUrl: string,
+      names: string[],
+    ) => {
+      const { client, connected } = connectOAuthClient(new URL(mcpUrl), fetchApp, 'token');
+      await connected;
+      for (const name of names) {
+        expect(await client.callTool({ name, arguments: { order: THROWN_TEXT } })).toMatchObject({
+          isError: true,
+        });
+      }
+      await client.close();
+    };
+    const thrown = (tool_name: string) => ({
+      tool_name,
+      status: 'error',
+      error_code: 'thrown:RangeError',
+      handler_ms: expect.any(Number),
+    });
+
+    const v1Sink = reportSink();
+    const v1App = sdkV1ExpressApp((server) => {
+      clerkInstrumentServer(server);
+      server.registerTool('lookup', { inputSchema: { order: z.string() } }, throwWith);
+      server.tool('lookup_legacy', 'Looks up an order', { order: z.string() }, throwWith);
+    }, v1Sink);
+    await withListening(v1App, (baseUrl) =>
+      callWithArguments(fetch, `${baseUrl}/mcp`, ['lookup', 'lookup_legacy']),
+    );
+    await vi.waitFor(() => expect(v1Sink.calls()).toHaveLength(2), { timeout: 3000 });
+    expect(outcomesOf(v1Sink)).toEqual([thrown('lookup'), thrown('lookup_legacy')]);
+    expectNoErrorText(v1Sink);
+
+    const v2Sink = reportSink();
+    const v2App = honoApp(
+      createMcpHandler(() => {
+        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+        clerkInstrumentServer(server);
+        server.registerTool('lookup', { inputSchema: z.object({ order: z.string() }) }, throwWith);
+        return server;
+      }),
+      { reporting: { fetch: v2Sink.fetch, secretKey: SECRET_KEY } },
+    );
+    await callWithArguments(v2App.fetch, RESOURCE_URL, ['lookup']);
+    await v2App.settled();
+    expect(outcomesOf(v2Sink)).toEqual([thrown('lookup')]);
+    expectNoErrorText(v2Sink);
   });
 });
 

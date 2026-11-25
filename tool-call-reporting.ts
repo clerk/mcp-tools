@@ -288,7 +288,7 @@ type HandlerRecord = { handlerMs: number; thrownErrorCode: string | undefined };
  * The error code of a handler that threw `error`: `thrown:` and the error's `name`, never its message. A value that is
  * not an `Error`, or a name that is not a plain identifier, is `thrown:unknown`.
  */
-export function thrownErrorCode(error: unknown): string {
+function thrownErrorCode(error: unknown): string {
   const name =
     error instanceof Error && IDENTIFIER_PATTERN.test(error.name) ? error.name : 'unknown';
   return `thrown:${name}`.slice(0, MAX_ERROR_CODE_LENGTH);
