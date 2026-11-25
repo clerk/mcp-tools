@@ -112,6 +112,7 @@
     "@clerk/backend": "^3.19.0",
     "@clerk/express": "^2.1.70",
     "@clerk/nextjs": "^7.9.5",
+    "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@modelcontextprotocol/server": "2.4.0",
     "@types/better-sqlite3": "^7.6.13",
@@ -138,6 +139,7 @@
     "@clerk/backend": "^3.19.0",
     "@clerk/express": "^2.1.70",
     "@clerk/nextjs": "^7.9.5",
+    "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@modelcontextprotocol/server": "^2.3.0",
     "better-sqlite3": "^8.7.0",
@@ -157,6 +159,9 @@
       "optional": true
     },
     "@clerk/nextjs": {
+      "optional": true
+    },
+    "@modelcontextprotocol/node": {
       "optional": true
     },
     "@modelcontextprotocol/sdk": {

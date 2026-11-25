@@ -14,6 +14,7 @@ const SERVER: Surface = {
   values: [
     'McpAuthError',
     'McpTokenVerificationError',
+    'clerkInstrumentServer',
     'fetchAuthorizationServerMetadata',
     'generateAICatalog',
     'generateProtectedResourceMetadata',
@@ -34,10 +35,12 @@ const SERVER: Surface = {
     'ClerkAuthInfo',
     'ClerkOAuthAuth',
     'ClerkOAuthClient',
+    'InstrumentableMcpServer',
     'McpAuthFailure',
     'McpPublicMethod',
     'McpResourceUrl',
     'PublicAccess',
+    'ReportToolCallsOptions',
     'ServerCard',
     'ServerCardIcon',
     'ServerCardOptions',
@@ -55,6 +58,7 @@ const ADAPTER: Surface = {
   values: [
     'aiCatalogHandler',
     'authorizationServerMetadataHandler',
+    'clerkInstrumentHandler',
     'mcpAuth',
     'protectedResourceMetadataHandler',
     'serverCardHandler',
@@ -63,6 +67,7 @@ const ADAPTER: Surface = {
   types: [
     'AICatalogHandlerOptions',
     'McpAuthOptions',
+    'McpHandler',
     'ProtectedResourceMetadataOptions',
     'ServerCardHandlerOptions',
   ],
@@ -123,6 +128,7 @@ const PINNED: Record<string, Surface> = {
     [
       'aiCatalogHandler',
       'authorizationServerMetadataHandler',
+      'clerkInstrumentHandler',
       'metadataCorsHandler',
       'protectedResourceMetadataHandler',
       'serverCardHandler',
@@ -131,6 +137,7 @@ const PINNED: Record<string, Surface> = {
     [
       'AICatalogHandlerOptions',
       'McpAuthOptions',
+      'McpHandler',
       'ProtectedResourceMetadataOptions',
       'ServerCardHandlerOptions',
     ],

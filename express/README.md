@@ -5,58 +5,51 @@ Express.js utilities for building MCP servers with authentication support. These
 ## Installation
 
 ```bash
-npm install @clerk/mcp-tools @clerk/express express@5 @modelcontextprotocol/sdk
+npm install @clerk/mcp-tools @clerk/express express@5 @modelcontextprotocol/server @modelcontextprotocol/node
 ```
 
-This package supports `express` 5, `@clerk/express` 2.1.70 or later, and `@modelcontextprotocol/sdk` 1.32.0 or later. The prebuilt tools in `@clerk/mcp-tools/tools` also need `zod` 3.25 or later, or 4: `npm install zod`.
+This package supports `express` 5, `@clerk/express` 2.1.70 or later, `@modelcontextprotocol/server` 2.3.0 or later, and `@modelcontextprotocol/node` 2.1.2 or later. The prebuilt tools in `@clerk/mcp-tools/tools` also need `zod` 3.25 or later, or 4: `npm install zod`.
 
-`@modelcontextprotocol/sdk` is only for `streamableHttpHandler`, which runs your server on the SDK's transport. An app that uses only the auth middleware and metadata handlers, for example with MCP SDK 2's `toNodeHandler` from `@modelcontextprotocol/node`, does not need it. `@clerk/express` is only for verifying tokens with Clerk's default client, so an app that passes `verifyToken` or its own `clerkClient` to `mcpAuth` does not need it.
+`@modelcontextprotocol/node` is only for serving the handler that `createMcpHandler` from `@modelcontextprotocol/server` returns, which `clerkInstrumentHandler` runs through its `toNodeHandler`. An app on MCP SDK 1.x (`@modelcontextprotocol/sdk` 1.32.0 or later) passes an Express handler of its own instead, as in [MCP SDK 1.x](#mcp-sdk-1x), and doesn't need it. `@clerk/express` is only for verifying tokens with Clerk's default client, so an app that passes `verifyToken` or its own `clerkClient` doesn't need it.
 
-The MCP route does not need `clerkMiddleware()` from `@clerk/express`. `mcpAuth` verifies the token itself, so adding `clerkMiddleware()` in front of it only adds a second, unused authentication pass to every request.
+The MCP route does not need `clerkMiddleware()` from `@clerk/express`. `clerkInstrumentHandler` verifies the token itself, so adding `clerkMiddleware()` in front of it only adds a second, unused authentication pass to every request.
 
 ## Quick Start
 
 ### Example with Clerk Authentication
 
-Here's a complete example using Clerk for authentication:
+An MCP server takes two calls from this package: `clerkInstrumentHandler` on the route, which authenticates each request, and `clerkInstrumentServer` where the server is created, which lets Clerk [report its tool calls](#reporting-tool-calls).
 
 ```ts
 import 'dotenv/config';
 import express from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import {
   type McpAuthOptions,
-  isClerkAuthInfo,
-  mcpAuth,
-  protectedResourceMetadataHandler,
   authorizationServerMetadataHandler,
-  streamableHttpHandler,
+  clerkInstrumentHandler,
+  clerkInstrumentServer,
+  isClerkAuthInfo,
+  protectedResourceMetadataHandler,
 } from '@clerk/mcp-tools/express';
 
-// One object for both calls, so the metadata lists the scopes `mcpAuth` requires as `scopes_supported`
+// One object for both calls, so the metadata lists the scopes `clerkInstrumentHandler` requires as `scopes_supported`
 const mcpAuthOptions = {
   resourceUrl: 'https://mcp.example.com/mcp',
   requiredScopes: ['profile', 'email'],
+  reportToolCalls: true,
 } satisfies McpAuthOptions;
 
-const app = express();
-app.use(express.json());
-
 function createServer() {
-  const server = new McpServer({
-    name: 'clerk-mcp-server',
-    version: '1.0.0',
-  });
+  const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
+  clerkInstrumentServer(server);
 
   server.registerTool(
     'whoami',
-    {
-      description: 'Returns the ID of the Clerk user that authorized this request',
-      inputSchema: {},
-    },
-    async (_args, { authInfo }) => {
-      // Narrows `authInfo` to the auth info `mcpAuth` built from a Clerk token, so `extra.userId` is a string
+    { description: 'Returns the ID of the Clerk user that authorized this request' },
+    async (ctx) => {
+      // Narrows the auth info to the one Clerk verified, so `extra.userId` is a string
+      const authInfo = ctx.http?.authInfo;
       if (!isClerkAuthInfo(authInfo)) {
         return { isError: true, content: [{ type: 'text', text: 'Not signed in with Clerk.' }] };
       }
@@ -68,19 +61,40 @@ function createServer() {
   return server;
 }
 
+const app = express();
+app.use(express.json());
+
 // `all`, not `get`, so the handlers also answer a browser-based client's CORS preflight
 app.all(
   '/.well-known/oauth-protected-resource/mcp',
   protectedResourceMetadataHandler(mcpAuthOptions),
 );
 app.all('/.well-known/oauth-authorization-server', authorizationServerMetadataHandler());
-app.all(
-  '/mcp',
-  mcpAuth(mcpAuthOptions),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
-);
+app.all('/mcp', clerkInstrumentHandler(createMcpHandler(createServer), mcpAuthOptions));
 
 app.listen(3000);
+```
+
+### MCP SDK 1.x
+
+On `@modelcontextprotocol/sdk` 1.x, pass an Express handler that serves the SDK's transport. `clerkInstrumentHandler` sets `req.auth`, where the transport reads the auth info:
+
+```ts
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+
+app.all(
+  '/mcp',
+  clerkInstrumentHandler(async (req, res) => {
+    const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
+    clerkInstrumentServer(server);
+    // Register your tools, resources, and prompts
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on('close', () => void transport.close());
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  }, mcpAuthOptions),
+);
 ```
 
 ### Example with Custom Authentication
@@ -91,14 +105,11 @@ Here's an example using custom JWT authentication:
 import 'dotenv/config';
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { type AuthInfo, McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import {
+  clerkInstrumentHandler,
   generateProtectedResourceMetadata,
-  mcpAuth,
-  streamableHttpHandler,
 } from '@clerk/mcp-tools/express';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 const app = express();
 app.use(express.json());
@@ -126,17 +137,14 @@ async function verifyToken(token: string): Promise<AuthInfo | undefined> {
 }
 
 function createServer() {
-  const server = new McpServer({
-    name: 'custom-auth-server',
-    version: '1.0.0',
-  });
+  const server = new McpServer({ name: 'custom-auth-server', version: '1.0.0' });
 
-  // `authInfo` is what `verifyToken` returned, so the user ID is the token's `sub`
+  // The auth info is what `verifyToken` returned, so the user ID is the token's `sub`
   server.registerTool(
     'whoami',
-    { description: 'Returns the ID of the user that authorized this request', inputSchema: {} },
-    async (_args, { authInfo }) => ({
-      content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
+    { description: 'Returns the ID of the user that authorized this request' },
+    async (ctx) => ({
+      content: [{ type: 'text', text: String(ctx.http?.authInfo?.extra?.userId) }],
     }),
   );
 
@@ -155,18 +163,19 @@ app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
 
 app.all(
   '/mcp',
-  mcpAuth({ verifyToken, resourceUrl }),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+  clerkInstrumentHandler(createMcpHandler(createServer), { verifyToken, resourceUrl }),
 );
 
 app.listen(3000);
 ```
 
-## Authentication Middleware
+## Serving MCP Requests
 
-### `mcpAuth(options)`
+### `clerkInstrumentHandler(handler, options)`
 
-Authentication middleware for MCP requests. By default it verifies OAuth access tokens with Clerk, including that their audience is this endpoint. Pass `verifyToken` to verify tokens with your own function instead.
+An Express handler that authenticates each MCP request, then serves it with `handler`: the handler `createMcpHandler` from `@modelcontextprotocol/server` returns, which it runs through `toNodeHandler` from `@modelcontextprotocol/node`, or an Express handler of your own. By default it verifies OAuth access tokens with Clerk, including that their audience is this endpoint. Pass `verifyToken` to verify tokens with your own function instead. Mount it with `app.all`, after `express.json()`.
+
+`mcpAuth(options)`, the middleware it replaces, is deprecated. It takes the same options except `reportToolCalls`, which it refuses with a `Clerk error:`, since it never sees a tool call.
 
 **Options:**
 
@@ -175,32 +184,31 @@ Authentication middleware for MCP requests. By default it verifies OAuth access 
 - `challengeScopes` (optional) - More scopes for the `401` challenge's `scope`, after `requiredScopes`, such as the scopes your tools step up to. MCP clients request the `401` challenge's `scope` when they first authorize. A token is not required to have them. When a token lacks a `requiredScopes` entry, the `403` lists the granted scopes followed by every missing `requiredScopes` and `challengeScopes` entry. List each tool's `requireAdditionalScopes` scopes here to have the client reauthorize once instead of twice. A token that lacks only `challengeScopes` entries is let through.
 - `discoverable` (optional) - What a request without a token may list: `true`, the default, lets anyone connect and list the tools, resources, resource templates, and prompts; `false` requires a token for every MCP request. Protected resource metadata and the Server Card are public either way. See [Public access](#public-access).
 - `publicAccess` (optional) - What else a request without a token may do: `tools` (tool names), and `resources` and `prompts` (`true`, or a list of resource URIs or prompt names), on top of what `discoverable` opens. See [Public access](#public-access).
-- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `mcpAuth` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here, or a function that returns one (or a promise of one), which is called once per request. A value without `authenticateRequest` throws a `Clerk error:` when `mcpAuth` is called. Create it with both `secretKey` and `publishableKey`. Without this option, a missing `CLERK_SECRET_KEY` or `CLERK_PUBLISHABLE_KEY` makes every request throw a `Clerk error:` naming it, as in the Hono adapter. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
-- `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it. The result must have a finite `expiresAt`, in seconds since the epoch, and a non-empty `clientId`, or the token gets the `401` `invalid_token` challenge, with an `McpTokenVerificationError` cause whose `code` is `token-claims-missing` and whose `message` names the missing field. [MCP authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-handling), 2025-06-18 and later, has servers validate tokens as [OAuth 2.1 section 5.2](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13#section-5.2) describes, which includes checking that the token is not expired, and [RFC 9068 section 2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) makes `exp` and `client_id` REQUIRED in a JWT access token. JWT libraries such as `jsonwebtoken` and `jose` check `exp` only when the token has one, so pass it through as `expiresAt`. Auth info from `toClerkAuthInfo` is treated as Clerk-verified, so it passes without an `expiresAt` or a `clientId`, since Clerk checks those itself: build it only from a request state returned by `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`, using `requestState.toAuth()`, never from `auth({ acceptsToken: 'oauth_token' })` alone, a cached result, or a hand-built one. Otherwise use the built-in Clerk path, `mcpAuth({ clerkClient, resourceUrl })` (or `withClerkMcpAuth(handler, { clerkClient, resourceUrl })` in Next.js). Catch the errors your JWT library throws for a token it rejects, such as `JWTExpired` from `jose` or `TokenExpiredError` from `jsonwebtoken`, and return `undefined` or throw an `McpTokenVerificationError`, so the token gets the `401` `invalid_token` challenge, which [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) gives an expired or invalid token, and the client can get a new one. Any other error the function throws means the token could not be verified at all: it gets the JSON `{"error":"server_error"}` answer, with a `500` unless the error has a `429` or `5xx` `status`, and the client keeps the token.
+- `clerkClient` (optional) - The Clerk client that verifies tokens. Defaults to `clerkClient` from `@clerk/express`, which reads `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` and is loaded on the first request, so an app that passes `verifyToken` or its own client doesn't need `@clerk/express` installed. `clerkInstrumentHandler` doesn't need `clerkMiddleware()` and doesn't read the auth it sets. When the keys don't come from those environment variables, pass a client created with them here, or a function that returns one (or a promise of one), which is called once per request. A value without `authenticateRequest` throws a `Clerk error:` when `clerkInstrumentHandler` is called. Create it with both `secretKey` and `publishableKey`. Without this option, a missing `CLERK_SECRET_KEY` or `CLERK_PUBLISHABLE_KEY` makes every request throw a `Clerk error:` naming it, as in the Hono adapter. A client from `@clerk/backend` must be version 3.19.0 or later, the first with a reliable audience check. Not allowed together with `verifyToken`.
+- `verifyToken` (optional) - `(token: string, req: express.Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>`, a function that verifies the token in place of Clerk and returns the auth data, or `undefined` to reject it. The result must have a finite `expiresAt`, in seconds since the epoch, and a non-empty `clientId`, or the token gets the `401` `invalid_token` challenge, with an `McpTokenVerificationError` cause whose `code` is `token-claims-missing` and whose `message` names the missing field. [MCP authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-handling), 2025-06-18 and later, has servers validate tokens as [OAuth 2.1 section 5.2](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13#section-5.2) describes, which includes checking that the token is not expired, and [RFC 9068 section 2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) makes `exp` and `client_id` REQUIRED in a JWT access token. JWT libraries such as `jsonwebtoken` and `jose` check `exp` only when the token has one, so pass it through as `expiresAt`. Auth info from `toClerkAuthInfo` is treated as Clerk-verified, so it passes without an `expiresAt` or a `clientId`, since Clerk checks those itself: build it only from a request state returned by `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`, using `requestState.toAuth()`, never from `auth({ acceptsToken: 'oauth_token' })` alone, a cached result, or a hand-built one. Otherwise use the built-in Clerk path, `clerkInstrumentHandler(handler, { clerkClient, resourceUrl })`. Catch the errors your JWT library throws for a token it rejects, such as `JWTExpired` from `jose` or `TokenExpiredError` from `jsonwebtoken`, and return `undefined` or throw an `McpTokenVerificationError`, so the token gets the `401` `invalid_token` challenge, which [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) gives an expired or invalid token, and the client can get a new one. Any other error the function throws means the token could not be verified at all: it gets the JSON `{"error":"server_error"}` answer, with a `500` unless the error has a `429` or `5xx` `status`, and the client keeps the token.
+- `reportToolCalls` (optional) - `true`, or an options object, to report each tool call to Clerk. Off by default. See [Reporting tool calls](#reporting-tool-calls).
 
 **Example:**
 
 ```ts
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import { clerkInstrumentHandler } from '@clerk/mcp-tools/express';
 
 app.use(express.json());
 app.all(
   '/mcp',
-  mcpAuth({
+  clerkInstrumentHandler(createMcpHandler(createServer), {
     resourceUrl: 'https://mcp.example.com/mcp',
     requiredScopes: ['profile', 'email'],
   }),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 ```
 
 **Example with your own verifier:**
 
 ```ts
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuth, streamableHttpHandler } from '@clerk/mcp-tools/express';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { type AuthInfo, createMcpHandler } from '@modelcontextprotocol/server';
+import { clerkInstrumentHandler } from '@clerk/mcp-tools/express';
 
 async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
   // Your custom token verification logic. It must check that the token's audience is this server's URL: MCP servers
@@ -218,25 +226,21 @@ async function verifyToken(token: string, req: express.Request): Promise<AuthInf
 }
 
 app.use(express.json());
-app.all(
-  '/mcp',
-  mcpAuth({ verifyToken }),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
-);
+app.all('/mcp', clerkInstrumentHandler(createMcpHandler(createServer), { verifyToken }));
 ```
 
 Version 0.9.0 took the verifier alone, as `await mcpAuth(verifyToken)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
 Unknown option keys, such as `requiredScope` instead of `requiredScopes`, throw a `Clerk error:` at setup rather than being ignored. Setting both `clerkClient` and `verifyToken` also throws: choose Clerk verification with `clerkClient` and `resourceUrl`, or your own `verifyToken`. `properties` belongs only to `protectedResourceMetadataHandler`. `onAuthFailure` is a Next.js-only option and is rejected here.
 
-The middleware will:
+It will:
 
 - Check for the `Authorization` header
 - Extract the Bearer token
 - Verify it with Clerk, or call your `verifyToken` function
 - Return a 401 response with a `WWW-Authenticate` header if the token is missing, malformed, or rejected, or if the request has more than one `Authorization` header. A malformed `Bearer` credential, such as `Bearer a b`, and more than one `Authorization` header get that `401` challenge, not the `400` `invalid_request` that [RFC 6750 section 3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1) recommends for a malformed request, so the client can still start authorization; they are the only departure from that section. Another scheme, such as `Basic`, gets the challenge without an error code, as that section says for an unsupported authentication method.
 - Return a 403 response with an `insufficient_scope` challenge if the token lacks `requiredScopes`
-- Add the auth data to `req.auth` if successful
+- Add the auth data to `req.auth` and pass the request to `handler` if successful
 
 The 403 challenge's `scope` lists the token's granted scopes followed by the missing ones, so the new grant keeps the old access. It asks for those scopes by name, so enable each `requiredScopes` and `challengeScopes` entry for the OAuth application in Clerk: a scope it can't be granted is missing from the new token too, and the client gets the `403` again.
 
@@ -248,21 +252,63 @@ Your Clerk instance must issue the `aud` claim. Clerk turns it on when you add y
 
 ### Public access
 
-A server is discoverable by default, so a client can connect and list without a token, and `publicAccess` lets it call the tools you list as well. It signs in only when it reaches something protected. `mcpAuth` reads the body that `express.json()` parsed, so mount that middleware before `mcpAuth`. Only a body sent as `application/json` can be public: a form that `express.urlencoded()` parsed gets the `401`, as it does in the Hono and Next.js adapters. Without it, nothing is open: a JSON request without a token gets the `401` challenge, and `mcpAuth` logs a one-time `Clerk warning:` naming `express.json()`. A body with a `Content-Encoding` other than `identity`, such as `gzip`, gets the `401` without a token: the parsed JSON cannot establish its encoded byte count. A valid bearer token can still authenticate a compressed request. `express.json()` reads the whole body before `mcpAuth` sees it, and its `limit` bounds decoded bytes, not compressed bytes received. Set `express.json({ limit })` to the decoded size you accept; its 100kb default is below the 1 MiB that `publicAccess` accepts. Use `inflate: false` or a separate upstream encoded-byte limit if you also need to bound compressed ingress before parsing. `mcpAuth` still treats an identity body over 1 MiB as not public, but for a chunked body it measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so that check is not an exact byte limit.
+A server is discoverable by default, so a client can connect and list without a token, and `publicAccess` lets it call the tools you list as well. It signs in only when it reaches something protected. `clerkInstrumentHandler` reads the body that `express.json()` parsed, so mount that middleware before `clerkInstrumentHandler`. Only a body sent as `application/json` can be public: a form that `express.urlencoded()` parsed gets the `401`, as it does in the Hono and Next.js adapters. Without it, nothing is open: a JSON request without a token gets the `401` challenge, and `clerkInstrumentHandler` logs a one-time `Clerk warning:` naming `express.json()`. A body with a `Content-Encoding` other than `identity`, such as `gzip`, gets the `401` without a token: the parsed JSON cannot establish its encoded byte count. A valid bearer token can still authenticate a compressed request. `express.json()` reads the whole body before `clerkInstrumentHandler` sees it, and its `limit` bounds decoded bytes, not compressed bytes received. Set `express.json({ limit })` to the decoded size you accept; its 100kb default is below the 1 MiB that `publicAccess` accepts. Use `inflate: false` or a separate upstream encoded-byte limit if you also need to bound compressed ingress before parsing. `clerkInstrumentHandler` still treats an identity body over 1 MiB as not public, but for a chunked body it measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so that check is not an exact byte limit.
 
 ```ts
 app.use(express.json());
 app.all(
   '/mcp',
-  mcpAuth({
+  clerkInstrumentHandler(createMcpHandler(createServer), {
     resourceUrl: 'https://mcp.example.com/mcp',
     publicAccess: { tools: ['search_docs'] },
   }),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
 );
 ```
 
-`req.auth` is `undefined` for a request that `discoverable` or `publicAccess` let through. Set `discoverable: false` to require a token for every request, which also lets `mcpAuth` run without `express.json()`: it cannot be set next to a `publicAccess.methods` list, so nothing is open and the body is never read. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+`req.auth` is `undefined` for a request that `discoverable` or `publicAccess` let through. Set `discoverable: false` to require a token for every request, which also lets `clerkInstrumentHandler` run without `express.json()`: it cannot be set next to a `publicAccess.methods` list, so nothing is open and the body is never read. See [Public access](../README.md#public-access-sign-in-only-when-needed) in the main guide for every rule.
+
+## Reporting tool calls
+
+With `reportToolCalls`, Clerk records each tool call your MCP server answers: the tool, whether it succeeded, how long it took, and who called it. The calls show up in your instance's MCP analytics and audit log. Tool arguments and results are never sent.
+
+It takes both calls from the [Quick Start](#example-with-clerk-authentication):
+
+- `clerkInstrumentHandler(handler, { ...options, reportToolCalls: true })` on the route knows who made each request.
+- `clerkInstrumentServer(server)` where each MCP server is created sees each tool call. It replaces `connect` on that server object only, and changes nothing a client sees.
+
+A POST whose server was never passed to `clerkInstrumentServer` logs a one-time `Clerk warning:`, and so does an instrumented server answering a call that the deprecated `mcpAuth` authenticated.
+
+Each report has:
+
+- The tool's name, the server's name, whether the call succeeded, how long it took, and when it was made. A failed call also has its error code: the `_meta['clerk.com/error_code']` of an error result, as the prebuilt tools set it, or `jsonrpc:<code>` for a JSON-RPC error.
+- The Clerk user ID, OAuth client ID, and access token ID, for a token Clerk verified. A token `verifyToken` verified sends none of them.
+- The client's IP address, from `req.ip`, which follows the app's `trust proxy` setting. Behind a proxy, set `trust proxy` for it to be the client's address.
+- The client's `User-Agent`, up to 512 characters.
+
+Pass an options object instead of `true` to turn fields off, or to choose which tools are reported:
+
+```ts
+const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  reportToolCalls: {
+    ipAddress: false,
+    userAgent: false,
+    identity: false,
+    tools: (toolName) => toolName !== 'healthcheck',
+    serverName: 'acme-production',
+  },
+} satisfies McpAuthOptions;
+```
+
+- `ipAddress` - `true`, the default, sends `req.ip`. `false` sends none, and a function `(req) => string | undefined` returns the address yourself. A value that isn't an IP address is not sent.
+- `userAgent` and `identity` - `false` leaves out the `User-Agent`, or the user, OAuth client, and access token IDs. Both default to `true`.
+- `tools` - `(toolName) => boolean`. A call to a tool it returns `false` for is not reported.
+- `serverName` - The server name to report. Defaults to the name the server was created with.
+- `secretKey` - The secret key of the instance the reports belong to. Defaults to `CLERK_SECRET_KEY`.
+- `apiUrl` - The Backend API origin. Defaults to `CLERK_API_URL`, then `https://api.clerk.com`.
+- `fetch` - Sends the reports. Defaults to the global `fetch`.
+
+Unknown keys and invalid values throw a `Clerk error:` when the handler is created. Reports go to the Backend API's `POST /v1/mcp_tool_calls` in batches of up to 100: about a second after a call, as soon as 100 are waiting, and before the process exits. Sending them never delays or fails an MCP request: a batch the Backend API refuses, or that can't reach it, is dropped with a one-time `Clerk warning:`. A call without a token, which `publicAccess` lets through, is not reported.
 
 ## Protected Resource Metadata
 
@@ -270,11 +316,11 @@ app.all(
 
 Express handler that returns OAuth protected resource metadata for Clerk integration, as required by [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). For another authorization server, return `generateProtectedResourceMetadata` from `@clerk/mcp-tools/express` in your own route.
 
-**Options:** the options you pass to `mcpAuth`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient` and `verifyToken`.
+**Options:** the options you pass to `clerkInstrumentHandler`, all optional, plus `properties`, so the auth options can be reused here. Add `properties` only when calling the metadata handler, not the auth entry point. The handler ignores `clerkClient`, `verifyToken`, and `reportToolCalls`.
 
-- `resourceUrl` (optional) - The same value you pass to `mcpAuth`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `mcpAuth` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
-- `requiredScopes` and `challengeScopes` (optional) - The same values you pass to `mcpAuth`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
-- `properties` (optional) - Additional metadata, such as `resource_name`. It overrides the generated metadata, except `resource`, which it can't set: pass the URL as `resourceUrl`, so `resource` is the URL `mcpAuth` checks (RFC 9728 section 3.3). Setting it throws a `Clerk error:` when the handler is created. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
+- `resourceUrl` (optional) - The same value you pass to `clerkInstrumentHandler`: the exact URL clients use for the endpoint, or a list of them, one for each origin. The metadata's `resource` is then the URL `clerkInstrumentHandler` checks for the same request, and with a list a request to an origin none of them has gets a `421 Misdirected Request`. Without it, `resource` comes from the URL the metadata route was requested at, which can differ from the public URL behind a proxy, and MCP clients reject metadata whose `resource` differs from the URL they connect to.
+- `requiredScopes` and `challengeScopes` (optional) - The same values you pass to `clerkInstrumentHandler`. The metadata lists `requiredScopes` then `challengeScopes`, each once, as `scopes_supported`, and leaves `scopes_supported` out when there are none.
+- `properties` (optional) - Additional metadata, such as `resource_name`. It overrides the generated metadata, except `resource`, which it can't set: pass the URL as `resourceUrl`, so `resource` is the URL `clerkInstrumentHandler` checks (RFC 9728 section 3.3). Setting it throws a `Clerk error:` when the handler is created. A `scopes_supported` here is used as given, to list more scopes than the server asks for, but it must include every `requiredScopes` and `challengeScopes` entry, or the handler throws a `Clerk error:` naming the missing ones when it is created.
 
 **Example:**
 
@@ -336,7 +382,7 @@ app.all(
 
 `GET` and `HEAD` get the card with a weak `ETag` and public caching, a matching `If-None-Match` gets a bodyless `304`, `OPTIONS` the CORS preflight, other methods a `405`, and a request to an origin no listed `resourceUrl` has a `421`. Every error is sent with `Cache-Control: no-store`, so no cache keeps it. The handler answers conditional requests itself, whatever the app's `etag` setting.
 
-With a list of `resourceUrl`s, the request's origin is the one Express gives the rest of the app, `req.protocol` and `req.host`, as for `mcpAuth`: behind a proxy, set `trust proxy` so they come from `X-Forwarded-Proto` and `X-Forwarded-Host`, which are ignored otherwise. The browser's `Origin` header plays no part. With a list, a request without a `Host` header that parses gets a `400`, since there is no origin to select by. A single `resourceUrl` never reads the request's URL, so that request still gets the card, as it does from `aiCatalogHandler`.
+With a list of `resourceUrl`s, the request's origin is the one Express gives the rest of the app, `req.protocol` and `req.host`, as for `clerkInstrumentHandler`: behind a proxy, set `trust proxy` so they come from `X-Forwarded-Proto` and `X-Forwarded-Host`, which are ignored otherwise. The browser's `Origin` header plays no part. With a list, a request without a `Host` header that parses gets a `400`, since there is no origin to select by. A single `resourceUrl` never reads the request's URL, so that request still gets the card, as it does from `aiCatalogHandler`.
 
 Express writes the discovery answer's headers over earlier values, including `Cache-Control`, `ETag`, `Content-Type`, and `Access-Control-Allow-Origin`. It merges `ETag` into an earlier `Access-Control-Expose-Headers` value without duplication, preserving `*`. A `cors` middleware mounted with `app.use` in front of it answers the `OPTIONS` preflight itself; allow `If-Match` and `If-None-Match` there, or mount the discovery routes before it.
 
@@ -366,6 +412,8 @@ It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and 
 ## MCP Request Handler
 
 ### `streamableHttpHandler`
+
+**Deprecated.** Use [`clerkInstrumentHandler`](#clerkinstrumenthandlerhandler-options) with the handler `createMcpHandler` from `@modelcontextprotocol/server` returns. `streamableHttpHandler` doesn't report tool calls.
 
 Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. A fresh server and transport are created for each request, so concurrent requests don't share state. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than an Express `404`.
 
@@ -400,16 +448,17 @@ app.all('/mcp', streamableHttpHandler(createServer, StreamableHTTPServerTranspor
 
 ## Accessing Authentication Data in Tools
 
-When using the authentication middleware, the auth data is automatically passed to your MCP tools through the `authInfo` parameter in the tool handler:
+`clerkInstrumentHandler` passes the auth data to your MCP tools. MCP SDK 2.x tools read it as `ctx.http?.authInfo`, and SDK 1.x tools as the `authInfo` of their second argument:
 
 ```ts
 import { isClerkAuthInfo } from '@clerk/mcp-tools/express';
 
 server.registerTool(
   'whoami',
-  { description: 'Returns the ID of the Clerk user that authorized this request', inputSchema: {} },
-  async (_args, { authInfo }) => {
-    // Narrows `authInfo` to the auth info `mcpAuth` built from a Clerk token, so `extra.userId` is a string
+  { description: 'Returns the ID of the Clerk user that authorized this request' },
+  async (ctx) => {
+    // Narrows the auth info to the one Clerk verified, so `extra.userId` is a string
+    const authInfo = ctx.http?.authInfo;
     if (!isClerkAuthInfo(authInfo)) {
       return { isError: true, content: [{ type: 'text', text: 'Not signed in with Clerk.' }] };
     }
@@ -421,7 +470,7 @@ server.registerTool(
 For custom authentication middleware, the auth data will be whatever your `verifyToken` function returns:
 
 ```ts
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 
 async function verifyToken(token: string, req: express.Request): Promise<AuthInfo | undefined> {
   try {
@@ -444,10 +493,10 @@ async function verifyToken(token: string, req: express.Request): Promise<AuthInf
 
 server.registerTool(
   'whoami',
-  { description: 'Returns the ID of the user that authorized this request', inputSchema: {} },
-  async (_args, { authInfo }) => ({
-    // `authInfo` is what your verifyToken function returned
-    content: [{ type: 'text', text: String(authInfo?.extra?.userId) }],
+  { description: 'Returns the ID of the user that authorized this request' },
+  async (ctx) => ({
+    // The auth info is what your verifyToken function returned
+    content: [{ type: 'text', text: String(ctx.http?.authInfo?.extra?.userId) }],
   }),
 );
 ```
@@ -465,7 +514,7 @@ The publishable key names the Clerk instance for the OAuth metadata routes and f
 
 ## Error Handling
 
-The middleware automatically handles common authentication errors:
+`clerkInstrumentHandler` handles common authentication errors itself:
 
 - **Missing Authorization header**: Returns 401 with a `WWW-Authenticate` header pointing to your protected resource metadata
 - **Invalid token format**: Returns 401 with the same challenge
@@ -478,7 +527,7 @@ The middleware automatically handles common authentication errors:
 These utilities are designed to integrate seamlessly with existing Express applications. You can:
 
 - Add MCP endpoints to existing routes
-- Keep your existing authentication middleware on your other routes; the MCP route needs only `mcpAuth`
+- Keep your existing authentication middleware on your other routes; the MCP route needs only `clerkInstrumentHandler`
 - Combine with other Express middleware (CORS, rate limiting, etc.)
 
 ```ts
@@ -490,14 +539,13 @@ app.use(express.json());
 
 app.all(
   '/mcp',
-  mcpAuth({ resourceUrl: MCP_RESOURCE_URL }), // MCP authentication
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport), // MCP request handling
+  clerkInstrumentHandler(createMcpHandler(createServer), { resourceUrl: MCP_RESOURCE_URL }),
 );
 ```
 
 ### CORS for browser-based MCP clients
 
-The metadata handlers send their own CORS headers, which allow any origin (see [`protectedResourceMetadataHandler`](#protectedresourcemetadatahandler)). `mcpAuth` and `streamableHttpHandler` don't set CORS headers on `/mcp`; use Express middleware such as the `cors` package. A browser-based client needs the response to expose `WWW-Authenticate` (`Access-Control-Expose-Headers`), or it can't read the `401` challenge ([RFC 6750 section 3](https://datatracker.ietf.org/doc/html/rfc6750#section-3)) that points it to the metadata. It also sends `Authorization`, `Content-Type`, `Mcp-Protocol-Version`, and the [standard request headers](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#standard-request-headers) of the 2026-07-28 transport: `Mcp-Method` on every request, and `Mcp-Name` on `tools/call`, `resources/read`, and `prompts/get`. The preflight must allow all of them. If a tool marks a parameter with `x-mcp-header`, clients also send its `Mcp-Param-{Name}` header; add each of those names to the allowed headers too. Mount the CORS middleware before `mcpAuth`, so it answers the `OPTIONS` preflight, which carries no token, and adds its headers to the `401` and `403`:
+The metadata handlers send their own CORS headers, which allow any origin (see [`protectedResourceMetadataHandler`](#protectedresourcemetadatahandler)). `clerkInstrumentHandler` doesn't set CORS headers on `/mcp`; use Express middleware such as the `cors` package. A browser-based client needs the response to expose `WWW-Authenticate` (`Access-Control-Expose-Headers`), or it can't read the `401` challenge ([RFC 6750 section 3](https://datatracker.ietf.org/doc/html/rfc6750#section-3)) that points it to the metadata. It also sends `Authorization`, `Content-Type`, `Mcp-Protocol-Version`, and the [standard request headers](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#standard-request-headers) of the 2026-07-28 transport: `Mcp-Method` on every request, and `Mcp-Name` on `tools/call`, `resources/read`, and `prompts/get`. The preflight must allow all of them. If a tool marks a parameter with `x-mcp-header`, clients also send its `Mcp-Param-{Name}` header; add each of those names to the allowed headers too. Mount the CORS middleware before `clerkInstrumentHandler`, so it answers the `OPTIONS` preflight, which carries no token, and adds its headers to the `401` and `403`:
 
 ```ts
 import cors from 'cors';
@@ -517,9 +565,10 @@ app.use(
 app.use(express.json());
 app.all(
   '/mcp',
-  mcpAuth({ resourceUrl: 'https://mcp.example.com/mcp' }),
-  streamableHttpHandler(createServer, StreamableHTTPServerTransport),
+  clerkInstrumentHandler(createMcpHandler(createServer), {
+    resourceUrl: 'https://mcp.example.com/mcp',
+  }),
 );
 ```
 
-`streamableHttpHandler` is stateless and never issues an `Mcp-Session-Id`. If you serve MCP with a stateful transport of your own, also allow `Mcp-Session-Id` as a request header and expose it, and set `discoverable: false` on `mcpAuth` (see [Public access](../README.md#public-access-sign-in-only-when-needed)).
+`createMcpHandler` is stateless and never issues an `Mcp-Session-Id`. If you serve MCP with a stateful transport of your own, also allow `Mcp-Session-Id` as a request header and expose it, and set `discoverable: false` on `clerkInstrumentHandler` (see [Public access](../README.md#public-access-sign-in-only-when-needed)).

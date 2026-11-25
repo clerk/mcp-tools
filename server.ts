@@ -379,6 +379,10 @@ export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is Cle
 
 export { requireAdditionalScopes } from './scope-challenge';
 
+export { type InstrumentableMcpServer, clerkInstrumentServer } from './instrument-server';
+
+export type { ReportToolCallsOptions } from './tool-call-reporting';
+
 export { type McpResourceUrl, matchResourceUrl } from './resource-url';
 
 export {

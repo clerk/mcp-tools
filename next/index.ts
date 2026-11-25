@@ -22,15 +22,24 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
+import {
+  type ReportToolCallsOption,
+  beginToolCallContext,
+  checkToolCallContext,
+  onResponseEnd,
+  reportToolCallsKey,
+  resolveReportToolCalls,
+  withoutReportToolCalls,
+} from '../tool-call-reporting';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
- * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withClerkMcpAuth`, all optional, plus
- * `properties`. Reuse the auth options, such as those exported from `lib/mcp.ts`, adding `properties` only for the
- * metadata handler, not `withClerkMcpAuth`. The handler reads `resourceUrl`, `requiredScopes`, `challengeScopes`, and
- * `properties`, and ignores the other `McpAuthOptions` keys:
- * `clerkClient`, `verifyToken`, and `onAuthFailure`.
+ * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `clerkInstrumentHandler`, all optional,
+ * plus `properties`. Reuse the auth options, such as those exported from `lib/mcp.ts`, adding `properties` only for
+ * the metadata handler, not `clerkInstrumentHandler`. The handler reads `resourceUrl`, `requiredScopes`,
+ * `challengeScopes`, and `properties`, and ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`,
+ * `onAuthFailure`, and `reportToolCalls`.
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
@@ -63,7 +72,7 @@ export function protectedResourceMetadataHandler(
     );
   }
   // `onAuthFailure` is the one key of `withClerkMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
-  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure']));
+  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure', reportToolCallsKey]));
 
   return (req: Request): Response => {
     const answer = protectedResourceMetadataAnswer(options, {
@@ -230,15 +239,29 @@ type McpAuthFailureOption = {
 };
 
 /**
- * Options for `withClerkMcpAuth`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as its
- * audience, and `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first request,
+ * Options for `clerkInstrumentHandler`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
+ * its audience, and `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`, loaded on the first request,
  * which needs `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` set. An app that passes its keys to
  * `clerkMiddleware()` instead, or runs in keyless mode, passes `clerkClient: () => clerkClient()` from
  * `@clerk/nextjs/server`, with the MCP route in the middleware's matcher. With `verifyToken`, that function verifies
  * each token with the request, `resourceUrl` is optional, and `clerkClient` is not allowed. `onAuthFailure` is
- * available either way.
+ * available either way. `reportToolCalls` turns on tool call reporting. The deprecated `withClerkMcpAuth` takes the
+ * same options without it.
  */
-export type McpAuthOptions = McpAuthFailureOption & MiddlewareAuthOptions<Request>;
+export type McpAuthOptions = McpAuthFailureOption &
+  MiddlewareAuthOptions<Request> &
+  ReportToolCallsOption<Request>;
+
+/**
+ * What `clerkInstrumentHandler` serves: the route handler `createMcpHandler` from `mcp-handler` returns, which reads
+ * the auth info from `req.auth`, the handler `createMcpHandler` from MCP SDK 2.x (`@modelcontextprotocol/server`)
+ * returns, or any function that serves a request with its auth info.
+ */
+export type McpHandler =
+  | {
+      fetch: (request: Request, options?: { authInfo?: AuthInfo }) => Promise<Response>;
+    }
+  | ((req: Request, options: { authInfo: AuthInfo | undefined }) => Response | Promise<Response>);
 
 const withClerkMcpAuthCallForm =
   'withClerkMcpAuth(handler, { resourceUrl }), or as withClerkMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
@@ -276,31 +299,54 @@ const withClerkMcpAuthCallForm =
  *   resourceUrl: "https://mcp.example.com/mcp",
  * });
  * ```
+ * @deprecated Use `clerkInstrumentHandler(handler, options)`, which authenticates the same way and can report tool calls
  */
 export function withClerkMcpAuth(
   handler: McpRouteHandler,
-  options: McpAuthOptions,
+  options: McpAuthFailureOption & MiddlewareAuthOptions<Request>,
 ): (req: Request) => Promise<Response> {
   if (typeof handler !== 'function') {
     throw new Error(
       `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next takes the route handler first. Call it as ${withClerkMcpAuthCallForm}`,
     );
   }
+  options = withoutReportToolCalls('withClerkMcpAuth', options);
   // `mcp-handler`'s `withMcpAuth` takes a verifier function here, so code moved from it fails at startup
   assertVerifierOrResourceUrl(
     options,
     `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
   assertMcpAuthOptions('withClerkMcpAuth', options, new Set(['onAuthFailure']));
-
-  const authenticate = createBearerAuth(
+  const authenticate = nextAuthenticator(
     'withClerkMcpAuth from @clerk/mcp-tools/next',
+    'withClerkMcpAuth',
     options,
-    nextClerkClient,
-    "clerkClient from '@clerk/nextjs/server'",
   );
 
   return async (req) => {
+    const authenticated = await authenticate(req);
+    return authenticated instanceof Response ? authenticated : handler(req);
+  };
+}
+
+/**
+ * Verifies the request's token as `withClerkMcpAuth` does.
+ * @returns The answer for a request that is not let through, or the auth info of one that is, also set on `req.auth`:
+ * `undefined` for a request without a token that `publicAccess` let through
+ */
+function nextAuthenticator(
+  caller: string,
+  shortName: string,
+  options: McpAuthFailureOption & MiddlewareAuthOptions<Request>,
+) {
+  const authenticate = createBearerAuth(
+    caller,
+    options,
+    nextClerkClient(shortName),
+    "clerkClient from '@clerk/nextjs/server'",
+  );
+
+  return async (req: Request): Promise<Response | { authInfo: AuthInfo | undefined }> => {
     const result = await authenticate(req, {
       authorization: req.headers.get('authorization') ?? undefined,
       requestUrl: req.url,
@@ -328,7 +374,7 @@ export function withClerkMcpAuth(
     // `mcp-handler` passes `req.auth` to its transport, as its own `withMcpAuth` does. It is `undefined` for a
     // request without a token that `publicAccess` let through.
     (req as Request & { auth?: AuthInfo }).auth = result.authInfo;
-    return handler(req);
+    return { authInfo: result.authInfo };
   };
 }
 
@@ -340,22 +386,138 @@ export function withClerkMcpAuth(
  * with the load error as the `cause`, or naming `CLERK_SECRET_KEY` or `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` when it is
  * not set.
  */
-async function nextClerkClient(): Promise<ClerkOAuthClient> {
-  let nextjs: typeof import('@clerk/nextjs/server');
-  try {
-    nextjs = await import('@clerk/nextjs/server');
-  } catch (error) {
-    throw new Error('Clerk error: install @clerk/nextjs, or pass clerkClient to withClerkMcpAuth', {
-      cause: error,
+function nextClerkClient(caller: string) {
+  return async (): Promise<ClerkOAuthClient> => {
+    let nextjs: typeof import('@clerk/nextjs/server');
+    try {
+      nextjs = await import('@clerk/nextjs/server');
+    } catch (error) {
+      throw new Error(`Clerk error: install @clerk/nextjs, or pass clerkClient to ${caller}`, {
+        cause: error,
+      });
+    }
+    // `@clerk/backend` checks the keys only when a token is verified, and a missing one would then look like a Clerk
+    // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs.
+    // Each is written out, not looked up by name: Next.js inlines `process.env.NEXT_PUBLIC_*` only where it is written
+    // out, so a publishable key set only at build time is missing from `process.env[name]` at run time.
+    requireClerkEnvKeys(caller, {
+      CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
     });
+    return nextjs.clerkClient();
+  };
+}
+
+const clerkInstrumentHandlerCallForm =
+  'clerkInstrumentHandler(handler, { resourceUrl }), or as clerkInstrumentHandler(handler, { verifyToken }) to verify tokens with your own function';
+
+/**
+ * Wraps an MCP route handler so each request is authenticated as `withClerkMcpAuth` does before `handler` serves it.
+ * A missing or rejected token gets a 401 challenge, a token without `requiredScopes` a 403 challenge, and a request
+ * to an origin no `resourceUrl` lists a 421, and `onAuthFailure` is told why. A request it lets through reaches
+ * `handler` with its auth info, also set on `req.auth`, where `mcp-handler` reads it. Tools read it as
+ * `ctx.http?.authInfo`.
+ *
+ * With `reportToolCalls`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with
+ * `CLERK_SECRET_KEY`. The reports are sent with `after()` from `next/server` once the response is over, so serverless
+ * functions keep running until they are sent.
+ * @param handler - The route handler `createMcpHandler` from `mcp-handler` returns, the handler `createMcpHandler` from
+ * `@modelcontextprotocol/server` returns, or a function of the request and its auth info
+ * @param options - See `McpAuthOptions`. `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`.
+ * @returns The route handler, to export as `GET`, `POST`, and `DELETE`
+ * @example
+ * ```ts
+ * // app/mcp/route.ts
+ * import { createMcpHandler } from 'mcp-handler';
+ * import { clerkInstrumentHandler, clerkInstrumentServer } from '@clerk/mcp-tools/next';
+ *
+ * const handler = createMcpHandler(
+ *   (server) => {
+ *     clerkInstrumentServer(server);
+ *     // register tools
+ *   },
+ *   { serverInfo: { name: 'acme-mcp', version: '1.0.0' } },
+ * );
+ *
+ * const route = clerkInstrumentHandler(handler, {
+ *   resourceUrl: 'https://mcp.example.com/mcp',
+ *   requiredScopes: ['profile', 'email'],
+ *   reportToolCalls: true,
+ * });
+ *
+ * export { route as GET, route as POST, route as DELETE };
+ * ```
+ */
+export function clerkInstrumentHandler(
+  handler: McpHandler,
+  options: McpAuthOptions,
+): (req: Request) => Promise<Response> {
+  if (
+    typeof handler !== 'function' &&
+    typeof (handler as { fetch?: unknown } | null)?.fetch !== 'function'
+  ) {
+    throw new Error(
+      `Clerk error: clerkInstrumentHandler from @clerk/mcp-tools/next takes the route handler first. Call it as ${clerkInstrumentHandlerCallForm}`,
+    );
   }
-  // `@clerk/backend` checks the keys only when a token is verified, and a missing one would then look like a Clerk
-  // outage once the client has authorized, so they are checked here as the Express and Hono adapters check theirs.
-  // Each is written out, not looked up by name: Next.js inlines `process.env.NEXT_PUBLIC_*` only where it is written
-  // out, so a publishable key set only at build time is missing from `process.env[name]` at run time.
-  requireClerkEnvKeys('withClerkMcpAuth', {
-    CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-  });
-  return nextjs.clerkClient();
+  assertVerifierOrResourceUrl(
+    options,
+    `Clerk error: clerkInstrumentHandler from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${clerkInstrumentHandlerCallForm}`,
+  );
+  const { reportToolCalls, ...authOptions } = options;
+  assertMcpAuthOptions('clerkInstrumentHandler', authOptions, new Set(['onAuthFailure']));
+  const reporting = resolveReportToolCalls<Request>('clerkInstrumentHandler', reportToolCalls);
+  const authenticate = nextAuthenticator(
+    'clerkInstrumentHandler from @clerk/mcp-tools/next',
+    'clerkInstrumentHandler',
+    authOptions,
+  );
+
+  return async (req) => {
+    const authenticated = await authenticate(req);
+    if (authenticated instanceof Response) return authenticated;
+    const { authInfo } = authenticated;
+
+    const context = beginToolCallContext({
+      caller: 'clerkInstrumentHandler',
+      reporting,
+      authInfo,
+      request: req,
+      // Vercel sets `x-real-ip` itself, replacing any value the client sent
+      defaultIpAddress: () => (process.env.VERCEL ? req.headers.get('x-real-ip') : undefined),
+      userAgent: () => req.headers.get('user-agent'),
+      env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
+    });
+
+    const response =
+      typeof handler === 'function'
+        ? await handler(req, { authInfo })
+        : await handler.fetch(req, { ...(authInfo && { authInfo }) });
+    if (!context || !reporting) return response;
+
+    let ended!: () => void;
+    const end = new Promise<void>((resolve) => (ended = resolve));
+    await keepAlive(end.then(() => context.flush()));
+    return onResponseEnd(response, () => {
+      checkToolCallContext('clerkInstrumentHandler', context, reporting, {
+        method: req.method,
+        status: response.status,
+        mcpMethod: req.headers.get('mcp-method'),
+      });
+      ended();
+    });
+  };
+}
+
+let nextServer: Promise<typeof import('next/server') | undefined> | undefined;
+
+/**
+ * Keeps the function running until `work` settles, with `after()` from `next/server`. Outside a Next.js request, such
+ * as in tests, `after()` throws and the reporter's own timer sends the reports instead.
+ */
+async function keepAlive(work: Promise<unknown>) {
+  nextServer ??= import('next/server').catch(() => undefined);
+  try {
+    (await nextServer)?.after(work);
+  } catch {}
 }
