@@ -310,6 +310,8 @@ const mcpAuthOptions = {
 
 Unknown keys and invalid values throw a `Clerk error:` when the handler is created. Reports go to the Backend API's `POST /v1/mcp_events` in batches of up to 100: about a second after a call, as soon as 100 are waiting, and before the process exits. Sending them never delays or fails an MCP request: a batch the Backend API refuses, or that can't reach it, is dropped with a one-time `Clerk warning:`. At most 1,000 reports wait to be sent while the Backend API is slow to answer; past that the oldest are dropped, with a one-time `Clerk warning:`. A call without a token, which `publicAccess` lets through, is not reported.
 
+With `reporting` on, `clerkInstrumentHandler` also reports each request it answers with a `401` or `403` challenge or a `421`, so you can see where agents get stuck before their first call. The report has the `reason` (`missing_token`, `malformed_token`, `invalid_token`, `insufficient_scope`, or `misdirected_request`), the HTTP status, the verifier's code for a rejected token, such as `token-invalid` (never its message), and the JSON-RPC method and tool name of the request's first message, read from a copy of a JSON body up to 64 KiB, so the request itself is untouched. The `serverName`, `ipAddress` and `userAgent` options apply to it as they do to tool calls, and a tool `tools` returns `false` for is reported without its name. Only a `403` carries the Clerk user, OAuth client, and access token IDs, of the token Clerk verified that lacked the scopes; a `401` or `421` has none. The `400` to a request without a URL and the server error when a token could not be verified at all are not reported.
+
 ## Protected Resource Metadata
 
 ### `protectedResourceMetadataHandler`

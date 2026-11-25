@@ -47,6 +47,30 @@
       "error_code": "thrown:TypeError",
       "duration_ms": 8,
       "handler_ms": 5
+    },
+    {
+      "type": "auth_failure",
+      "occurred_at": 1795605600750,
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "reason": "invalid_token",
+      "http_status": 401,
+      "verifier_code": "token-invalid",
+      "method": "tools/call",
+      "tool_name": "ping"
+    },
+    {
+      "type": "auth_failure",
+      "occurred_at": 1795605601000,
+      "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "client_id": "Ab12Cd34Ef56Gh78",
+      "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "reason": "insufficient_scope",
+      "http_status": 403,
+      "method": "tools/call",
+      "tool_name": "ping"
     }
   ]
 }

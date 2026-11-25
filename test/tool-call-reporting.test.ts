@@ -62,12 +62,16 @@ function reportSink(status = 202) {
 const typesOf = (value: object) =>
   Object.fromEntries(Object.entries(value).map(([key, field]) => [key, typeof field]));
 
-const REQUIRED_TOOL_CALL_FIELDS = ['type', 'occurred_at', 'tool_name', 'status', 'duration_ms'];
+const REQUIRED_FIELDS: Record<string, string[]> = {
+  tool_call: ['type', 'occurred_at', 'tool_name', 'status', 'duration_ms'],
+  auth_failure: ['type', 'occurred_at', 'reason', 'http_status'],
+};
 
 /**
  * Checks each batch against the golden batch that the bapi-proxy suite in clerk/cloudflare-workers posts to
- * `POST /v1/mcp_events`: every field an event sends is in the golden event of its type and status, with the same
- * type, and the required fields are there. `exact` also requires every golden field to be sent.
+ * `POST /v1/mcp_events`: every field an event sends is in a golden event of its type (and, for a tool call, its
+ * status), with the same type, and the required fields are there. `exact` requires a golden event with exactly the
+ * event's fields.
  */
 function expectGoldenShape(bodies: ReportBody[], { exact = false } = {}) {
   expect(bodies.length).toBeGreaterThan(0);
@@ -75,16 +79,20 @@ function expectGoldenShape(bodies: ReportBody[], { exact = false } = {}) {
     expect(Object.keys(body).sort()).toEqual(Object.keys(golden).sort());
     expect(typesOf(body.sdk)).toEqual(typesOf(golden.sdk));
     for (const event of body.events) {
-      const match = golden.events.find(
-        (candidate) => candidate.type === event.type && candidate.status === event.status,
+      const keys = Object.keys(event);
+      const match = (golden.events as Record<string, unknown>[]).find(
+        (candidate) =>
+          candidate.type === event.type &&
+          (event.type !== 'tool_call' || candidate.status === event.status) &&
+          (exact
+            ? Object.keys(candidate).sort().join() === [...keys].sort().join()
+            : keys.every((key) => key in candidate)),
       );
-      expect(
-        match,
-        `a golden ${String(event.type)} event with status ${String(event.status)}`,
-      ).toBeDefined();
-      if (exact) expect(typesOf(event)).toEqual(typesOf(match!));
-      else expect(typesOf(match!)).toMatchObject(typesOf(event));
-      expect(Object.keys(event)).toEqual(expect.arrayContaining(REQUIRED_TOOL_CALL_FIELDS));
+      expect(match, `a golden event with the fields of ${JSON.stringify(event)}`).toBeDefined();
+      expect(typesOf(match!)).toMatchObject(typesOf(event));
+      expect(keys).toEqual(
+        expect.arrayContaining(REQUIRED_FIELDS[String(event.type)] ?? ['unknown type']),
+      );
     }
   }
 }
@@ -1010,3 +1018,294 @@ describe('tool call reports', () => {
     expect(normalizeIpAddress(input)).toBe(expected);
   });
 });
+
+const REJECTED_TOKEN = 'rejected-token-4f9a';
+const VERIFIER_MESSAGE = 'JWT signature for user_2xhFjEI5X2qWRvtV13BzSj8H6Dk is invalid';
+const OTHER_RESOURCE_URL = 'https://mcp.example.org/mcp';
+
+// Accepts `token`, with only the `profile` scope, and rejects any other token as Clerk does
+const rejectingClerkClient = {
+  authenticateRequest: async (request: Request) =>
+    request.headers.get('authorization') === 'Bearer token'
+      ? clerkClient.authenticateRequest()
+      : {
+          isAuthenticated: false as const,
+          reason: 'token-invalid',
+          message: VERIFIER_MESSAGE,
+        },
+};
+
+type AuthFailureAdapter = 'hono' | 'express' | 'next';
+
+/**
+ * Serves `sdkV2Handler()` through the adapter's `clerkInstrumentHandler`, and sends one request to it.
+ * @returns The response's status, `WWW-Authenticate` header and body, and how many times the request was received:
+ * Node.js's `fetch` sends a request again after a 421
+ */
+async function sendToAdapter(
+  adapter: AuthFailureAdapter,
+  options: Record<string, unknown>,
+  url: string,
+  init: RequestInit,
+) {
+  const handlerOptions = {
+    resourceUrl: RESOURCE_URL,
+    clerkClient: rejectingClerkClient,
+    ...options,
+  };
+  let received = 0;
+  const read = async (response: Response) => ({
+    status: response.status,
+    challenge: response.headers.get('www-authenticate'),
+    body: await response.text(),
+    received: Math.max(received, 1),
+  });
+  if (adapter === 'hono') {
+    const app = honoApp(sdkV2Handler(), handlerOptions as Partial<honoAdapter.McpAuthOptions>);
+    const answer = await read(await app.fetch(url, init));
+    await app.settled();
+    return answer;
+  }
+  if (adapter === 'next') {
+    const route = nextAdapter.clerkInstrumentHandler(
+      sdkV2Handler(),
+      handlerOptions as nextAdapter.McpAuthOptions,
+    );
+    return read(await route(new Request(url, withUserAgent(init))));
+  }
+  const app = express();
+  app.use((_req, _res, next) => {
+    received++;
+    next();
+  });
+  app.use(express.json());
+  app.all(
+    '/mcp',
+    expressAdapter.clerkInstrumentHandler(
+      sdkV2Handler(),
+      handlerOptions as expressAdapter.McpAuthOptions,
+    ),
+  );
+  // Express sees the request on its own loopback origin, which a list of resourceUrls doesn't have
+  return withListening(app, async (baseUrl) =>
+    read(await fetch(`${baseUrl}${new URL(url).pathname}`, withUserAgent(init))),
+  );
+}
+
+function authFailureInit(authorization: string | undefined, body?: unknown): RequestInit {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    'mcp-protocol-version': '2025-11-25',
+  };
+  if (authorization !== undefined) headers.authorization = authorization;
+  return {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(
+      body ?? {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'ping', arguments: {} },
+      },
+    ),
+  };
+}
+
+const ADDRESSES: Record<AuthFailureAdapter, Record<string, string>> = {
+  hono: { ip_address: '203.0.113.7' },
+  express: { ip_address: '127.0.0.1' },
+  next: {},
+};
+
+const IDENTITY = { user_id: USER_ID, client_id: CLIENT_ID, oauth_access_token_id: TOKEN_ID };
+
+describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
+  'auth failure reports from clerkInstrumentHandler on %s',
+  (adapter) => {
+    const reported = (sink: ReturnType<typeof reportSink>, count = 1) =>
+      vi.waitFor(() => expect(sink.calls()).toHaveLength(count), { timeout: 3000 });
+
+    test.each([
+      {
+        name: 'a request without a token',
+        authorization: undefined,
+        options: {},
+        url: RESOURCE_URL,
+        status: 401,
+        event: { reason: 'missing_token', http_status: 401 },
+      },
+      {
+        name: 'a request with a token Clerk rejected',
+        authorization: `Bearer ${REJECTED_TOKEN}`,
+        options: {},
+        url: RESOURCE_URL,
+        status: 401,
+        event: { reason: 'invalid_token', http_status: 401, verifier_code: 'token-invalid' },
+      },
+      {
+        name: 'a token without the required scopes',
+        authorization: 'Bearer token',
+        options: { requiredScopes: ['profile', 'admin'] },
+        url: RESOURCE_URL,
+        status: 403,
+        event: { reason: 'insufficient_scope', http_status: 403, ...IDENTITY },
+      },
+      {
+        name: 'a request to an origin no resourceUrl lists',
+        authorization: 'Bearer token',
+        options: { resourceUrl: [RESOURCE_URL, OTHER_RESOURCE_URL] },
+        url: 'https://mcp.example.net/mcp',
+        status: 421,
+        event: { reason: 'misdirected_request', http_status: 421 },
+      },
+    ])(
+      'reports $name, and answers it as before',
+      async ({ authorization, options, url, status, event }) => {
+        const sink = reportSink();
+        const answer = await sendToAdapter(
+          adapter,
+          { ...options, reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+          url,
+          authFailureInit(authorization),
+        );
+        const unreported = await sendToAdapter(
+          adapter,
+          options,
+          url,
+          authFailureInit(authorization),
+        );
+
+        expect(answer).toEqual(unreported);
+        expect(answer.status).toBe(status);
+        await reported(sink, answer.received);
+        expect(sink.calls()).toEqual(
+          Array.from({ length: answer.received }, () => ({
+            type: 'auth_failure',
+            occurred_at: expect.any(Number),
+            method: 'tools/call',
+            tool_name: 'ping',
+            user_agent: USER_AGENT,
+            ...ADDRESSES[adapter],
+            ...event,
+          })),
+        );
+        expectGoldenShape(sink.bodies, {
+          exact: adapter === 'hono' && (status === 403 || event.reason === 'invalid_token'),
+        });
+        const sent = JSON.stringify(sink.bodies);
+        expect(sent).not.toContain(REJECTED_TOKEN);
+        expect(sent).not.toContain(VERIFIER_MESSAGE);
+        expect(sent).not.toContain('"arguments"');
+      },
+    );
+
+    test('reports nothing when reporting is off', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      const answer = await sendToAdapter(adapter, {}, RESOURCE_URL, authFailureInit(undefined));
+
+      expect(answer.status).toBe(401);
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/v1/mcp_events')),
+      ).toEqual([]);
+    });
+
+    test('reports no method or tool name it cannot read, or that the Backend API would refuse', async () => {
+      const sink = reportSink();
+      const reporting = { fetch: sink.fetch, secretKey: SECRET_KEY };
+      const init = authFailureInit(undefined);
+      await sendToAdapter(adapter, { reporting }, RESOURCE_URL, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string>), 'content-type': 'text/plain' },
+        body: 'not json',
+      });
+      await sendToAdapter(
+        adapter,
+        { reporting },
+        RESOURCE_URL,
+        authFailureInit(undefined, {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'look up hunter2@example.com', arguments: {} },
+        }),
+      );
+      await sendToAdapter(
+        adapter,
+        { reporting },
+        RESOURCE_URL,
+        // Over the 64 KiB read for a failure, and under the 100 KB `express.json()` takes by default
+        authFailureInit(undefined, {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'ping', arguments: { padding: 'x'.repeat(80 * 1024) } },
+        }),
+      );
+
+      await reported(sink, 3);
+      const [unreadable, unnamed, tooLarge] = sink.calls();
+      expect(unreadable).not.toHaveProperty('method');
+      expect(unnamed).toMatchObject({ reason: 'missing_token', method: 'tools/call' });
+      expect(tooLarge).not.toHaveProperty('method');
+      for (const event of sink.calls()) expect(event).not.toHaveProperty('tool_name');
+      expect(JSON.stringify(sink.bodies)).not.toContain('hunter2');
+    });
+
+    test('reports the method of the first message in a batch, and leaves out a tool reporting.tools filters', async () => {
+      const sink = reportSink();
+      await sendToAdapter(
+        adapter,
+        {
+          reporting: {
+            fetch: sink.fetch,
+            secretKey: SECRET_KEY,
+            serverName: 'acme-mcp',
+            tools: (name: string) => name !== 'ping',
+          },
+        },
+        RESOURCE_URL,
+        authFailureInit(undefined, [
+          { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'ping', arguments: {} } },
+          { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+        ]),
+      );
+
+      await reported(sink);
+      expect(sink.calls()[0]).toMatchObject({ method: 'tools/call', server_name: 'acme-mcp' });
+      expect(sink.calls()[0]).not.toHaveProperty('tool_name');
+    });
+
+    test('reports no identity for a 403 when identity is off, or IP address and user agent when they are', async () => {
+      const sink = reportSink();
+      await sendToAdapter(
+        adapter,
+        {
+          requiredScopes: ['admin'],
+          reporting: {
+            fetch: sink.fetch,
+            secretKey: SECRET_KEY,
+            identity: false,
+            ipAddress: false,
+            userAgent: false,
+          },
+        },
+        RESOURCE_URL,
+        authFailureInit('Bearer token'),
+      );
+
+      await reported(sink);
+      expect(sink.calls()).toEqual([
+        {
+          type: 'auth_failure',
+          occurred_at: expect.any(Number),
+          reason: 'insufficient_scope',
+          http_status: 403,
+          method: 'tools/call',
+          tool_name: 'ping',
+        },
+      ]);
+    });
+  },
+);

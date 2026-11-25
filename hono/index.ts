@@ -27,10 +27,13 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import {
+  type AuthFailureAnswer,
   type ReportingOption,
+  AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
   checkToolCallContext,
   onResponseEnd,
+  reportAuthFailure,
   reportingKey,
   resolveReporting,
   withoutReporting,
@@ -386,10 +389,15 @@ export function mcpAuth(options: MiddlewareAuthOptions<Context>): MiddlewareHand
 
 /**
  * Verifies the request's token as `mcpAuth` does.
+ * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting
  * @returns The answer for a request that is not let through, or the auth info of one that is, also set as the
  * `mcpAuth` context variable: `undefined` for a request without a token that `publicAccess` let through
  */
-function honoAuthenticator(caller: string, options: MiddlewareAuthOptions<Context>) {
+function honoAuthenticator(
+  caller: string,
+  options: MiddlewareAuthOptions<Context>,
+  onFailure?: (c: Context, answer: AuthFailureAnswer) => Promise<void>,
+) {
   const authenticate = createBearerAuth(
     caller,
     options,
@@ -411,7 +419,17 @@ function honoAuthenticator(caller: string, options: MiddlewareAuthOptions<Contex
     });
     if ('serverError' in result) throw withJsonResponse(result.serverError);
     if (!result.ok) {
-      if (result.failure) c.set('mcpAuthFailure', result.failure);
+      if (result.failure) {
+        c.set('mcpAuthFailure', result.failure);
+        // Reporting must never change or fail the answer
+        try {
+          await onFailure?.(c, {
+            failure: result.failure,
+            status: result.status,
+            authInfo: result.authInfo,
+          });
+        } catch {}
+      }
       return c.json(result.body, { status: result.status, headers: result.headers });
     }
 
@@ -537,9 +555,10 @@ export function streamableHttpHandler<
  * to an origin no `resourceUrl` lists with a 421, recording the reason in the `mcpAuthFailure` context variable. A
  * request it lets through reaches `handler` with its auth info, which is also the `mcpAuth` context variable.
  *
- * With `reporting`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with the
- * `CLERK_SECRET_KEY` the app's environment has. On Cloudflare Workers the reports are sent with `waitUntil` once the
- * response is over; elsewhere they are sent in batches, about a second after a call or once 100 are waiting.
+ * With `reporting`, it reports to Clerk the tool calls of each server passed to `clerkInstrumentServer`, and each 401,
+ * 403 or 421 it answers, with the `CLERK_SECRET_KEY` the app's environment has. On Cloudflare Workers the reports are
+ * sent with `waitUntil` once the response is over; elsewhere they are sent in batches, about a second after a call or
+ * once 100 are waiting.
  * @param handler - The handler `createMcpHandler` from `@modelcontextprotocol/server` returns, or a function that
  * serves a web-standard request with the auth info
  * @param options - See `McpAuthOptions`. Without `clerkClient`, it builds one with `createClerkClient` from
@@ -586,7 +605,30 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
   const { reporting: reportingOption, ...authOptions } = options;
   assertMcpAuthOptions('clerkInstrumentHandler', authOptions);
   const reporting = resolveReporting<Context>('clerkInstrumentHandler', reportingOption);
-  const authenticate = honoAuthenticator('clerkInstrumentHandler', authOptions);
+  const authenticate = honoAuthenticator(
+    'clerkInstrumentHandler',
+    authOptions,
+    reporting &&
+      (async (c, answer) => {
+        const keys = env<ClerkEnv>(c);
+        const send = await reportAuthFailure({
+          caller: 'clerkInstrumentHandler',
+          reporting,
+          answer,
+          // A copy, and only with reporting on, so the request is untouched
+          readBody: async () =>
+            readJsonBody(await requestWithBody(c), undefined, AUTH_FAILURE_BODY_LIMIT),
+          request: c,
+          defaultIpAddress: () => honoIpAddress(c),
+          userAgent: () => c.req.header('user-agent'),
+          env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
+        });
+        if (!send) return;
+        try {
+          c.executionCtx.waitUntil(send());
+        } catch {}
+      }),
+  );
 
   return async (c: Context): Promise<Response> => {
     const authenticated = await authenticate(c);

@@ -1,6 +1,7 @@
 // Reports MCP tool calls to the Clerk Backend API. Not a package entry point.
 import { version } from './package.json';
 import type { AuthInfo } from './mcp-types';
+import type { McpAuthFailure } from './server';
 import {
   IDENTIFIER_PATTERN,
   createBackendApiClient,
@@ -65,9 +66,9 @@ export type ReportingOptions<Req = never> = {
 export type ReportingOption<Req> = {
   /**
    * Reports each tool call that `clerkInstrumentHandler` authenticated and a `clerkInstrumentServer` server answered
-   * to Clerk, where it shows up in the instance's MCP analytics and audit log. `true` reports with the defaults of
-   * `ReportingOptions`, and an options object turns individual fields off. Off by default. Calls without a
-   * token, which `publicAccess` lets through, are not reported.
+   * to Clerk, where it shows up in the instance's MCP analytics and audit log, and each request it answered with a
+   * 401, 403 or 421. `true` reports with the defaults of `ReportingOptions`, and an options object turns individual
+   * fields off. Off by default. Calls without a token, which `publicAccess` lets through, are not reported.
    */
   reporting?: boolean | ReportingOptions<Req> | undefined;
 };
@@ -101,6 +102,8 @@ const reportingKeys: ReadonlySet<string> = new Set<keyof ReportingOptions>([
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_./-]{1,128}$/;
 const SERVER_NAME_PATTERN = /^[A-Za-z0-9 _.:@/-]{1,128}$/;
 const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+const METHOD_PATTERN = /^[A-Za-z0-9_./-]{1,64}$/;
+const VERIFIER_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MAX_ERROR_CODE_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
@@ -222,7 +225,16 @@ type ToolCallEvent = McpEventBase & {
   handler_ms?: number;
 };
 
-type McpEvent = ToolCallEvent;
+type AuthFailureEvent = McpEventBase & {
+  type: 'auth_failure';
+  reason: McpAuthFailure['reason'];
+  http_status: number;
+  verifier_code?: string;
+  method?: string;
+  tool_name?: string;
+};
+
+type McpEvent = ToolCallEvent | AuthFailureEvent;
 
 type RequestDetails = Pick<
   McpEventBase,
@@ -394,6 +406,112 @@ export function beginToolCallContext<Req>({
 }
 
 /**
+ * The largest body, in bytes, read from a request that failed authentication for its JSON-RPC method and tool name. A
+ * larger one is reported without them.
+ */
+export const AUTH_FAILURE_BODY_LIMIT = 64 * 1024;
+
+/**
+ * Why `clerkInstrumentHandler` answered a request with a 401, 403 or 421, and, for a 403, the auth info of the token
+ * that lacked the scopes.
+ */
+export type AuthFailureAnswer = {
+  failure: McpAuthFailure;
+  status: number;
+  authInfo: AuthInfo | undefined;
+};
+
+/**
+ * Reports a request that failed authentication, with the JSON-RPC method and tool name of its first message when
+ * `readBody` can read them. Identity is sent only for the token of a 403, and only when Clerk verified it. It never
+ * throws, so the answer to the request is the same with reporting on or off.
+ * @param readBody - Reads the JSON body without consuming the request, up to `AUTH_FAILURE_BODY_LIMIT` bytes
+ * @returns A function that sends the report, for the adapter to keep the runtime alive with, or `undefined` when
+ * nothing was reported
+ */
+export async function reportAuthFailure<Req>({
+  caller,
+  reporting,
+  answer,
+  readBody,
+  request,
+  defaultIpAddress,
+  userAgent,
+  env,
+}: {
+  caller: string;
+  reporting: ToolCallReporting<Req> | undefined;
+  answer: AuthFailureAnswer;
+  readBody: () => unknown;
+  request: Req;
+  defaultIpAddress: () => string | null | undefined;
+  userAgent: () => string | null | undefined;
+  env: { secretKey: string | undefined; apiUrl: string | undefined };
+}): Promise<(() => Promise<void>) | undefined> {
+  if (!reporting) return undefined;
+  try {
+    const reporter = reporterFor(caller, reporting, env);
+    if (!reporter) return undefined;
+    const occurredAt = Date.now();
+    const { failure, status, authInfo } = answer;
+    let body: unknown;
+    try {
+      body = await readBody();
+    } catch {}
+    const first = (Array.isArray(body) ? body[0] : body) as
+      | { method?: unknown; params?: { name?: unknown } | null }
+      | null
+      | undefined;
+    const method = typeof first?.method === 'string' ? first.method : undefined;
+    const toolName =
+      method === 'tools/call' && typeof first?.params?.name === 'string'
+        ? first.params.name
+        : undefined;
+    const code = failure.cause?.code;
+    const { serverName } = reporting;
+    reporter.enqueue({
+      type: 'auth_failure',
+      occurred_at: occurredAt,
+      ...(serverName !== undefined &&
+        SERVER_NAME_PATTERN.test(serverName) && { server_name: serverName }),
+      reason: failure.reason,
+      http_status: status,
+      // A verifier's code is an identifier, such as `token-expired`, never its message
+      ...(typeof code === 'string' && VERIFIER_CODE_PATTERN.test(code) && { verifier_code: code }),
+      ...(method !== undefined && METHOD_PATTERN.test(method) && { method }),
+      ...(toolName !== undefined &&
+        isReportedTool(caller, reporting, toolName) && { tool_name: toolName }),
+      ...requestDetails(
+        caller,
+        reporting,
+        status === 403 ? authInfo : undefined,
+        request,
+        defaultIpAddress,
+        userAgent,
+      ),
+    });
+    return () => reporter.flush();
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether `reporting.tools` lets a tool's name be reported. A name the Backend API would refuse never is.
+function isReportedTool<Req>(caller: string, reporting: ToolCallReporting<Req>, toolName: string) {
+  if (!TOOL_NAME_PATTERN.test(toolName)) return false;
+  if (!reporting.tools) return true;
+  try {
+    return reporting.tools(toolName);
+  } catch (error) {
+    warnOnce(
+      'tools-threw',
+      `Clerk warning: ${caller} reporting.tools threw ${safeErrorName(error)}, so an auth failure was reported without the name of ${toolName}`,
+    );
+    return false;
+  }
+}
+
+/**
  * Warns once when a POST that reached the handler and succeeded never reached an instrumented server, the sign of a
  * server created without `clerkInstrumentServer`. A `subscriptions/listen` stream never connects a server.
  */
@@ -430,7 +548,7 @@ export function warnOutsideInstrumentHandler() {
 function requestDetails<Req>(
   caller: string,
   reporting: ToolCallReporting<Req>,
-  authInfo: AuthInfo,
+  authInfo: AuthInfo | undefined,
   request: Req,
   defaultIpAddress: () => string | null | undefined,
   userAgent: () => string | null | undefined,
@@ -438,6 +556,7 @@ function requestDetails<Req>(
   const details: RequestDetails = {};
   if (
     reporting.identity &&
+    authInfo &&
     hasClerkVerification(authInfo) &&
     authInfo.extra?.verifiedBy === 'clerk'
   ) {

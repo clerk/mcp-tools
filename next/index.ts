@@ -23,10 +23,13 @@ import {
 } from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 import {
+  type AuthFailureAnswer,
   type ReportingOption,
+  AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
   checkToolCallContext,
   onResponseEnd,
+  reportAuthFailure,
   reportingKey,
   resolveReporting,
   withoutReporting,
@@ -331,6 +334,7 @@ export function withClerkMcpAuth(
 
 /**
  * Verifies the request's token as `withClerkMcpAuth` does.
+ * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting
  * @returns The answer for a request that is not let through, or the auth info of one that is, also set on `req.auth`:
  * `undefined` for a request without a token that `publicAccess` let through
  */
@@ -338,6 +342,7 @@ function nextAuthenticator(
   caller: string,
   shortName: string,
   options: McpAuthFailureOption & MiddlewareAuthOptions<Request>,
+  onFailure?: (req: Request, answer: AuthFailureAnswer) => Promise<void>,
 ) {
   const authenticate = createBearerAuth(
     caller,
@@ -366,6 +371,14 @@ function nextAuthenticator(
         try {
           // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
           void Promise.resolve(options.onAuthFailure?.(result.failure, req)).catch(() => {});
+        } catch {}
+        // Reporting must never change or fail the answer
+        try {
+          await onFailure?.(req, {
+            failure: result.failure,
+            status: result.status,
+            authInfo: result.authInfo,
+          });
         } catch {}
       }
       return Response.json(result.body, result);
@@ -418,9 +431,9 @@ const clerkInstrumentHandlerCallForm =
  * `handler` with its auth info, also set on `req.auth`, where `mcp-handler` reads it. Tools read it as
  * `ctx.http?.authInfo`.
  *
- * With `reporting`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk, with
- * `CLERK_SECRET_KEY`. The reports are sent with `after()` from `next/server` once the response is over, so serverless
- * functions keep running until they are sent.
+ * With `reporting`, it reports to Clerk the tool calls of each server passed to `clerkInstrumentServer`, and each 401,
+ * 403 or 421 it answers, with `CLERK_SECRET_KEY`. The reports are sent with `after()` from `next/server` once the
+ * response is over, so serverless functions keep running until they are sent.
  * @param handler - The route handler `createMcpHandler` from `mcp-handler` returns, the handler `createMcpHandler` from
  * `@modelcontextprotocol/server` returns, or a function of the request and its auth info
  * @param options - See `McpAuthOptions`. `clerkClient` defaults to `clerkClient` from `@clerk/nextjs/server`.
@@ -471,6 +484,21 @@ export function clerkInstrumentHandler(
     'clerkInstrumentHandler from @clerk/mcp-tools/next',
     'clerkInstrumentHandler',
     authOptions,
+    reporting &&
+      (async (req, answer) => {
+        const send = await reportAuthFailure({
+          caller: 'clerkInstrumentHandler',
+          reporting,
+          answer,
+          // A copy, and only with reporting on, so the route handler's request is untouched
+          readBody: () => readJsonBody(req, undefined, AUTH_FAILURE_BODY_LIMIT),
+          request: req,
+          defaultIpAddress: () => (process.env.VERCEL ? req.headers.get('x-real-ip') : undefined),
+          userAgent: () => req.headers.get('user-agent'),
+          env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
+        });
+        if (send) await keepAlive(send());
+      }),
   );
 
   return async (req) => {

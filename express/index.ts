@@ -20,9 +20,12 @@ import {
   UnreadableBodyError,
 } from '../bearer-auth';
 import {
+  type AuthFailureAnswer,
   type ReportingOption,
+  AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
   checkToolCallContext,
+  reportAuthFailure,
   reportingKey,
   resolveReporting,
   withoutReporting,
@@ -152,10 +155,15 @@ export function mcpAuth(options: MiddlewareAuthOptions<express.Request>) {
 
 /**
  * Verifies the request's token as `mcpAuth` does, answering the request itself when it is not let through.
+ * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting
  * @returns Whether the request was let through, with `req.auth` set to its auth info, or `undefined` for a request
  * without a token that `publicAccess` let through
  */
-function expressAuthenticator(caller: string, options: MiddlewareAuthOptions<express.Request>) {
+function expressAuthenticator(
+  caller: string,
+  options: MiddlewareAuthOptions<express.Request>,
+  onFailure?: (req: express.Request, answer: AuthFailureAnswer) => Promise<void>,
+) {
   const authenticate = createBearerAuth(
     caller,
     options,
@@ -184,7 +192,17 @@ function expressAuthenticator(caller: string, options: MiddlewareAuthOptions<exp
       return undefined;
     }
     if (!result.ok) {
-      if (result.failure) res.locals.mcpAuthFailure = result.failure;
+      if (result.failure) {
+        res.locals.mcpAuthFailure = result.failure;
+        // Reporting must never change or fail the answer
+        try {
+          await onFailure?.(req, {
+            failure: result.failure,
+            status: result.status,
+            authInfo: result.authInfo,
+          });
+        } catch {}
+      }
       res.status(result.status).set(result.headers).json(result.body);
       return undefined;
     }
@@ -248,6 +266,18 @@ function parsedJsonBody(req: express.Request, caller: string): unknown {
   const size =
     declared === undefined ? Buffer.byteLength(JSON.stringify(req.body)) : Number(declared);
   return size > PUBLIC_BODY_LIMIT ? undefined : req.body;
+}
+
+/**
+ * The JSON body `express.json()` parsed for a request that failed authentication, for its JSON-RPC method and tool
+ * name. The stream is never read here, and a body over `AUTH_FAILURE_BODY_LIMIT` bytes is left out.
+ */
+function failedRequestBody(req: express.Request): unknown {
+  if (!req.is('application/json') || req.body === undefined) return undefined;
+  const declared = req.get('content-length');
+  const size =
+    declared === undefined ? Buffer.byteLength(JSON.stringify(req.body)) : Number(declared);
+  return size > AUTH_FAILURE_BODY_LIMIT ? undefined : req.body;
 }
 
 /**
@@ -554,9 +584,9 @@ type NodeMcpHandler = (
  * to an origin no `resourceUrl` lists with a 421, recording the reason on `res.locals.mcpAuthFailure`. A request it
  * lets through reaches `handler` with its auth info on `req.auth`, where MCP SDK transports read it.
  *
- * With `reporting`, it reports the tool calls of each server passed to `clerkInstrumentServer` to Clerk. Reports
- * are sent in batches, about a second after a call or once 100 are waiting, with the `CLERK_SECRET_KEY` the app's
- * environment has.
+ * With `reporting`, it reports to Clerk the tool calls of each server passed to `clerkInstrumentServer`, and each 401,
+ * 403 or 421 it answers. Reports are sent in batches, about a second after a call or once 100 are waiting, with the
+ * `CLERK_SECRET_KEY` the app's environment has.
  * @param handler - The handler `createMcpHandler` from `@modelcontextprotocol/server` returns, which needs
  * `@modelcontextprotocol/node` installed, or an Express handler of your own
  * @param options - See `McpAuthOptions`. `clerkClient` defaults to `clerkClient` from `@clerk/express`, which reads
@@ -604,7 +634,24 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
   const { reporting: reportingOption, ...authOptions } = options;
   assertMcpAuthOptions('clerkInstrumentHandler', authOptions);
   const reporting = resolveReporting<express.Request>('clerkInstrumentHandler', reportingOption);
-  const authenticate = expressAuthenticator('clerkInstrumentHandler', authOptions);
+  const authenticate = expressAuthenticator(
+    'clerkInstrumentHandler',
+    authOptions,
+    reporting &&
+      (async (req, answer) => {
+        // Sent on the reporter's timer, or before Node.js exits
+        await reportAuthFailure({
+          caller: 'clerkInstrumentHandler',
+          reporting,
+          answer,
+          readBody: () => failedRequestBody(req),
+          request: req,
+          defaultIpAddress: () => req.ip,
+          userAgent: () => req.get('user-agent'),
+          env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
+        });
+      }),
+  );
   let nodeHandler: Promise<NodeMcpHandler> | undefined;
 
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {

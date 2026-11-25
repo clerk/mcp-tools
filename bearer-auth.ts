@@ -203,12 +203,14 @@ const protectedResourceMetadataOptionKeys: ReadonlySet<string> = new Set([
 
 // What `bearerAuthenticator` decides for a request: let it through, with `authInfo` `undefined` for a request without
 // a token that `publicAccess` let through, or answer it. `failure` is `undefined` only for the 400 to a request
-// without a URL and the 405 to a GET on a server whose handshake is public, which are not auth failures.
+// without a URL and the 405 to a GET on a server whose handshake is public, which are not auth failures. A 403 keeps
+// the verified `authInfo` of the token that lacked the scopes, for reporting; it is never passed to the handler.
 type BearerResult =
   | { ok: true; authInfo: (AuthInfo & { resourceMetadataUrl: string }) | undefined }
   | {
       ok: false;
       failure: McpAuthFailure | undefined;
+      authInfo?: AuthInfo | undefined;
       status: 400 | 401 | 403 | 405 | 421;
       headers: Record<string, string>;
       body: typeof methodNotAllowed.body | { error: string };
@@ -462,23 +464,25 @@ export class UnreadableBodyError extends Error {
 
 /**
  * Reads the JSON body of a request without consuming it, for the `publicAccess` check, so that the MCP transport can
- * still read the request afterwards. It reads a clone, and stops at `PUBLIC_BODY_LIMIT` bytes. Only a body sent as
+ * still read the request afterwards. It reads a clone, and stops at `limit` bytes. Only a body sent as
  * `application/json` is read, the one media type the streamable HTTP transport takes a POST in, which is also what
  * `express.json()` parses for the Express adapter.
  * @param request - The incoming request
  * @param unreadable - The warning for a body that was already read, naming the fix in the caller's terms
+ * @param limit - The most bytes to read, `PUBLIC_BODY_LIMIT` by default
  * @returns The parsed body, or `undefined` when there is none, it is over the limit, or it is not JSON. It throws an
  * `UnreadableBodyError` with `unreadable` when the body was already read, since a request can't be cloned after that.
  */
 export async function readJsonBody(
   request: Request,
   unreadable = UNREADABLE_BODY_WARNING,
+  limit = PUBLIC_BODY_LIMIT,
 ): Promise<unknown> {
   const [mediaType = ''] = (request.headers.get('content-type') ?? '').split(';');
   if (mediaType.trim().toLowerCase() !== 'application/json') return undefined;
   if (request.bodyUsed) throw new UnreadableBodyError(unreadable);
   // `Number(null)` is 0, so a request without the header goes on to the counted read below
-  if (Number(request.headers.get('content-length')) > PUBLIC_BODY_LIMIT) return undefined;
+  if (Number(request.headers.get('content-length')) > limit) return undefined;
   const reader = request.clone().body?.getReader();
   if (!reader) return undefined;
 
@@ -488,7 +492,7 @@ export async function readJsonBody(
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > PUBLIC_BODY_LIMIT) {
+    if (size > limit) {
       // Not awaited: cancelling one half of a cloned body only settles once the other half is cancelled as well,
       // and that half belongs to the request the challenge is about to answer
       void reader.cancel().catch(() => undefined);
@@ -1197,6 +1201,7 @@ export function bearerAuthenticator({
         403,
         'insufficient_scope',
         bearerChallenge({ resourceMetadataUrl, error: 'insufficient_scope', scopes }),
+        authInfo,
       );
     }
 
@@ -1229,10 +1234,12 @@ function fail(
   status: 401 | 403 | 421,
   error: string,
   challenge?: string,
+  authInfo?: AuthInfo,
 ): BearerResult {
   return {
     ok: false,
     failure,
+    ...(authInfo && { authInfo }),
     status,
     headers: challenge ? { 'WWW-Authenticate': challenge } : {},
     body: { error },
