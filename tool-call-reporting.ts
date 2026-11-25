@@ -1,7 +1,12 @@
 // Reports MCP tool calls to the Clerk Backend API. Not a package entry point.
 import { version } from './package.json';
 import type { AuthInfo } from './mcp-types';
-import { createBackendApiClient, parseAllowedUrl, safeErrorName } from './backend-api';
+import {
+  IDENTIFIER_PATTERN,
+  createBackendApiClient,
+  parseAllowedUrl,
+  safeErrorName,
+} from './backend-api';
 import { hasClerkVerification } from './clerk-auth-info';
 import { ERROR_CODE_META_KEY } from './mcp-tool';
 
@@ -96,6 +101,7 @@ const reportingKeys: ReadonlySet<string> = new Set<keyof ReportingOptions>([
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_./-]{1,128}$/;
 const SERVER_NAME_PATTERN = /^[A-Za-z0-9 _.:@/-]{1,128}$/;
 const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+const MAX_ERROR_CODE_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
 const MAX_USER_AGENT_LENGTH = 512;
@@ -213,6 +219,7 @@ type ToolCallEvent = McpEventBase & {
   status: 'success' | 'error';
   error_code?: string;
   duration_ms: number;
+  handler_ms?: number;
 };
 
 type McpEvent = ToolCallEvent;
@@ -240,7 +247,14 @@ export type ToolCallContext = {
   startToolCall(
     toolName: string,
     serverName: string | undefined,
+    requestKey?: string | undefined,
   ): ((outcome: ToolCallOutcome) => void) | undefined;
+  /**
+   * Starts timing the handler of the call with `requestKey`, for that call's report.
+   * @returns A function to call once the handler returns, with the error it threw, if any. A thrown error makes the
+   * call an error with the code `thrown:<name>`, whatever the response says.
+   */
+  startHandler(requestKey: string): (thrown: { error: unknown } | undefined) => void;
   /**
    * Sends every report that is waiting, including other requests'.
    */
@@ -264,6 +278,21 @@ function warnOnce(key: string, message: string) {
 }
 
 const now = () => globalThis.performance?.now() ?? Date.now();
+
+const elapsedMs = (startedAt: number) =>
+  Math.min(Math.max(Math.round(now() - startedAt), 0), MAX_DURATION_MS);
+
+type HandlerRecord = { handlerMs: number; thrownErrorCode: string | undefined };
+
+/**
+ * The error code of a handler that threw `error`: `thrown:` and the error's `name`, never its message. A value that is
+ * not an `Error`, or a name that is not a plain identifier, is `thrown:unknown`.
+ */
+export function thrownErrorCode(error: unknown): string {
+  const name =
+    error instanceof Error && IDENTIFIER_PATTERN.test(error.name) ? error.name : 'unknown';
+  return `thrown:${name}`.slice(0, MAX_ERROR_CODE_LENGTH);
+}
 
 /**
  * Creates the request's context and links it to `authInfo`, the object the handler passes to the transport, so that
@@ -292,9 +321,10 @@ export function beginToolCallContext<Req>({
     reporter &&
     reporting &&
     requestDetails(caller, reporting, authInfo, request, defaultIpAddress, userAgent);
+  const handlers = new Map<string, HandlerRecord>();
   const context: ToolCallContext = {
     connected: false,
-    startToolCall(toolName, serverName) {
+    startToolCall(toolName, serverName, requestKey) {
       if (!reporter || !reporting || !details) return undefined;
       if (reporting.tools) {
         try {
@@ -317,7 +347,11 @@ export function beginToolCallContext<Req>({
       const name = reporting.serverName ?? serverName;
       const occurredAt = Date.now();
       const startedAt = now();
-      return ({ status, errorCode }) => {
+      return (outcome) => {
+        const handler = requestKey === undefined ? undefined : handlers.get(requestKey);
+        if (requestKey !== undefined) handlers.delete(requestKey);
+        const status = handler?.thrownErrorCode === undefined ? outcome.status : 'error';
+        const errorCode = handler?.thrownErrorCode ?? outcome.errorCode;
         reporter.enqueue({
           type: 'tool_call',
           occurred_at: occurredAt,
@@ -327,8 +361,19 @@ export function beginToolCallContext<Req>({
           ...(status === 'error' &&
             errorCode !== undefined &&
             ERROR_CODE_PATTERN.test(errorCode) && { error_code: errorCode }),
-          duration_ms: Math.min(Math.max(Math.round(now() - startedAt), 0), MAX_DURATION_MS),
+          duration_ms: elapsedMs(startedAt),
+          ...(handler && { handler_ms: handler.handlerMs }),
           ...details,
+        });
+      };
+    },
+    startHandler(requestKey) {
+      const startedAt = now();
+      return (thrown) => {
+        if (!reporter) return;
+        handlers.set(requestKey, {
+          handlerMs: elapsedMs(startedAt),
+          thrownErrorCode: thrown && thrownErrorCode(thrown.error),
         });
       };
     },

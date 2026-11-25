@@ -162,6 +162,7 @@ const expectedCalls = (overrides: Record<string, unknown> = {}) => [
     server_name: 'acme-mcp',
     status: 'success',
     duration_ms: expect.any(Number),
+    handler_ms: expect.any(Number),
     occurred_at: expect.any(Number),
     user_id: USER_ID,
     client_id: CLIENT_ID,
@@ -176,6 +177,7 @@ const expectedCalls = (overrides: Record<string, unknown> = {}) => [
     status: 'error',
     error_code: 'upstream_timeout',
     duration_ms: expect.any(Number),
+    handler_ms: expect.any(Number),
     occurred_at: expect.any(Number),
     user_id: USER_ID,
     client_id: CLIENT_ID,
@@ -270,6 +272,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
         server_name: 'acme-production',
         status: 'success',
         duration_ms: expect.any(Number),
+        handler_ms: expect.any(Number),
         occurred_at: expect.any(Number),
       },
     ]);
@@ -541,6 +544,212 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
         reporting: true,
       } as nextAdapter.McpAuthOptions),
     ).toThrow('Clerk error: withClerkMcpAuth cannot report tool calls');
+  });
+});
+
+const THROWN_TEXT = 'connection to db.internal refused for hunter2';
+const RETURNED_TEXT = 'order 4411 belongs to another customer';
+const FAILING_TOOLS = ['crash', 'crash_with_string', 'reject'];
+
+type FailingToolServer = Pick<McpServer, 'registerTool'> | Pick<McpServerV2, 'registerTool'>;
+
+function registerFailingTools(server: FailingToolServer) {
+  const register = server.registerTool.bind(server) as McpServer['registerTool'];
+  register('crash', { description: 'Throws an error' }, async () => {
+    throw new TypeError(THROWN_TEXT);
+  });
+  register('crash_with_string', { description: 'Throws a string' }, async () => {
+    throw THROWN_TEXT;
+  });
+  register('reject', { description: 'Returns an error' }, async () => ({
+    isError: true,
+    content: [{ type: 'text', text: RETURNED_TEXT }],
+  }));
+}
+
+function sdkV1ExpressApp(setup: (server: McpServer) => void, sink: ReturnType<typeof reportSink>) {
+  const app = express();
+  app.use(express.json());
+  app.all(
+    '/mcp',
+    expressAdapter.clerkInstrumentHandler(
+      async (req, res) => {
+        const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
+        setup(server);
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        res.on('close', () => void transport.close());
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      },
+      {
+        resourceUrl: RESOURCE_URL,
+        clerkClient,
+        reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      },
+    ),
+  );
+  return app;
+}
+
+async function callFailingTools(
+  fetchApp: (input: string | URL, init?: RequestInit) => Promise<Response>,
+  mcpUrl = RESOURCE_URL,
+) {
+  const { client, connected } = connectOAuthClient(new URL(mcpUrl), fetchApp, 'token');
+  await connected;
+  for (const name of FAILING_TOOLS) {
+    expect(await client.callTool({ name })).toMatchObject({ isError: true });
+  }
+  await client.close();
+}
+
+const outcomesOf = (sink: ReturnType<typeof reportSink>) =>
+  sink.calls().map(({ tool_name, status, error_code, handler_ms }) => ({
+    tool_name,
+    status,
+    error_code,
+    handler_ms,
+  }));
+
+const instrumentedOutcomes = [
+  {
+    tool_name: 'crash',
+    status: 'error',
+    error_code: 'thrown:TypeError',
+    handler_ms: expect.any(Number),
+  },
+  {
+    tool_name: 'crash_with_string',
+    status: 'error',
+    error_code: 'thrown:unknown',
+    handler_ms: expect.any(Number),
+  },
+  { tool_name: 'reject', status: 'error', error_code: undefined, handler_ms: expect.any(Number) },
+];
+
+function expectNoErrorText(sink: ReturnType<typeof reportSink>) {
+  const sent = JSON.stringify(sink.bodies);
+  expect(sent).not.toContain(THROWN_TEXT);
+  expect(sent).not.toContain('hunter2');
+  expect(sent).not.toContain(RETURNED_TEXT);
+}
+
+describe('tool handler outcomes', () => {
+  test('tell a thrown error from a returned one, with the handler time, on MCP SDK 2.x', async () => {
+    const sink = reportSink();
+    const app = honoApp(
+      createMcpHandler(() => {
+        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+        clerkInstrumentServer(server);
+        registerFailingTools(server);
+        return server;
+      }),
+      { reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+    );
+
+    await callFailingTools(app.fetch);
+    await app.settled();
+
+    expect(outcomesOf(sink)).toEqual(instrumentedOutcomes);
+    expectGoldenShape(sink.bodies);
+    expectNoErrorText(sink);
+  });
+
+  test('tell a thrown error from a returned one for registerTool on MCP SDK 1.x', async () => {
+    const sink = reportSink();
+    const app = sdkV1ExpressApp((server) => {
+      clerkInstrumentServer(server);
+      registerFailingTools(server);
+    }, sink);
+
+    await withListening(app, (baseUrl) => callFailingTools(fetch, `${baseUrl}/mcp`));
+
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(3), { timeout: 3000 });
+    expect(outcomesOf(sink)).toEqual(instrumentedOutcomes);
+    expectGoldenShape(sink.bodies);
+    expectNoErrorText(sink);
+  });
+
+  test('tell a thrown error from a returned one for tool on MCP SDK 1.x', async () => {
+    const sink = reportSink();
+    const app = sdkV1ExpressApp((server) => {
+      clerkInstrumentServer(server);
+      server.tool('crash', async () => {
+        throw new TypeError(THROWN_TEXT);
+      });
+      server.tool('crash_with_string', 'Throws a string', async () => {
+        throw THROWN_TEXT;
+      });
+      server.tool('reject', async () => ({
+        isError: true,
+        content: [{ type: 'text', text: RETURNED_TEXT }],
+      }));
+    }, sink);
+
+    await withListening(app, (baseUrl) => callFailingTools(fetch, `${baseUrl}/mcp`));
+
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(3), { timeout: 3000 });
+    expect(outcomesOf(sink)).toEqual(instrumentedOutcomes);
+    expectNoErrorText(sink);
+  });
+
+  test('report tools registered before clerkInstrumentServer from the response alone', async () => {
+    const sink = reportSink();
+    const app = honoApp(
+      createMcpHandler(() => {
+        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+        registerFailingTools(server);
+        clerkInstrumentServer(server);
+        return server;
+      }),
+      { reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+    );
+
+    await callFailingTools(app.fetch);
+    await app.settled();
+
+    expect(outcomesOf(sink)).toEqual(
+      FAILING_TOOLS.map((tool_name) => ({
+        tool_name,
+        status: 'error',
+        error_code: undefined,
+        handler_ms: undefined,
+      })),
+    );
+    expectGoldenShape(sink.bodies);
+    expectNoErrorText(sink);
+  });
+
+  test('time only the tools registered after clerkInstrumentServer on the same server', async () => {
+    const sink = reportSink();
+    const app = sdkV1ExpressApp((server) => {
+      server.registerTool('before', { description: 'Registered first' }, async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+      }));
+      clerkInstrumentServer(server);
+      server.registerTool('after', { description: 'Registered second' }, async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+      }));
+    }, sink);
+
+    await withListening(app, async (baseUrl) => {
+      const { client, connected } = connectOAuthClient(new URL(`${baseUrl}/mcp`), fetch, 'token');
+      await connected;
+      await client.callTool({ name: 'before' });
+      await client.callTool({ name: 'after' });
+      await client.close();
+    });
+
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(2), { timeout: 3000 });
+    expect(outcomesOf(sink)).toEqual([
+      { tool_name: 'before', status: 'success', error_code: undefined, handler_ms: undefined },
+      {
+        tool_name: 'after',
+        status: 'success',
+        error_code: undefined,
+        handler_ms: expect.any(Number),
+      },
+    ]);
   });
 });
 

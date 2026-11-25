@@ -15,7 +15,8 @@
       "user_agent": "claude-code/2.1.0",
       "tool_name": "ping",
       "status": "success",
-      "duration_ms": 12
+      "duration_ms": 12,
+      "handler_ms": 9
     },
     {
       "type": "tool_call",
@@ -29,7 +30,23 @@
       "tool_name": "fail",
       "status": "error",
       "error_code": "upstream_timeout",
-      "duration_ms": 30
+      "duration_ms": 30,
+      "handler_ms": 27
+    },
+    {
+      "type": "tool_call",
+      "occurred_at": 1795605600500,
+      "server_name": "acme-mcp",
+      "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "client_id": "Ab12Cd34Ef56Gh78",
+      "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "tool_name": "crash",
+      "status": "error",
+      "error_code": "thrown:TypeError",
+      "duration_ms": 8,
+      "handler_ms": 5
     }
   ]
 }

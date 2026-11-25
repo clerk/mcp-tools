@@ -388,7 +388,7 @@ Don't create the handler inside the route handler. MCP SDK 2.x counts the `subsc
 
 #### Reporting tool calls to Clerk
 
-With the `reporting` option of `clerkInstrumentHandler`, Clerk records each tool call your MCP server answers, for your instance's MCP analytics and audit log: the tool, the server, whether it succeeded and its error code, how long it took, and when, with the Clerk user, OAuth client, and access token of a token Clerk verified, and the client's IP address and `User-Agent`. Tool arguments and results are never sent. It is off by default.
+With the `reporting` option of `clerkInstrumentHandler`, Clerk records each tool call your MCP server answers, for your instance's MCP analytics and audit log: the tool, the server, whether it succeeded and its error code, how long it took and how much of that the tool's handler ran, and when, with the Clerk user, OAuth client, and access token of a token Clerk verified, and the client's IP address and `User-Agent`. Tool arguments and results are never sent. It is off by default.
 
 ```ts
 const mcpAuthOptions = {
@@ -404,7 +404,7 @@ function createServer() {
 }
 ```
 
-The route knows who made each request, and `clerkInstrumentServer` sees each tool call, so reporting needs both; a server missing either logs a one-time `Clerk warning:`. `reporting` also takes an options object that turns off the IP address, `User-Agent`, or identity, picks which tools are reported, and names the server. Reports are sent to the Backend API in batches, after the response, and a failure to send them never affects an MCP request. See [Express](./express/README.md#reporting-tool-calls), [Hono](./hono/README.md#reporting-tool-calls), or [Next.js](./next/README.md#reporting-tool-calls) for where each adapter reads the IP address and how it sends the reports.
+The route knows who made each request, and `clerkInstrumentServer` sees each tool call, so reporting needs both; a server missing either logs a one-time `Clerk warning:`. Call `clerkInstrumentServer` before registering tools: it wraps `registerTool`, and `tool` on MCP SDK 1.x, so that a handler that throws is reported with the error code `thrown:<name>`, the error's `name` and never its message, told apart from one that returns an `isError` result. A tool registered before the call, or whose callback is replaced with `update({ callback })`, is reported without its handler's time, and a throw from it looks like a returned error. `reporting` also takes an options object that turns off the IP address, `User-Agent`, or identity, picks which tools are reported, and names the server. Reports are sent to the Backend API in batches, after the response, and a failure to send them never affects an MCP request. See [Express](./express/README.md#reporting-tool-calls), [Hono](./hono/README.md#reporting-tool-calls), or [Next.js](./next/README.md#reporting-tool-calls) for where each adapter reads the IP address and how it sends the reports.
 
 #### Collecting feedback from agents
 

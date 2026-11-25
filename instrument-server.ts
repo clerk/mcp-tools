@@ -39,6 +39,12 @@ const observedTransports = new WeakSet<object>();
  * connects to, so it works the same with every MCP SDK version and with servers that `mcp-handler` creates. A tool
  * call that a request without `clerkInstrumentHandler` sends with auth info, such as through `mcpAuth`, logs a
  * one-time `Clerk warning:`.
+ *
+ * It also wraps `registerTool`, and `tool` on MCP SDK 1.x, on this server object, so each tool registered after it
+ * reports how long its handler ran, and reports a handler that threw as an error with the code `thrown:<name>`, the
+ * error's `name` and never its message. A tool registered before the call, or whose callback is replaced with
+ * `update({ callback })`, is still reported, without the handler's time, and a throw looks like a returned
+ * `isError` result.
  * @param server - An MCP SDK `McpServer` or low-level `Server`
  * @returns The same server
  * @example
@@ -69,7 +75,78 @@ export function clerkInstrumentServer<Server extends InstrumentableMcpServer>(
       observeTransport(transport, () => serverNameOf(server));
       return result;
     };
+  timeToolHandlers(server);
   return server;
+}
+
+type Callback = (this: unknown, ...args: unknown[]) => unknown;
+
+// The last argument of a tool handler: `extra` on MCP SDK 1.x, `ctx` on 2.x
+type HandlerExtra = {
+  requestId?: unknown;
+  authInfo?: unknown;
+  mcpReq?: { id?: unknown };
+  http?: { authInfo?: unknown };
+};
+
+// Wraps `registerTool`, on MCP SDK 1.x and 2.x, and `tool`, on 1.x, of this server object, so each handler registered
+// from now on records its time and whether it threw into the request's context. It only records: the report is
+// sent when the response passes through the transport, and a tool registered earlier is reported from that alone.
+function timeToolHandlers(server: object) {
+  const target = server as { registerTool?: unknown; tool?: unknown };
+  const { registerTool, tool } = target;
+  if (typeof registerTool === 'function') {
+    target.registerTool = function (this: unknown, ...args: unknown[]) {
+      args[2] = timedHandler(args[2]);
+      return (registerTool as Callback).apply(this, args);
+    };
+  }
+  if (typeof tool === 'function') {
+    target.tool = function (this: unknown, ...args: unknown[]) {
+      args[args.length - 1] = timedHandler(args[args.length - 1]);
+      return (tool as Callback).apply(this, args);
+    };
+  }
+}
+
+function timedHandler(callback: unknown): unknown {
+  if (typeof callback !== 'function') return callback;
+  return function (this: unknown, ...args: unknown[]) {
+    let finish: ((thrown: { error: unknown } | undefined) => void) | undefined;
+    try {
+      const extra = args[args.length - 1] as HandlerExtra | null | undefined;
+      const key = requestKey(extra?.requestId ?? extra?.mcpReq?.id);
+      const context = toolCallContextOf(extra?.authInfo ?? extra?.http?.authInfo);
+      if (context && key !== undefined) finish = context.startHandler(key);
+    } catch {}
+    if (!finish) return (callback as Callback).apply(this, args);
+    const done = (thrown: { error: unknown } | undefined) => {
+      try {
+        finish(thrown);
+      } catch {}
+    };
+    let result: unknown;
+    try {
+      result = (callback as Callback).apply(this, args);
+    } catch (error) {
+      done({ error });
+      throw error;
+    }
+    if (typeof (result as PromiseLike<unknown> | null)?.then !== 'function') {
+      done(undefined);
+      return result;
+    }
+    return (result as PromiseLike<unknown>).then(
+      (value) => {
+        done(undefined);
+        return value;
+      },
+      (error: unknown) => {
+        done({ error });
+        throw error;
+      },
+    );
+  };
 }
 
 // The name the server was created with. The MCP SDK keeps it on `_serverInfo` in 1.x and 2.x, which has no public
@@ -108,7 +185,7 @@ function observeTransport(transport: unknown, serverName: () => string | undefin
         if (!context) {
           if (extra?.authInfo !== undefined) warnOutsideInstrumentHandler();
         } else if (typeof toolName === 'string') {
-          const finish = context.startToolCall(toolName, serverName());
+          const finish = context.startToolCall(toolName, serverName(), key);
           if (finish) pending.set(key, finish);
         }
       }
