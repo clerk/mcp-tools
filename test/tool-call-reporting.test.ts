@@ -1245,6 +1245,120 @@ describe('request reports', () => {
     expect(JSON.stringify(sink.bodies)).not.toContain(PRIVATE_ID);
   });
 
+  test('time the resources and prompts registered with resource and prompt on MCP SDK 1.x', async () => {
+    const sink = reportSink();
+    const app = sdkV1ExpressApp((server) => {
+      clerkInstrumentServer(server);
+      server.resource('legacy-config', 'config://legacy', async (uri) => ({
+        contents: [{ uri: uri.href, text: RESOURCE_TEXT }],
+      }));
+      server.resource(
+        'legacy-customer',
+        new ResourceTemplate('legacy://{customerId}', { list: undefined }),
+        { mimeType: 'text/plain' },
+        async () => {
+          throw new RangeError(THROWN_TEXT);
+        },
+      );
+      server.prompt('legacy_greet', { name: z.string() }, ({ name }) => ({
+        messages: [{ role: 'user', content: { type: 'text', text: `Hello ${name}` } }],
+      }));
+      server.prompt('legacy_crash', () => {
+        throw new TypeError(THROWN_TEXT);
+      });
+    }, sink);
+
+    await withListening(app, async (baseUrl) => {
+      const { client, connected } = connectOAuthClient(
+        new URL(`${baseUrl}/mcp`),
+        (input, init) => fetch(input, withUserAgent(init)),
+        'token',
+      );
+      await connected;
+      await client.readResource({ uri: 'config://legacy' });
+      await expect(client.readResource({ uri: `legacy://${PRIVATE_ID}` })).rejects.toThrow();
+      await client.getPrompt({ name: 'legacy_greet', arguments: { name: PROMPT_ARGUMENT } });
+      await expect(client.getPrompt({ name: 'legacy_crash' })).rejects.toThrow();
+      await client.close();
+    });
+
+    await vi.waitFor(
+      () =>
+        expect(sink.events().filter((event) => event.type !== 'client_initialized')).toHaveLength(
+          4,
+        ),
+      { timeout: 3000 },
+    );
+    const outcome = ({ status, error_code, handler_ms }: Record<string, unknown>) => ({
+      status,
+      error_code,
+      handler_ms,
+    });
+    expect(
+      sink.events('resource_read').map((read) => ({
+        resource_name: read.resource_name,
+        resource_uri_template: read.resource_uri_template,
+        ...outcome(read),
+      })),
+    ).toEqual([
+      {
+        resource_name: 'legacy-config',
+        resource_uri_template: undefined,
+        status: 'success',
+        error_code: undefined,
+        handler_ms: expect.any(Number),
+      },
+      {
+        resource_name: 'legacy-customer',
+        resource_uri_template: 'legacy://{customerId}',
+        status: 'error',
+        error_code: 'thrown:RangeError',
+        handler_ms: expect.any(Number),
+      },
+    ]);
+    expect(
+      sink.events('prompt_get').map((prompt) => ({
+        prompt_name: prompt.prompt_name,
+        message_count: prompt.message_count,
+        ...outcome(prompt),
+      })),
+    ).toEqual([
+      {
+        prompt_name: 'legacy_greet',
+        message_count: 1,
+        status: 'success',
+        error_code: undefined,
+        handler_ms: expect.any(Number),
+      },
+      {
+        prompt_name: 'legacy_crash',
+        message_count: undefined,
+        status: 'error',
+        error_code: 'thrown:TypeError',
+        handler_ms: expect.any(Number),
+      },
+    ]);
+    expectNoRequestData(sink);
+  });
+
+  test('send no prompt get for a prompt name the Backend API would refuse', async () => {
+    const sink = reportSink();
+    const app = honoApp(everythingV2Handler(), {
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+    });
+
+    const { client, connected } = connectOAuthClient(new URL(RESOURCE_URL), app.fetch, 'token');
+    await connected;
+    await expect(client.getPrompt({ name: 'jane@example.com' })).rejects.toThrow();
+    await expect(client.getPrompt({ name: 'summarize for Jane' })).rejects.toThrow();
+    await client.close();
+    await app.settled();
+
+    expect(sink.events('prompt_get')).toEqual([]);
+    expect(JSON.stringify(sink.bodies)).not.toContain('jane');
+    expect(JSON.stringify(sink.bodies)).not.toContain('Jane');
+  });
+
   test('send nothing when reporting is off', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const app = honoApp(everythingV2Handler());

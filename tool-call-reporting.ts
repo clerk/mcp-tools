@@ -308,7 +308,8 @@ const REQUEST_FIELD_PATTERNS: Record<string, RegExp> = {
   resource_name: SERVER_NAME_PATTERN,
   resource_uri_template: URI_TEMPLATE_PATTERN,
   resource_uri_scheme: URI_SCHEME_PATTERN,
-  prompt_name: SERVER_NAME_PATTERN,
+  // The name a client asked for, which may match no registered prompt, so it is held to the shape of a tool name
+  prompt_name: TOOL_NAME_PATTERN,
 };
 
 const isCount = (value: unknown) =>
