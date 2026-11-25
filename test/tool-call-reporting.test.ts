@@ -1,5 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
   McpServer as McpServerV2,
   ResourceTemplate as ResourceTemplateV2,
@@ -863,6 +864,33 @@ describe('tool handler outcomes', () => {
     await v2App.settled();
     expect(outcomesOf(v2Sink)).toEqual(expected);
     expectGoldenShape(v2Sink.bodies);
+  });
+
+  test('keep the outcome of a call that an McpServer answers with a tools/call handler of its own', async () => {
+    const sink = reportSink();
+    const app = sdkV1ExpressApp((server) => {
+      clerkInstrumentServer(server);
+      server.server.registerCapabilities({ tools: {} });
+      server.server.setRequestHandler(CallToolRequestSchema, async () => ({
+        isError: true,
+        content: [],
+        _meta: { [ERROR_CODE_META_KEY]: 'upstream_timeout' },
+      }));
+    }, sink);
+
+    await withListening(app, async (baseUrl) => {
+      const { client, connected } = connectOAuthClient(new URL(`${baseUrl}/mcp`), fetch, 'token');
+      await connected;
+      await client.callTool({ name: 'custom' });
+      await client.close();
+    });
+
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(1), { timeout: 3000 });
+    expect(sink.calls()[0]).toMatchObject({
+      tool_name: 'custom',
+      status: 'error',
+      error_code: 'upstream_timeout',
+    });
   });
 
   test('keep the outcome of an unknown tool on a server without a readable tool registry', async () => {
@@ -2087,7 +2115,8 @@ describe('auth failure reports under a burst of refused requests', () => {
     for (const sent of await Promise.all(runs)) {
       expect(sent).toEqual(['tools/call', 'resources/list', 'tools/list']);
     }
-  });
+    // Each run waits out two real one-second batching delays
+  }, 15_000);
 
   test('never drop a waiting tool call to make room for an auth failure', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});

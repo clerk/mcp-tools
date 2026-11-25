@@ -395,13 +395,22 @@ function serverNameOf(server: object): string | undefined {
 }
 
 // Whether the server has no tool named `name`. The MCP SDK's `McpServer` keeps every tool it serves, however it was
-// registered, in `_registeredTools` in 1.x and 2.x, which has no public accessor. A server without it, such as a
-// low-level `Server`, gives no answer, and neither does the set of tools `clerkInstrumentServer` wrapped, which misses
-// those registered before it.
+// registered, in `_registeredTools` in 1.x and 2.x, which has no public accessor, and answers `tools/call` from it once
+// `_toolHandlersInitialized` is set. Without both, such as on a low-level `Server` or an `McpServer` whose `tools/call`
+// handler is the app's own, it gives no answer, and neither does the set of tools `clerkInstrumentServer` wrapped,
+// which misses those registered before it.
 function isUnknownTool(server: object, name: string): boolean {
   try {
-    const tools = (server as { _registeredTools?: unknown })._registeredTools;
-    return typeof tools === 'object' && tools !== null && !Object.hasOwn(tools, name);
+    const { _registeredTools: tools, _toolHandlersInitialized: answersCalls } = server as {
+      _registeredTools?: unknown;
+      _toolHandlersInitialized?: unknown;
+    };
+    return (
+      answersCalls === true &&
+      typeof tools === 'object' &&
+      tools !== null &&
+      !Object.hasOwn(tools, name)
+    );
   } catch {
     return false;
   }
