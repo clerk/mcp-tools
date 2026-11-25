@@ -723,14 +723,13 @@ describe('tool handler outcomes', () => {
 
   test('time only the tools registered after clerkInstrumentServer on the same server', async () => {
     const sink = reportSink();
+    const crash = async () => {
+      throw new TypeError(THROWN_TEXT);
+    };
     const app = sdkV1ExpressApp((server) => {
-      server.registerTool('before', { description: 'Registered first' }, async () => ({
-        content: [{ type: 'text', text: 'ok' }],
-      }));
+      server.registerTool('before', { description: 'Registered first' }, crash);
       clerkInstrumentServer(server);
-      server.registerTool('after', { description: 'Registered second' }, async () => ({
-        content: [{ type: 'text', text: 'ok' }],
-      }));
+      server.registerTool('after', { description: 'Registered second' }, crash);
     }, sink);
 
     await withListening(app, async (baseUrl) => {
@@ -743,14 +742,57 @@ describe('tool handler outcomes', () => {
 
     await vi.waitFor(() => expect(sink.calls()).toHaveLength(2), { timeout: 3000 });
     expect(outcomesOf(sink)).toEqual([
-      { tool_name: 'before', status: 'success', error_code: undefined, handler_ms: undefined },
+      { tool_name: 'before', status: 'error', error_code: undefined, handler_ms: undefined },
       {
         tool_name: 'after',
-        status: 'success',
-        error_code: undefined,
+        status: 'error',
+        error_code: 'thrown:TypeError',
         handler_ms: expect.any(Number),
       },
     ]);
+    expectNoErrorText(sink);
+  });
+
+  test('name a thrown error by its class when it keeps the name Error', async () => {
+    class OrderLookupError extends Error {}
+    class Unnamed extends Error {
+      override name = 'not an identifier';
+    }
+    const sink = reportSink();
+    const app = honoApp(
+      createMcpHandler(() => {
+        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+        clerkInstrumentServer(server);
+        server.registerTool('lookup', { description: 'Throws a subclass' }, async () => {
+          throw new OrderLookupError(THROWN_TEXT);
+        });
+        server.registerTool(
+          'lookup_named',
+          { description: 'Throws a renamed subclass' },
+          async () => {
+            throw new Unnamed(THROWN_TEXT);
+          },
+        );
+        server.registerTool('lookup_plain', { description: 'Throws an Error' }, async () => {
+          throw new Error(THROWN_TEXT);
+        });
+        return server;
+      }),
+      { reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+    );
+
+    const { client, connected } = connectOAuthClient(new URL(RESOURCE_URL), app.fetch, 'token');
+    await connected;
+    for (const name of ['lookup', 'lookup_named', 'lookup_plain']) await client.callTool({ name });
+    await client.close();
+    await app.settled();
+
+    expect(sink.calls().map((call) => call.error_code)).toEqual([
+      'thrown:OrderLookupError',
+      'thrown:Unnamed',
+      'thrown:Error',
+    ]);
+    expectNoErrorText(sink);
   });
 
   test('time handlers that take arguments, on MCP SDK 1.x and 2.x', async () => {

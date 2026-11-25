@@ -252,7 +252,7 @@ export type ToolCallContext = {
   /**
    * Starts timing the handler of the call with `requestKey`, for that call's report.
    * @returns A function to call once the handler returns, with the error it threw, if any. A thrown error makes the
-   * call an error with the code `thrown:<name>`, whatever the response says.
+   * call an error with the code `thrown:<ErrorClass>`, whatever the response says.
    */
   startHandler(requestKey: string): (thrown: { error: unknown } | undefined) => void;
   /**
@@ -285,12 +285,22 @@ const elapsedMs = (startedAt: number) =>
 type HandlerRecord = { handlerMs: number; thrownErrorCode: string | undefined };
 
 /**
- * The error code of a handler that threw `error`: `thrown:` and the error's `name`, never its message. A value that is
- * not an `Error`, or a name that is not a plain identifier, is `thrown:unknown`.
+ * The error code of a handler that threw `error`: `thrown:` and the error's class name, never its message. That is its
+ * `name` when it is a plain identifier other than `Error`, and otherwise its constructor's name, so a subclass that
+ * keeps the name `Error` still reports its own. A value that is not an `Error`, or has neither name as a plain
+ * identifier, is `thrown:unknown`.
  */
 function thrownErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return 'thrown:unknown';
+  const isIdentifier = (name: unknown): name is string =>
+    typeof name === 'string' && IDENTIFIER_PATTERN.test(name);
+  const constructorName = (error.constructor as { name?: unknown } | undefined)?.name;
   const name =
-    error instanceof Error && IDENTIFIER_PATTERN.test(error.name) ? error.name : 'unknown';
+    isIdentifier(error.name) && error.name !== 'Error'
+      ? error.name
+      : isIdentifier(constructorName)
+        ? constructorName
+        : 'unknown';
   return `thrown:${name}`.slice(0, MAX_ERROR_CODE_LENGTH);
 }
 

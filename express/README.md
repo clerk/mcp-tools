@@ -280,7 +280,7 @@ A POST whose server was never passed to `clerkInstrumentServer` logs a one-time 
 
 Each report has:
 
-- The tool's name, the server's name, whether the call succeeded, how long it took and how long its handler ran, and when it was made. A failed call also has its error code: the `_meta['clerk.com/error_code']` of an error result, as the prebuilt tools set it, `thrown:<name>` for a handler that threw, with the error's `name` and never its message, or `jsonrpc:<code>` for a JSON-RPC error.
+- The tool's name, the server's name, whether the call succeeded, how long it took and how long its handler ran, and when it was made. A failed call also has its error code: the `_meta['clerk.com/error_code']` of an error result, as the prebuilt tools set it, `thrown:<ErrorClass>` for a handler that threw, with the error's class name and never its message, or `jsonrpc:<code>` for a JSON-RPC error.
 - The Clerk user ID, OAuth client ID, and access token ID, for a token Clerk verified. A token `verifyToken` verified sends none of them.
 - The client's IP address, from `req.ip`, which follows the app's `trust proxy` setting. Behind a proxy, set `trust proxy` for it to be the client's address.
 - The client's `User-Agent`, up to 512 characters.

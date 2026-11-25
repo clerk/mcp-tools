@@ -41,8 +41,8 @@ const observedTransports = new WeakSet<object>();
  * one-time `Clerk warning:`.
  *
  * It also wraps `registerTool`, and `tool` on MCP SDK 1.x, on this server object, so each tool registered after it
- * reports how long its handler ran, and reports a handler that threw as an error with the code `thrown:<name>`, the
- * error's `name` and never its message. A tool registered before the call, or whose callback is replaced with
+ * reports how long its handler ran, and reports a handler that threw as an error with the code `thrown:<ErrorClass>`,
+ * the error's class name and never its message. A tool registered before the call, or whose callback is replaced with
  * `update({ callback })`, is still reported, without the handler's time, and a throw looks like a returned
  * `isError` result.
  * @param server - An MCP SDK `McpServer` or low-level `Server`
