@@ -334,7 +334,8 @@ export function withClerkMcpAuth(
 
 /**
  * Verifies the request's token as `withClerkMcpAuth` does.
- * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting
+ * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting. It may wait only to register
+ * deferred work, never for the body or the report.
  * @returns The answer for a request that is not let through, or the auth info of one that is, also set on `req.auth`:
  * `undefined` for a request without a token that `publicAccess` let through
  */
@@ -342,7 +343,7 @@ function nextAuthenticator(
   caller: string,
   shortName: string,
   options: McpAuthFailureOption & MiddlewareAuthOptions<Request>,
-  onFailure?: (req: Request, answer: AuthFailureAnswer) => Promise<void>,
+  onFailure?: (req: Request, answer: AuthFailureAnswer) => Promise<void> | void,
 ) {
   const authenticate = createBearerAuth(
     caller,
@@ -372,7 +373,7 @@ function nextAuthenticator(
           // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
           void Promise.resolve(options.onAuthFailure?.(result.failure, req)).catch(() => {});
         } catch {}
-        // Reporting must never change or fail the answer
+        // Reporting must never change, fail or delay the answer
         try {
           await onFailure?.(req, {
             failure: result.failure,
@@ -485,19 +486,23 @@ export function clerkInstrumentHandler(
     'clerkInstrumentHandler',
     authOptions,
     reporting &&
-      (async (req, answer) => {
-        const send = await reportAuthFailure({
+      ((req, answer) => {
+        const report = reportAuthFailure({
           caller: 'clerkInstrumentHandler',
           reporting,
           answer,
-          // A copy, and only with reporting on, so the route handler's request is untouched
-          readBody: () => readJsonBody(req, undefined, AUTH_FAILURE_BODY_LIMIT),
+          // `readJsonBody` takes its copy now, before the answer, and reads it afterwards, so the request is untouched
+          // and the answer never waits for the body
+          body: readJsonBody(req, undefined, AUTH_FAILURE_BODY_LIMIT),
           request: req,
           defaultIpAddress: () => (process.env.VERCEL ? req.headers.get('x-real-ip') : undefined),
           userAgent: () => req.headers.get('user-agent'),
           env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
-        });
-        if (send) await keepAlive(send());
+        })
+          .then((send) => send?.())
+          .catch(() => undefined);
+        // Registering with `after()` waits only for `next/server` to load, never for the body or the report
+        return keepAlive(report);
       }),
   );
 

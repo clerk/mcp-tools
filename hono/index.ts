@@ -389,14 +389,14 @@ export function mcpAuth(options: MiddlewareAuthOptions<Context>): MiddlewareHand
 
 /**
  * Verifies the request's token as `mcpAuth` does.
- * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting
+ * @param onFailure - Called with a 401, 403 or 421 as it is answered, for reporting. It must not wait for anything.
  * @returns The answer for a request that is not let through, or the auth info of one that is, also set as the
  * `mcpAuth` context variable: `undefined` for a request without a token that `publicAccess` let through
  */
 function honoAuthenticator(
   caller: string,
   options: MiddlewareAuthOptions<Context>,
-  onFailure?: (c: Context, answer: AuthFailureAnswer) => Promise<void>,
+  onFailure?: (c: Context, answer: AuthFailureAnswer) => void,
 ) {
   const authenticate = createBearerAuth(
     caller,
@@ -421,9 +421,9 @@ function honoAuthenticator(
     if (!result.ok) {
       if (result.failure) {
         c.set('mcpAuthFailure', result.failure);
-        // Reporting must never change or fail the answer
+        // Reporting must never change, fail or delay the answer
         try {
-          await onFailure?.(c, {
+          onFailure?.(c, {
             failure: result.failure,
             status: result.status,
             authInfo: result.authInfo,
@@ -609,23 +609,29 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
     'clerkInstrumentHandler',
     authOptions,
     reporting &&
-      (async (c, answer) => {
+      ((c, answer) => {
         const keys = env<ClerkEnv>(c);
-        const send = await reportAuthFailure({
+        // `readJsonBody` takes its copy now, before the answer, and reads it afterwards, so the request is untouched
+        // and the answer never waits for the body
+        const body = c.req.raw.bodyUsed
+          ? requestWithBody(c).then((request) =>
+              readJsonBody(request, undefined, AUTH_FAILURE_BODY_LIMIT),
+            )
+          : readJsonBody(c.req.raw, undefined, AUTH_FAILURE_BODY_LIMIT);
+        const report = reportAuthFailure({
           caller: 'clerkInstrumentHandler',
           reporting,
           answer,
-          // A copy, and only with reporting on, so the request is untouched
-          readBody: async () =>
-            readJsonBody(await requestWithBody(c), undefined, AUTH_FAILURE_BODY_LIMIT),
+          body,
           request: c,
           defaultIpAddress: () => honoIpAddress(c),
           userAgent: () => c.req.header('user-agent'),
           env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
-        });
-        if (!send) return;
+        })
+          .then((send) => send?.())
+          .catch(() => undefined);
         try {
-          c.executionCtx.waitUntil(send());
+          c.executionCtx.waitUntil(report);
         } catch {}
       }),
   );

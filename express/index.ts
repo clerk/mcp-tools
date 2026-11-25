@@ -155,14 +155,14 @@ export function mcpAuth(options: MiddlewareAuthOptions<express.Request>) {
 
 /**
  * Verifies the request's token as `mcpAuth` does, answering the request itself when it is not let through.
- * @param onFailure - Called with a 401, 403 or 421 before it is answered, for reporting
+ * @param onFailure - Called with a 401, 403 or 421 as it is answered, for reporting. It must not wait for anything.
  * @returns Whether the request was let through, with `req.auth` set to its auth info, or `undefined` for a request
  * without a token that `publicAccess` let through
  */
 function expressAuthenticator(
   caller: string,
   options: MiddlewareAuthOptions<express.Request>,
-  onFailure?: (req: express.Request, answer: AuthFailureAnswer) => Promise<void>,
+  onFailure?: (req: express.Request, answer: AuthFailureAnswer) => void,
 ) {
   const authenticate = createBearerAuth(
     caller,
@@ -194,9 +194,9 @@ function expressAuthenticator(
     if (!result.ok) {
       if (result.failure) {
         res.locals.mcpAuthFailure = result.failure;
-        // Reporting must never change or fail the answer
+        // Reporting must never change, fail or delay the answer
         try {
-          await onFailure?.(req, {
+          onFailure?.(req, {
             failure: result.failure,
             status: result.status,
             authInfo: result.authInfo,
@@ -638,13 +638,14 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
     'clerkInstrumentHandler',
     authOptions,
     reporting &&
-      (async (req, answer) => {
-        // Sent on the reporter's timer, or before Node.js exits
-        await reportAuthFailure({
+      ((req, answer) => {
+        // Sent on the reporter's timer, or before Node.js exits. The body is the one `express.json()` already parsed,
+        // so nothing is read and the answer doesn't wait.
+        void reportAuthFailure({
           caller: 'clerkInstrumentHandler',
           reporting,
           answer,
-          readBody: () => failedRequestBody(req),
+          body: failedRequestBody(req),
           request: req,
           defaultIpAddress: () => req.ip,
           userAgent: () => req.get('user-agent'),

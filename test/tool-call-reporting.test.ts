@@ -14,6 +14,7 @@ import { clerkInstrumentServer } from '../server';
 import {
   beginToolCallContext,
   normalizeIpAddress,
+  reportAuthFailure,
   resolveReporting,
   toolCallOutcome,
 } from '../tool-call-reporting';
@@ -1306,6 +1307,135 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
           tool_name: 'ping',
         },
       ]);
+    });
+  },
+);
+
+describe('auth failure reports under a burst of refused requests', () => {
+  test('keep every tool call, cap the auth failures, and batch them into few requests to the Backend API', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sink = reportSink();
+    const app = honoApp(sdkV2Handler(), {
+      clerkClient: rejectingClerkClient,
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+    });
+
+    const refused = Array.from({ length: 300 }, () =>
+      app.fetch(RESOURCE_URL, authFailureInit(undefined)),
+    );
+    expect(new Set((await Promise.all(refused)).map((response) => response.status))).toEqual(
+      new Set([401]),
+    );
+    await callTools(app.fetch);
+    await app.settled();
+
+    const events = sink.calls();
+    expect(events.filter((event) => event.type === 'tool_call')).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'auth_failure')).toHaveLength(100);
+    // 102 events fit in two batches; one more for the tool calls' own flush at the end of their response
+    expect(sink.fetch.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(warn.mock.calls).toEqual([
+      [
+        'Clerk warning: clerkInstrumentHandler reports at most 100 auth failures a minute, so it dropped some',
+      ],
+    ]);
+  });
+
+  test('never drop a waiting tool call to make room for an auth failure', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sink = reportSink();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      await released;
+      return sink.fetch(input, init);
+    });
+    const reporting = resolveReporting<undefined>('clerkInstrumentHandler', {
+      fetch,
+      secretKey: SECRET_KEY,
+    });
+    const context = beginToolCallContext({
+      caller: 'clerkInstrumentHandler',
+      reporting,
+      authInfo: { token: 'token', clientId: 'client', scopes: [] },
+      request: undefined,
+      defaultIpAddress: () => undefined,
+      userAgent: () => undefined,
+      env: { secretKey: undefined, apiUrl: undefined },
+    })!;
+
+    // Ten hanging sends hold the in-flight slots; then 1000 tool calls wait, the most the queue keeps
+    for (let i = 0; i < 1000; i++)
+      context.startToolCall(`warmup_${i}`, 'acme-mcp')!({ status: 'success' });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(10));
+    for (let i = 0; i < 1000; i++)
+      context.startToolCall(`tool_${i}`, 'acme-mcp')!({ status: 'success' });
+    for (let i = 0; i < 300; i++) {
+      await reportAuthFailure({
+        caller: 'clerkInstrumentHandler',
+        reporting,
+        answer: { failure: { reason: 'missing_token' }, status: 401, authInfo: undefined },
+        body: undefined,
+        request: undefined,
+        defaultIpAddress: () => undefined,
+        userAgent: () => undefined,
+        env: { secretKey: undefined, apiUrl: undefined },
+      });
+    }
+    release();
+    await context.flush();
+    await vi.waitFor(() =>
+      expect(sink.calls().filter((event) => event.type === 'auth_failure')).toHaveLength(100),
+    );
+
+    const sent = new Set(sink.calls().map((event) => event.tool_name));
+    expect(sent.has('tool_0')).toBe(true);
+    expect(sent.has('tool_999')).toBe(true);
+  });
+});
+
+describe.each<'hono' | 'next'>(['hono', 'next'])(
+  'auth failure reports from clerkInstrumentHandler on %s',
+  (adapter) => {
+    test('answer before the body is read, and read it afterwards for the report', async () => {
+      const sink = reportSink();
+      const options = {
+        resourceUrl: RESOURCE_URL,
+        clerkClient: rejectingClerkClient,
+        reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      };
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) });
+      const init = {
+        ...authFailureInit(`Bearer ${REJECTED_TOKEN}`),
+        body,
+        duplex: 'half',
+      } as RequestInit;
+      const send =
+        adapter === 'hono'
+          ? honoApp(sdkV2Handler(), options as Partial<honoAdapter.McpAuthOptions>).fetch
+          : (input: string, requestInit: RequestInit) =>
+              nextAdapter.clerkInstrumentHandler(
+                sdkV2Handler(),
+                options as nextAdapter.McpAuthOptions,
+              )(new Request(input, withUserAgent(requestInit)));
+
+      // The body hasn't arrived yet, and the challenge doesn't wait for it
+      const response = await send(RESOURCE_URL, init);
+      expect(response.status).toBe(401);
+
+      controller.enqueue(
+        new TextEncoder().encode(
+          JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'ping' } }),
+        ),
+      );
+      controller.close();
+      await vi.waitFor(() => expect(sink.calls()).toHaveLength(1), { timeout: 3000 });
+      expect(sink.calls()[0]).toMatchObject({
+        reason: 'invalid_token',
+        method: 'tools/call',
+        tool_name: 'ping',
+      });
     });
   },
 );

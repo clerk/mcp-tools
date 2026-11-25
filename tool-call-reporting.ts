@@ -117,6 +117,11 @@ const IPV6_PATTERN =
 const EVENTS_PATH = '/v1/mcp_events';
 const MAX_BATCH_SIZE = 100;
 const MAX_QUEUED = 1000;
+// Auth failures come from requests without a valid token, so anyone can cause them. They wait in their own, smaller
+// queue, so they never push out a tool call, and each reporter takes at most so many a minute.
+const MAX_QUEUED_AUTH_FAILURES = 100;
+const MAX_AUTH_FAILURES_PER_WINDOW = 100;
+const AUTH_FAILURE_WINDOW_MS = 60 * 1000;
 const MAX_IN_FLIGHT = 10;
 // The Backend API answers 403 to an instance that MCP analytics is not enabled for
 const STATUS_HINTS: Partial<Record<number, string>> = {
@@ -423,17 +428,20 @@ export type AuthFailureAnswer = {
 
 /**
  * Reports a request that failed authentication, with the JSON-RPC method and tool name of its first message when
- * `readBody` can read them. Identity is sent only for the token of a 403, and only when Clerk verified it. It never
- * throws, so the answer to the request is the same with reporting on or off.
- * @param readBody - Reads the JSON body without consuming the request, up to `AUTH_FAILURE_BODY_LIMIT` bytes
- * @returns A function that sends the report, for the adapter to keep the runtime alive with, or `undefined` when
- * nothing was reported
+ * `body` has them. Identity is sent only for the token of a 403, and only when Clerk verified it. It never throws, and
+ * the adapter answers the request without waiting for it, so the answer is the same with reporting on or off, and
+ * just as fast.
+ * @param body - The parsed JSON body, or a promise of it from a copy of the request that the adapter started reading
+ * before it answered, up to `AUTH_FAILURE_BODY_LIMIT` bytes
+ * @returns A function that sends the waiting auth failures, for the adapter to keep the runtime alive with. It returns
+ * `undefined` when another request is already sending them, so a burst of refused requests sends one batch. The
+ * whole result is `undefined` when nothing was reported.
  */
 export async function reportAuthFailure<Req>({
   caller,
   reporting,
   answer,
-  readBody,
+  body: bodyOrPromise,
   request,
   defaultIpAddress,
   userAgent,
@@ -442,12 +450,12 @@ export async function reportAuthFailure<Req>({
   caller: string;
   reporting: ToolCallReporting<Req> | undefined;
   answer: AuthFailureAnswer;
-  readBody: () => unknown;
+  body: unknown;
   request: Req;
   defaultIpAddress: () => string | null | undefined;
   userAgent: () => string | null | undefined;
   env: { secretKey: string | undefined; apiUrl: string | undefined };
-}): Promise<(() => Promise<void>) | undefined> {
+}): Promise<(() => Promise<void> | undefined) | undefined> {
   if (!reporting) return undefined;
   try {
     const reporter = reporterFor(caller, reporting, env);
@@ -456,7 +464,7 @@ export async function reportAuthFailure<Req>({
     const { failure, status, authInfo } = answer;
     let body: unknown;
     try {
-      body = await readBody();
+      body = await bodyOrPromise;
     } catch {}
     const first = (Array.isArray(body) ? body[0] : body) as
       | { method?: unknown; params?: { name?: unknown } | null }
@@ -490,7 +498,7 @@ export async function reportAuthFailure<Req>({
         userAgent,
       ),
     });
-    return () => reporter.flush();
+    return () => reporter.drainAuthFailures();
   } catch {
     return undefined;
   }
@@ -605,6 +613,11 @@ export function normalizeIpAddress(address: unknown): string | undefined {
 type Reporter = {
   enqueue(event: McpEvent): void;
   flush(): Promise<void>;
+  /**
+   * Sends the waiting auth failures after a short wait that gathers a burst into one batch, or returns `undefined`
+   * when a call before it is already doing so.
+   */
+  drainAuthFailures(): Promise<void> | undefined;
   pending(): number;
 };
 
@@ -651,8 +664,13 @@ function createReporter(
   client: ReturnType<typeof createBackendApiClient>,
 ): Reporter {
   const queue: McpEvent[] = [];
+  const authFailures: McpEvent[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight = 0;
+  let authWindowStart = 0;
+  let authWindowCount = 0;
+  let draining: Promise<void> | undefined;
+  const pending = () => queue.length + authFailures.length;
 
   async function send(batch: McpEvent[]) {
     try {
@@ -689,19 +707,44 @@ function createReporter(
       clearTimeout(timer);
       timer = undefined;
     }
-    while (queue.length > 0 && inFlight < MAX_IN_FLIGHT) {
+    while (pending() > 0 && inFlight < MAX_IN_FLIGHT) {
       inFlight++;
       try {
-        await send(queue.splice(0, MAX_BATCH_SIZE));
+        const batch = queue.splice(0, MAX_BATCH_SIZE);
+        batch.push(...authFailures.splice(0, MAX_BATCH_SIZE - batch.length));
+        await send(batch);
       } finally {
         inFlight--;
       }
     }
-    if (queue.length > 0) schedule();
+    if (pending() > 0) schedule();
+  }
+
+  function enqueueAuthFailure(event: McpEvent) {
+    const now = Date.now();
+    if (now - authWindowStart >= AUTH_FAILURE_WINDOW_MS) {
+      authWindowStart = now;
+      authWindowCount = 0;
+    }
+    if (authWindowCount >= MAX_AUTH_FAILURES_PER_WINDOW) {
+      warnOnce(
+        'auth-failure-rate',
+        `Clerk warning: ${caller} reports at most ${MAX_AUTH_FAILURES_PER_WINDOW} auth failures a minute, so it dropped some`,
+      );
+      return;
+    }
+    authWindowCount++;
+    if (authFailures.length >= MAX_QUEUED_AUTH_FAILURES) authFailures.shift();
+    authFailures.push(event);
+    schedule();
   }
 
   const reporter: Reporter = {
     enqueue(event) {
+      if (event.type === 'auth_failure') {
+        enqueueAuthFailure(event);
+        return;
+      }
       if (queue.length >= MAX_QUEUED) {
         queue.shift();
         warnOnce(
@@ -717,7 +760,19 @@ function createReporter(
       schedule();
     },
     flush,
-    pending: () => queue.length,
+    // One caller at a time waits, then sends until no auth failure is left, all from its own context: on Cloudflare
+    // Workers its `waitUntil` keeps the timer and the requests alive, and no request waits on another's I/O
+    drainAuthFailures() {
+      if (draining) return undefined;
+      draining = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, FLUSH_DELAY_MS));
+        while (authFailures.length > 0 && inFlight < MAX_IN_FLIGHT) await flush();
+      })().finally(() => {
+        draining = undefined;
+      });
+      return draining;
+    },
+    pending,
   };
   flushBeforeExit(reporter);
   return reporter;
