@@ -24,6 +24,7 @@ import {
   type ReportingOption,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
+  hashSessionId,
   checkToolCallContext,
   reportAuthFailure,
   reportingKey,
@@ -649,6 +650,10 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
           request: req,
           defaultIpAddress: () => req.ip,
           userAgent: () => req.get('user-agent'),
+          sessionIdHash: hashSessionId(
+            process.env.CLERK_PUBLISHABLE_KEY,
+            req.get('mcp-session-id'),
+          ),
           env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
         });
       }),
@@ -660,6 +665,8 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
       const authenticated = await authenticate(req, res);
       if (!authenticated) return;
 
+      const hashing =
+        reporting && hashSessionId(process.env.CLERK_PUBLISHABLE_KEY, req.get('mcp-session-id'));
       const context = beginToolCallContext({
         caller: 'clerkInstrumentHandler',
         reporting,
@@ -667,6 +674,7 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
         request: req,
         defaultIpAddress: () => req.ip,
         userAgent: () => req.get('user-agent'),
+        sessionIdHash: hashing && (await hashing),
         env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
       });
       if (context && reporting) {

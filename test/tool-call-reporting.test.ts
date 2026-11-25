@@ -33,6 +33,12 @@ const CLIENT_ID = 'Ab12Cd34Ef56Gh78';
 const ORG_ID = 'org_2xhFjEI5X2qWRvtV13BzSj8H6Dk';
 const USER_AGENT = 'claude-code/2.1.0';
 const SECRET_KEY = 'sk_test_reporting';
+const PUBLISHABLE_KEY = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+const SESSION_ID = '3f1c9a2e-6b7d-4e8f-9a0b-1c2d3e4f5a6b';
+// `printf %s "$PUBLISHABLE_KEY:$SESSION_ID" | sha256sum | cut -c1-32`
+const SESSION_ID_HASH = '55bb9bef53cfd2eeb24ce14a530b4155';
+// The same, for a session ID of 256 `a`s
+const LONGEST_SESSION_ID_HASH = 'b81fd5d2175b2c2cd17aa168df93bfc4';
 
 const clerkClient = {
   authenticateRequest: async () => ({
@@ -1309,7 +1315,8 @@ describe('request reports', () => {
     expectGoldenShape(sink.bodies);
   });
 
-  test('carry the protocol version the same server negotiated in initialize', async () => {
+  test('carry the protocol version the same server negotiated in initialize, and the hash of its session', async () => {
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', PUBLISHABLE_KEY);
     const sink = reportSink();
     const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
     clerkInstrumentServer(server);
@@ -1344,12 +1351,24 @@ describe('request reports', () => {
     });
 
     await vi.waitFor(() => expect(sink.events()).toHaveLength(5), { timeout: 3000 });
-    expect(sink.events().map(({ type, protocol_version }) => ({ type, protocol_version }))).toEqual(
-      ['client_initialized', 'list_request', 'tool_call', 'resource_read', 'prompt_get'].map(
-        (type) => ({ type, protocol_version: '2025-11-25' }),
-      ),
-    );
+    expect(
+      sink.events().map(({ type, protocol_version, session_id_hash }) => ({
+        type,
+        protocol_version,
+        session_id_hash,
+      })),
+    ).toEqual([
+      // `initialize` is sent before the server issues a session ID
+      { type: 'client_initialized', protocol_version: '2025-11-25', session_id_hash: undefined },
+      ...['list_request', 'tool_call', 'resource_read', 'prompt_get'].map((type) => ({
+        type,
+        protocol_version: '2025-11-25',
+        // `printf %s "$PUBLISHABLE_KEY:session-1" | sha256sum | cut -c1-32`
+        session_id_hash: '922bfec6b4759d526e92ccfab6beebdc',
+      })),
+    ]);
     expectGoldenShape(sink.bodies);
+    expect(JSON.stringify(sink.bodies)).not.toContain('session-1');
   });
 
   test('leave out a client name, version or protocol version the Backend API would refuse', async () => {
@@ -2244,5 +2263,79 @@ describe.each<'hono' | 'next'>(['hono', 'next'])(
         tool_name: 'ping',
       });
     });
+  },
+);
+
+const PUBLISHABLE_KEY_NAMES: Record<AuthFailureAdapter, string> = {
+  hono: 'CLERK_PUBLISHABLE_KEY',
+  express: 'CLERK_PUBLISHABLE_KEY',
+  next: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+};
+
+function withSessionId(init: RequestInit, sessionId: string | undefined): RequestInit {
+  if (sessionId === undefined) return init;
+  return {
+    ...init,
+    headers: { ...(init.headers as Record<string, string>), 'mcp-session-id': sessionId },
+  };
+}
+
+describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
+  'session ID hashes from clerkInstrumentHandler on %s',
+  (adapter) => {
+    const reported = (sink: ReturnType<typeof reportSink>, count = 1) =>
+      vi.waitFor(() => expect(sink.events()).toHaveLength(count), { timeout: 3000 });
+
+    test('are sent on a tool call and an auth failure, salted with the publishable key, and never the session ID', async () => {
+      vi.stubEnv(PUBLISHABLE_KEY_NAMES[adapter], PUBLISHABLE_KEY);
+      const sink = reportSink();
+      const reporting = { fetch: sink.fetch, secretKey: SECRET_KEY };
+
+      const answer = await sendToAdapter(
+        adapter,
+        { reporting },
+        RESOURCE_URL,
+        withSessionId(toolCallInit('ping'), SESSION_ID),
+      );
+      expect(answer.status).toBe(200);
+      await sendToAdapter(
+        adapter,
+        { reporting },
+        RESOURCE_URL,
+        withSessionId(authFailureInit(undefined), SESSION_ID),
+      );
+
+      await reported(sink, 2);
+      expect(sink.events()).toEqual([
+        expect.objectContaining({ type: 'tool_call', session_id_hash: SESSION_ID_HASH }),
+        expect.objectContaining({ type: 'auth_failure', session_id_hash: SESSION_ID_HASH }),
+      ]);
+      expectGoldenShape(sink.bodies, { exact: adapter === 'hono' });
+      expect(JSON.stringify(sink.bodies)).not.toContain(SESSION_ID);
+    });
+
+    test.each([
+      ['no session ID', PUBLISHABLE_KEY, undefined, undefined],
+      ['no publishable key', undefined, SESSION_ID, undefined],
+      ['an empty session ID', PUBLISHABLE_KEY, '', undefined],
+      ['a session ID of 257 characters', PUBLISHABLE_KEY, 'a'.repeat(257), undefined],
+      ['a session ID of 256 characters', PUBLISHABLE_KEY, 'a'.repeat(256), LONGEST_SESSION_ID_HASH],
+    ])(
+      'are sent only when there is something to hash: %s',
+      async (_, publishableKey, sessionId, expected) => {
+        vi.stubEnv(PUBLISHABLE_KEY_NAMES[adapter], publishableKey);
+        const sink = reportSink();
+        await sendToAdapter(
+          adapter,
+          { reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+          RESOURCE_URL,
+          withSessionId(authFailureInit(undefined), sessionId),
+        );
+
+        await reported(sink);
+        expect(sink.events()[0]!.session_id_hash).toBe(expected);
+        if (sessionId) expect(JSON.stringify(sink.bodies)).not.toContain(sessionId);
+      },
+    );
   },
 );

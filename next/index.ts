@@ -27,6 +27,7 @@ import {
   type ReportingOption,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
+  hashSessionId,
   checkToolCallContext,
   onResponseEnd,
   reportAuthFailure,
@@ -497,6 +498,10 @@ export function clerkInstrumentHandler(
           request: req,
           defaultIpAddress: () => (process.env.VERCEL ? req.headers.get('x-real-ip') : undefined),
           userAgent: () => req.headers.get('user-agent'),
+          sessionIdHash: hashSessionId(
+            process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+            req.headers.get('mcp-session-id'),
+          ),
           env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
         })
           .then((send) => send?.())
@@ -511,6 +516,12 @@ export function clerkInstrumentHandler(
     if (authenticated instanceof Response) return authenticated;
     const { authInfo } = authenticated;
 
+    const hashing =
+      reporting &&
+      hashSessionId(
+        process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+        req.headers.get('mcp-session-id'),
+      );
     const context = beginToolCallContext({
       caller: 'clerkInstrumentHandler',
       reporting,
@@ -519,6 +530,7 @@ export function clerkInstrumentHandler(
       // Vercel sets `x-real-ip` itself, replacing any value the client sent
       defaultIpAddress: () => (process.env.VERCEL ? req.headers.get('x-real-ip') : undefined),
       userAgent: () => req.headers.get('user-agent'),
+      sessionIdHash: hashing && (await hashing),
       env: { secretKey: process.env.CLERK_SECRET_KEY, apiUrl: process.env.CLERK_API_URL },
     });
 

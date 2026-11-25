@@ -119,6 +119,9 @@ const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
 const ORG_ID_PATTERN = /^org_\w{27}$/;
 const MAX_USER_AGENT_LENGTH = 512;
+const MAX_SESSION_ID_LENGTH = 256;
+// The hex digits of a SHA-256 digest a session ID hash keeps, 128 bits
+const SESSION_ID_HASH_LENGTH = 32;
 const MAX_DURATION_MS = 24 * 60 * 60 * 1000;
 const IPV4_PATTERN =
   /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
@@ -232,6 +235,7 @@ type McpEventBase = {
   ip_address?: string;
   user_agent?: string;
   protocol_version?: string;
+  session_id_hash?: string;
 };
 
 type ToolCallEvent = McpEventBase & {
@@ -441,6 +445,7 @@ export function beginToolCallContext<Req>({
   request,
   defaultIpAddress,
   userAgent,
+  sessionIdHash,
   env,
 }: {
   caller: string;
@@ -449,14 +454,19 @@ export function beginToolCallContext<Req>({
   request: Req;
   defaultIpAddress: () => string | null | undefined;
   userAgent: () => string | null | undefined;
+  /**
+   * The request's `hashSessionId`, which it awaited before calling this
+   */
+  sessionIdHash?: string | undefined;
   env: { secretKey: string | undefined; apiUrl: string | undefined };
 }): ToolCallContext | undefined {
   if (!authInfo) return undefined;
   const reporter = reporting && reporterFor(caller, reporting, env);
-  const details =
-    reporter &&
-    reporting &&
-    requestDetails(caller, reporting, authInfo, request, defaultIpAddress, userAgent);
+  const details = reporter &&
+    reporting && {
+      ...requestDetails(caller, reporting, authInfo, request, defaultIpAddress, userAgent),
+      ...(sessionIdHash !== undefined && { session_id_hash: sessionIdHash }),
+    };
   const handlers = new Map<string, HandlerRecord>();
   const takeHandler = (requestKey: string | undefined) => {
     if (requestKey === undefined) return undefined;
@@ -587,6 +597,7 @@ export async function reportAuthFailure<Req>({
   request,
   defaultIpAddress,
   userAgent,
+  sessionIdHash: sessionIdHashOrPromise,
   env,
 }: {
   caller: string;
@@ -596,6 +607,10 @@ export async function reportAuthFailure<Req>({
   request: Req;
   defaultIpAddress: () => string | null | undefined;
   userAgent: () => string | null | undefined;
+  /**
+   * The request's `hashSessionId`, awaited here so that the answer never waits for it
+   */
+  sessionIdHash?: Promise<string | undefined> | undefined;
   env: { secretKey: string | undefined; apiUrl: string | undefined };
 }): Promise<(() => Promise<void> | undefined) | undefined> {
   if (!reporting) return undefined;
@@ -608,6 +623,7 @@ export async function reportAuthFailure<Req>({
     try {
       body = await bodyOrPromise;
     } catch {}
+    const sessionIdHash = await sessionIdHashOrPromise;
     const first = (Array.isArray(body) ? body[0] : body) as
       | { method?: unknown; params?: { name?: unknown; _meta?: Record<string, unknown> } | null }
       | null
@@ -638,6 +654,7 @@ export async function reportAuthFailure<Req>({
         defaultIpAddress,
         userAgent,
       ),
+      ...(sessionIdHash !== undefined && { session_id_hash: sessionIdHash }),
     });
     return () => reporter.drainAuthFailures();
   } catch {
@@ -719,6 +736,33 @@ export function warnOutsideInstrumentHandler() {
     'outside-handler',
     'Clerk warning: clerkInstrumentServer only sees tool calls that clerkInstrumentHandler authenticated. Serve this MCP server through clerkInstrumentHandler(handler, options) in place of mcpAuth or withClerkMcpAuth',
   );
+}
+
+/**
+ * The hash a request's MCP session is reported by: the first 128 bits, in lowercase hex, of the SHA-256 of the
+ * instance's publishable key and the `Mcp-Session-Id` header, so that events of one session can be grouped without
+ * the session ID ever leaving the server. It uses Web Crypto, which Node.js, Workers and Next.js all have.
+ * @returns `undefined`, without awaiting anything, when there is no publishable key, or no session ID of 1 to 256
+ * characters. Otherwise a promise of the hash, or of `undefined` when it cannot be computed. It never rejects.
+ */
+export function hashSessionId(
+  publishableKey: string | undefined,
+  sessionId: string | null | undefined,
+): Promise<string | undefined> | undefined {
+  if (!publishableKey || !sessionId || sessionId.length > MAX_SESSION_ID_LENGTH) return undefined;
+  return (async () => {
+    try {
+      const digest = await globalThis.crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(`${publishableKey}:${sessionId}`),
+      );
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0'))
+        .join('')
+        .slice(0, SESSION_ID_HASH_LENGTH);
+    } catch {
+      return undefined;
+    }
+  })();
 }
 
 function requestDetails<Req>(
