@@ -284,17 +284,17 @@ const withClerkMcpAuthCallForm =
  * ```ts
  * import { withClerkMcpAuth } from "@clerk/mcp-tools/next";
  *
- * const authHandler = withClerkMcpAuth(handler, {
+ * const authedHandler = withClerkMcpAuth(handler, {
  *   resourceUrl: "https://mcp.example.com/mcp",
  *   requiredScopes: ["profile", "email"],
  * });
  *
- * export { authHandler as GET, authHandler as POST, authHandler as DELETE };
+ * export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE };
  * ```
  * @example
  * ```ts
  * // Verify tokens with your own function instead of Clerk
- * const authHandler = withClerkMcpAuth(handler, {
+ * const authedHandler = withClerkMcpAuth(handler, {
  *   verifyToken: async (token, req) => verifyMyToken(token),
  *   resourceUrl: "https://mcp.example.com/mcp",
  * });
@@ -439,13 +439,13 @@ const clerkInstrumentHandlerCallForm =
  *   { serverInfo: { name: 'acme-mcp', version: '1.0.0' } },
  * );
  *
- * const route = clerkInstrumentHandler(handler, {
+ * const authedHandler = clerkInstrumentHandler(handler, {
  *   resourceUrl: 'https://mcp.example.com/mcp',
  *   requiredScopes: ['profile', 'email'],
  *   reportToolCalls: true,
  * });
  *
- * export { route as GET, route as POST, route as DELETE };
+ * export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE };
  * ```
  */
 export function clerkInstrumentHandler(
