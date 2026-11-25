@@ -849,11 +849,19 @@ function createReporter(
   async function send(batch: McpEvent[]) {
     try {
       const response = await client.post(EVENTS_PATH, { sdk: SDK, events: batch });
-      await response.body?.cancel().catch(() => undefined);
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         warnOnce(
           `status-${response.status}`,
           `Clerk warning: ${caller} could not report ${batch.length} MCP events to Clerk, which answered with status ${response.status}${STATUS_HINTS[response.status] ?? ''}`,
+        );
+        return;
+      }
+      const accepted = await acceptedCount(response);
+      if (accepted !== undefined && accepted < batch.length) {
+        warnOnce(
+          'partially-accepted',
+          `Clerk warning: ${caller} sent ${batch.length} MCP events to Clerk, which accepted ${accepted}. Events more than 24 hours old or ahead of the clock are dropped, so check the server clock`,
         );
       }
     } catch (error) {
@@ -985,6 +993,17 @@ export function toolCallOutcome(message: { result?: unknown; error?: unknown }):
   if (result?.isError !== true) return { status: 'success' };
   const code = result._meta?.[ERROR_CODE_META_KEY];
   return { status: 'error', errorCode: typeof code === 'string' ? code : undefined };
+}
+
+async function acceptedCount(response: Response): Promise<number | undefined> {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body !== 'object' || body === null) return undefined;
+    const { accepted } = body as { accepted?: unknown };
+    return typeof accepted === 'number' ? accepted : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

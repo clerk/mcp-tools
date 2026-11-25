@@ -60,7 +60,7 @@ const IDENTITY = {
 
 type ReportBody = { events: Record<string, unknown>[]; sdk: { name: string; version: string } };
 
-function reportSink(status = 202) {
+function reportSink(status = 202, accepted?: number) {
   const bodies: ReportBody[] = [];
   const requests: { url: string; authorization: string | null }[] = [];
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
@@ -68,8 +68,12 @@ function reportSink(status = 202) {
       url: String(input),
       authorization: new Headers(init?.headers).get('authorization'),
     });
-    bodies.push(JSON.parse(String(init?.body)) as ReportBody);
-    return Response.json({ object: 'mcp_event_ingestion', accepted: 1 }, { status });
+    const body = JSON.parse(String(init?.body)) as ReportBody;
+    bodies.push(body);
+    return Response.json(
+      { object: 'mcp_event_ingestion', accepted: accepted ?? body.events.length },
+      { status },
+    );
   });
   const events = (type?: string) =>
     bodies
@@ -1683,6 +1687,34 @@ describe('tool call reports', () => {
     expect(warn.mock.calls).toEqual([
       [
         `Clerk warning: clerkInstrumentHandler could not report 1 MCP events to Clerk, which answered with status ${status}${hint}`,
+      ],
+    ]);
+  });
+
+  test('warn once when the Backend API accepts fewer events than were sent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sink = reportSink(202, 0);
+    const context = beginToolCallContext({
+      caller: 'clerkInstrumentHandler',
+      reporting: resolveReporting('clerkInstrumentHandler', {
+        fetch: sink.fetch,
+        secretKey: SECRET_KEY,
+      }),
+      authInfo: { token: 'token', clientId: 'client', scopes: [] },
+      request: undefined,
+      defaultIpAddress: () => undefined,
+      userAgent: () => undefined,
+      env: { secretKey: undefined, apiUrl: undefined },
+    })!;
+
+    for (let i = 0; i < 2; i++) {
+      context.startToolCall('ping', undefined)!({ status: 'success' });
+      await context.flush();
+    }
+
+    expect(warn.mock.calls).toEqual([
+      [
+        'Clerk warning: clerkInstrumentHandler sent 1 MCP events to Clerk, which accepted 0. Events more than 24 hours old or ahead of the clock are dropped, so check the server clock',
       ],
     ]);
   });
