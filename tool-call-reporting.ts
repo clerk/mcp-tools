@@ -108,6 +108,7 @@ const VERIFIER_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const CLIENT_NAME_PATTERN = /^[A-Za-z0-9 _.:@()+/-]{1,128}$/;
 const CLIENT_VERSION_PATTERN = /^[A-Za-z0-9 _.:@()+/-]{1,64}$/;
 const PROTOCOL_VERSION_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
+export const PROTOCOL_VERSION_META_KEY = 'io.modelcontextprotocol/protocolVersion';
 // A resource template is the server's own string, such as `users://{id}/profile`: printable ASCII without spaces
 const URI_TEMPLATE_PATTERN = /^[!-~]{1,256}$/;
 const URI_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]{0,31}$/;
@@ -314,6 +315,11 @@ const REQUEST_FIELD_PATTERNS: Record<string, RegExp> = {
   prompt_name: TOOL_NAME_PATTERN,
 };
 
+const protocolVersionField = (protocolVersion: unknown) =>
+  typeof protocolVersion === 'string' && PROTOCOL_VERSION_PATTERN.test(protocolVersion)
+    ? { protocol_version: protocolVersion }
+    : {};
+
 const isCount = (value: unknown) =>
   Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_ITEM_COUNT;
 
@@ -356,6 +362,7 @@ export type ToolCallContext = {
     toolName: string,
     serverName: string | undefined,
     requestKey?: string | undefined,
+    protocolVersion?: string | undefined,
   ): ((outcome: ToolCallOutcome) => void) | undefined;
   /**
    * Starts timing a request that is not a tool call, such as `initialize` or `resources/read`, or returns `undefined`
@@ -480,7 +487,7 @@ export function beginToolCallContext<Req>({
   };
   const context: ToolCallContext = {
     connected: false,
-    startToolCall(toolName, serverName, requestKey) {
+    startToolCall(toolName, serverName, requestKey, protocolVersion) {
       if (!reporter || !reporting || !details) return undefined;
       if (reporting.tools) {
         try {
@@ -508,6 +515,7 @@ export function beginToolCallContext<Req>({
           occurred_at: occurredAt,
           tool_name: toolName,
           ...serverNameField(serverName),
+          ...protocolVersionField(protocolVersion),
           ...handledFields(outcome, takeHandler(requestKey), startedAt),
           ...details,
         });
@@ -607,7 +615,7 @@ export async function reportAuthFailure<Req>({
       body = await bodyOrPromise;
     } catch {}
     const first = (Array.isArray(body) ? body[0] : body) as
-      | { method?: unknown; params?: { name?: unknown } | null }
+      | { method?: unknown; params?: { name?: unknown; _meta?: Record<string, unknown> } | null }
       | null
       | undefined;
     const method = typeof first?.method === 'string' ? first.method : undefined;
@@ -629,6 +637,7 @@ export async function reportAuthFailure<Req>({
       ...(method !== undefined && METHOD_PATTERN.test(method) && { method }),
       ...(toolName !== undefined &&
         isReportedTool(caller, reporting, toolName) && { tool_name: toolName }),
+      ...protocolVersionField(first?.params?._meta?.[PROTOCOL_VERSION_META_KEY]),
       ...requestDetails(
         caller,
         reporting,

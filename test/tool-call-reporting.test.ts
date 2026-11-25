@@ -272,7 +272,10 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
     expect(await response.text()).toContain('pong');
     await app.settled();
 
-    expect(sink.calls()).toEqual([expectedCalls({ ip_address: '203.0.113.7' })[0]]);
+    expect(sink.calls()).toEqual([
+      expectedCalls({ ip_address: '203.0.113.7', protocol_version: '2026-07-28' })[0],
+    ]);
+    expectGoldenShape(sink.bodies, { exact: true });
   });
 
   test('leaves out each field and tool its options turn off', async () => {
@@ -1204,8 +1207,56 @@ describe('request reports', () => {
         requested_protocol_version: '2026-07-28',
         protocol_version: '2026-07-28',
       }),
-      expect.objectContaining({ type: 'list_request', method: 'tools/list', item_count: 2 }),
+      expect.objectContaining({
+        type: 'list_request',
+        method: 'tools/list',
+        item_count: 2,
+        protocol_version: '2026-07-28',
+      }),
     ]);
+    expectGoldenShape(sink.bodies);
+  });
+
+  test('carry the protocol version the same server negotiated in initialize', async () => {
+    const sink = reportSink();
+    const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
+    clerkInstrumentServer(server);
+    registerEverything(server, 'v1');
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => 'session-1' });
+    const connected = server.connect(transport);
+    const app = express();
+    app.use(express.json());
+    app.all(
+      '/mcp',
+      expressAdapter.clerkInstrumentHandler(
+        async (req, res) => {
+          await connected;
+          await transport.handleRequest(req, res, req.body);
+        },
+        {
+          resourceUrl: RESOURCE_URL,
+          clerkClient,
+          reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+        },
+      ),
+    );
+
+    await withListening(app, async (baseUrl) => {
+      const { client, connected } = connectOAuthClient(new URL(`${baseUrl}/mcp`), fetch, 'token');
+      await connected;
+      await client.listTools();
+      await client.callTool({ name: 'ping' });
+      await client.readResource({ uri: 'config://app' });
+      await client.getPrompt({ name: 'greet', arguments: { name: PROMPT_ARGUMENT } });
+      await client.close();
+    });
+
+    await vi.waitFor(() => expect(sink.events()).toHaveLength(5), { timeout: 3000 });
+    expect(sink.events().map(({ type, protocol_version }) => ({ type, protocol_version }))).toEqual(
+      ['client_initialized', 'list_request', 'tool_call', 'resource_read', 'prompt_get'].map(
+        (type) => ({ type, protocol_version: '2025-11-25' }),
+      ),
+    );
     expectGoldenShape(sink.bodies);
   });
 
@@ -1788,6 +1839,33 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
       await reported(sink);
       expect(sink.events()[0]).toMatchObject({ method: 'tools/call', server_name: 'acme-mcp' });
       expect(sink.events()[0]).not.toHaveProperty('tool_name');
+    });
+
+    test('reports the protocol version a request names in its _meta', async () => {
+      const sink = reportSink();
+      await sendToAdapter(
+        adapter,
+        { reporting: { fetch: sink.fetch, secretKey: SECRET_KEY } },
+        RESOURCE_URL,
+        authFailureInit(undefined, {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name: 'ping',
+            arguments: {},
+            _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' },
+          },
+        }),
+      );
+
+      await reported(sink);
+      expect(sink.events()[0]).toMatchObject({
+        reason: 'missing_token',
+        method: 'tools/call',
+        protocol_version: '2026-07-28',
+      });
+      expectGoldenShape(sink.bodies, { exact: adapter === 'hono' });
     });
 
     test('reports no identity for a 403 when identity is off, or IP address and user agent when they are', async () => {

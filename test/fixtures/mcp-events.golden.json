@@ -52,8 +52,24 @@
       "handler_ms": 5
     },
     {
-      "type": "auth_failure",
+      "type": "tool_call",
       "occurred_at": 1795605600750,
+      "server_name": "acme-mcp",
+      "protocol_version": "2026-07-28",
+      "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "client_id": "Ab12Cd34Ef56Gh78",
+      "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "org_id": "org_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "tool_name": "ping",
+      "status": "success",
+      "duration_ms": 12,
+      "handler_ms": 9
+    },
+    {
+      "type": "auth_failure",
+      "occurred_at": 1795605601000,
       "ip_address": "203.0.113.7",
       "user_agent": "claude-code/2.1.0",
       "reason": "invalid_token",
@@ -64,7 +80,7 @@
     },
     {
       "type": "auth_failure",
-      "occurred_at": 1795605601000,
+      "occurred_at": 1795605601250,
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
       "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
@@ -77,8 +93,19 @@
       "tool_name": "ping"
     },
     {
+      "type": "auth_failure",
+      "occurred_at": 1795605601500,
+      "protocol_version": "2026-07-28",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "reason": "missing_token",
+      "http_status": 401,
+      "method": "tools/call",
+      "tool_name": "ping"
+    },
+    {
       "type": "client_initialized",
-      "occurred_at": 1795605601250,
+      "occurred_at": 1795605601750,
       "server_name": "acme-mcp",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
@@ -93,8 +120,9 @@
     },
     {
       "type": "list_request",
-      "occurred_at": 1795605601500,
+      "occurred_at": 1795605602000,
       "server_name": "acme-mcp",
+      "protocol_version": "2026-07-28",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
       "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
@@ -106,8 +134,9 @@
     },
     {
       "type": "resource_read",
-      "occurred_at": 1795605601750,
+      "occurred_at": 1795605602250,
       "server_name": "acme-mcp",
+      "protocol_version": "2026-07-28",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
       "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
@@ -122,7 +151,7 @@
     },
     {
       "type": "resource_read",
-      "occurred_at": 1795605602000,
+      "occurred_at": 1795605602500,
       "server_name": "acme-mcp",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
@@ -139,7 +168,7 @@
     },
     {
       "type": "resource_read",
-      "occurred_at": 1795605602250,
+      "occurred_at": 1795605602750,
       "server_name": "acme-mcp",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
@@ -154,8 +183,9 @@
     },
     {
       "type": "prompt_get",
-      "occurred_at": 1795605602500,
+      "occurred_at": 1795605603000,
       "server_name": "acme-mcp",
+      "protocol_version": "2026-07-28",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",
       "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
@@ -170,7 +200,7 @@
     },
     {
       "type": "prompt_get",
-      "occurred_at": 1795605602750,
+      "occurred_at": 1795605603250,
       "server_name": "acme-mcp",
       "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
       "client_id": "Ab12Cd34Ef56Gh78",

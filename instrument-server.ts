@@ -1,5 +1,6 @@
 // Observes the tool calls and other requests of an MCP server. Exported from the core subpath and every adapter.
 import {
+  PROTOCOL_VERSION_META_KEY,
   type RequestEventFields,
   type ToolCallOutcome,
   toolCallContextOf,
@@ -104,6 +105,8 @@ type Registered = {
 };
 
 const registries = new WeakMap<object, Registered>();
+// The protocol version each server answered `initialize` with, for the requests that follow on the same server
+const negotiatedVersions = new WeakMap<object, string>();
 
 type UriTemplateLike = { match(uri: string): unknown; toString(): string };
 
@@ -273,7 +276,6 @@ const LIST_ITEMS: Record<string, string> = {
 };
 
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
-const PROTOCOL_VERSION_META_KEY = 'io.modelcontextprotocol/protocolVersion';
 
 type Params = Record<string, unknown> | null | undefined;
 
@@ -295,11 +297,31 @@ type Observed = (
   response: JsonRpcMessage,
 ) => { fields: RequestEventFields; outcome?: ToolCallOutcome } | undefined;
 
+// The protocol version of a request: the one its `_meta` names on protocol revision 2026-07-28, or else the one its
+// server negotiated in `initialize`, which a server created for each request never sees
+function protocolVersionOf(server: object, params: Params): string | undefined {
+  const meta = params?._meta as Params;
+  return asString(meta?.[PROTOCOL_VERSION_META_KEY]) ?? negotiatedVersions.get(server);
+}
+
 function observeRequest(server: object, method: string, params: Params): Observed | undefined {
+  const observed = observeMethod(server, method, params);
+  if (!observed || method === 'initialize' || method === 'server/discover') return observed;
+  const protocolVersion = protocolVersionOf(server, params);
+  if (protocolVersion === undefined) return observed;
+  return (response) => {
+    const report = observed(response);
+    return report && { ...report, fields: { ...report.fields, protocol_version: protocolVersion } };
+  };
+}
+
+function observeMethod(server: object, method: string, params: Params): Observed | undefined {
   if (method === 'initialize') {
     return (response) => {
       if (response.error !== undefined) return undefined;
       const result = response.result as { protocolVersion?: unknown } | null | undefined;
+      const negotiated = asString(result?.protocolVersion);
+      if (negotiated !== undefined) negotiatedVersions.set(server, negotiated);
       return {
         fields: {
           ...clientFields(params?.clientInfo, params?.protocolVersion),
@@ -400,7 +422,12 @@ function observeTransport(transport: unknown, server: object) {
         if (!context) {
           if (extra?.authInfo !== undefined) warnOutsideInstrumentHandler();
         } else if (typeof toolName === 'string') {
-          const finish = context.startToolCall(toolName, serverNameOf(server), key);
+          const finish = context.startToolCall(
+            toolName,
+            serverNameOf(server),
+            key,
+            protocolVersionOf(server, params as Params),
+          );
           if (finish) pending.set(key, (response) => finish(toolCallOutcome(response)));
         }
       } else if (context && typeof method === 'string' && key !== undefined) {
