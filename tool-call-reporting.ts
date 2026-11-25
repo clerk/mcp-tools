@@ -457,7 +457,7 @@ export function beginToolCallContext<Req>({
   /**
    * The request's `hashSessionId`, which it awaited before calling this
    */
-  sessionIdHash?: string | undefined;
+  sessionIdHash: string | undefined;
   env: { secretKey: string | undefined; apiUrl: string | undefined };
 }): ToolCallContext | undefined {
   if (!authInfo) return undefined;
@@ -610,7 +610,7 @@ export async function reportAuthFailure<Req>({
   /**
    * The request's `hashSessionId`, awaited here so that the answer never waits for it
    */
-  sessionIdHash?: Promise<string | undefined> | undefined;
+  sessionIdHash: Promise<string | undefined> | undefined;
   env: { secretKey: string | undefined; apiUrl: string | undefined };
 }): Promise<(() => Promise<void> | undefined) | undefined> {
   if (!reporting) return undefined;

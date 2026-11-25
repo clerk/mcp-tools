@@ -1581,6 +1581,7 @@ describe('reporting options', () => {
       request: undefined,
       defaultIpAddress: () => undefined,
       userAgent: () => undefined,
+      sessionIdHash: undefined,
       env: { secretKey: undefined, apiUrl: undefined },
     })!;
 
@@ -1594,6 +1595,7 @@ describe('reporting options', () => {
         request: undefined,
         defaultIpAddress: () => undefined,
         userAgent: () => undefined,
+        sessionIdHash: undefined,
         env: { secretKey: undefined, apiUrl: undefined },
       });
     }
@@ -1631,6 +1633,7 @@ describe('tool call reports', () => {
       request: undefined,
       defaultIpAddress: () => undefined,
       userAgent: () => undefined,
+      sessionIdHash: undefined,
       env: { secretKey: undefined, apiUrl: undefined },
     })!;
 
@@ -1656,6 +1659,7 @@ describe('tool call reports', () => {
       request: undefined,
       defaultIpAddress: () => undefined,
       userAgent: () => undefined,
+      sessionIdHash: undefined,
       env: { secretKey: undefined, apiUrl: undefined },
     })!;
 
@@ -1695,6 +1699,7 @@ describe('tool call reports', () => {
       request: undefined,
       defaultIpAddress: () => undefined,
       userAgent: () => undefined,
+      sessionIdHash: undefined,
       env: { secretKey: undefined, apiUrl: undefined },
     })!;
 
@@ -1723,6 +1728,7 @@ describe('tool call reports', () => {
       request: undefined,
       defaultIpAddress: () => undefined,
       userAgent: () => undefined,
+      sessionIdHash: undefined,
       env: { secretKey: undefined, apiUrl: undefined },
     })!;
 
@@ -2151,6 +2157,7 @@ describe('auth failure reports under a burst of refused requests', () => {
           request: undefined,
           defaultIpAddress: () => undefined,
           userAgent: () => undefined,
+          sessionIdHash: undefined,
           env: { secretKey: undefined, apiUrl: undefined },
         });
 
@@ -2189,6 +2196,7 @@ describe('auth failure reports under a burst of refused requests', () => {
       request: undefined,
       defaultIpAddress: () => undefined,
       userAgent: () => undefined,
+      sessionIdHash: undefined,
       env: { secretKey: undefined, apiUrl: undefined },
     })!;
 
@@ -2207,6 +2215,7 @@ describe('auth failure reports under a burst of refused requests', () => {
         request: undefined,
         defaultIpAddress: () => undefined,
         userAgent: () => undefined,
+        sessionIdHash: undefined,
         env: { secretKey: undefined, apiUrl: undefined },
       });
     }
