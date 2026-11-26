@@ -380,6 +380,25 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/hono', () => {
     expect(sink.calls().map((call) => call.ip_address)).toEqual(['2001:db8::1', undefined]);
   });
 
+  test('leaves the reports to the batch timer when Hono has no ExecutionContext, as on Node', async () => {
+    const sink = reportSink();
+    const app = new Hono();
+    app.all(
+      '/mcp',
+      honoAdapter.clerkInstrumentHandler(sdkV2Handler(), {
+        resourceUrl: RESOURCE_URL,
+        clerkClient,
+        reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+      } as honoAdapter.McpAuthOptions),
+    );
+
+    await (await app.fetch(new Request(RESOURCE_URL, toolCallInit('ping')))).text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(sink.fetch).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(sink.calls()).toHaveLength(1), { timeout: 3000 });
+  });
+
   test('reports nothing when reporting is off', async () => {
     const sink = reportSink();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');

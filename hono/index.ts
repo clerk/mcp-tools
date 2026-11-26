@@ -602,7 +602,7 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
     return flushAfterResponse(
       response,
       { caller: 'clerkInstrumentHandler', context, reporting, request },
-      (work) => c.executionCtx.waitUntil(work),
+      (start) => c.executionCtx.waitUntil(start()),
     );
   };
 }

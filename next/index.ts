@@ -542,7 +542,7 @@ export function clerkInstrumentHandler(
     return flushAfterResponse(
       response,
       { caller: 'clerkInstrumentHandler', context, reporting, request: req },
-      keepAlive,
+      (start) => keepAlive(start()),
     );
   };
 }

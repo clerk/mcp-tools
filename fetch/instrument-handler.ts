@@ -291,7 +291,7 @@ export function fetchInstrumentHandler<Env, Ctx>(
     return flushAfterResponse(
       response,
       { caller: reportingCaller, context, reporting, request },
-      (work) => waitUntil(ctx, work),
+      (start) => waitUntil(ctx, start()),
     );
   };
 }
