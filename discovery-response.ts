@@ -83,23 +83,31 @@ const discoveryCorsHeaders = {
   'Access-Control-Expose-Headers': 'ETag',
 };
 
-// The JSON error a request gets, with its body even for HEAD: the responder drops a HEAD answer's body in one place.
-// `no-store` keeps every error out of caches (RFC 9111 section 5.2.2.5): without it, a 405 is heuristically cacheable
-// (RFC 9110 section 15.1), and a cache may reuse it with heuristic freshness (RFC 9111 section 4.2.2).
-const errorAnswer = (
+/**
+ * The JSON error a request gets, with its body even for HEAD. `no-store` keeps every error out of caches (RFC 9111
+ * section 5.2.2.5): without it, a 405 is heuristically cacheable (RFC 9110 section 15.1), and a cache may reuse it with
+ * heuristic freshness (RFC 9111 section 4.2.2).
+ * @param status - The error status
+ * @param error - The error code in the JSON body
+ * @param headers - More headers, such as `Allow` for a 405
+ * @returns The answer
+ */
+export const jsonErrorAnswer = (
   status: 400 | 405 | 412 | 421,
   error: string,
   headers: Record<string, string> = {},
 ): DiscoveryAnswer => ({
   status,
-  headers: {
-    ...discoveryCorsHeaders,
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-store',
-    ...headers,
-  },
+  headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
   body: JSON.stringify({ error }),
 });
+
+// A discovery document's error, readable from any origin. The responder drops a HEAD answer's body in one place.
+const errorAnswer = (
+  status: 400 | 405 | 412 | 421,
+  error: string,
+  headers: Record<string, string> = {},
+): DiscoveryAnswer => jsonErrorAnswer(status, error, { ...discoveryCorsHeaders, ...headers });
 
 /**
  * Validates a `serverCardHandler`'s options and generates the card for each configured URL once, so the answers are

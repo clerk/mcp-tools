@@ -118,7 +118,6 @@ const warnedUris = new Set<string>();
 
 const CALLER = 'mcpAppViewResource';
 const fail: Fail = failFor(CALLER);
-const noGeneratedKeys: ReadonlySet<string> = new Set();
 
 /**
  * An MCP App view (MCP Apps 2026-01-26) as arguments for `server.registerResource(...view)`, on MCP SDK 1.x or
@@ -165,8 +164,6 @@ function assertOptions(options: unknown): asserts options is McpAppViewResourceO
   if (!isPlainObject(options)) fail('takes an options object');
   assertKnownKeys(fail, options, {
     allowed: optionKeys,
-    generated: noGeneratedKeys,
-    generatedMessage: () => '',
     unknownMessage: (key) => `has no ${key} option. It takes any of ${[...optionKeys].join(', ')}`,
   });
   const { name, uri, html, title, description, csp, prefersBorder } = options;
@@ -191,8 +188,6 @@ function assertOptions(options: unknown): asserts options is McpAppViewResourceO
   }
   assertKnownKeys(fail, csp, {
     allowed: cspKeys,
-    generated: noGeneratedKeys,
-    generatedMessage: () => '',
     unknownMessage: (key) => `csp has no ${key} option. It takes any of ${CSP_KEYS.join(', ')}`,
   });
   for (const key of CSP_KEYS) {

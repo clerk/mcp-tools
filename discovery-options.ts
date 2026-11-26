@@ -46,20 +46,21 @@ export function deepFreeze<T>(value: T): T {
  * unsupported option is never ignored.
  * @param fail - The entry point's `fail`
  * @param object - The options object, or one of its entries
- * @param keys - The keys that may be set, the generated keys that cannot be, and the message for each kind of key
+ * @param keys - The keys that may be set, the generated keys that cannot be, if any, and the message for each kind of
+ * key
  */
 export function assertKnownKeys(
   fail: Fail,
   object: Record<string, unknown>,
   keys: {
     allowed: ReadonlySet<string>;
-    generated: ReadonlySet<string>;
-    generatedMessage: (key: string) => string;
+    generated?: ReadonlySet<string>;
+    generatedMessage?: (key: string) => string;
     unknownMessage: (key: string) => string;
   },
 ) {
   for (const key of Object.keys(object)) {
-    if (keys.generated.has(key)) fail(keys.generatedMessage(key));
+    if (keys.generated?.has(key)) fail(keys.generatedMessage?.(key) ?? `cannot set ${key}`);
     if (!keys.allowed.has(key)) fail(keys.unknownMessage(key));
   }
 }

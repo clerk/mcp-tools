@@ -195,7 +195,6 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions): (req: Reques
   return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
 }
 
-// Exported uncalled as a method, the factory is called with the request, which would otherwise fail on a missing option
 /**
  * A Next.js route handler that serves the official MCP Registry's HTTP domain proof, the `v=MCPv1; k=ed25519; p=<key>` record
  * `mcp-publisher login http --domain example.com` has the registry fetch from `/.well-known/mcp-registry-auth` on the
@@ -234,6 +233,7 @@ export function mcpRegistryAuthHandler(
   return discoveryHandler(mcpRegistryAuthResponder('mcpRegistryAuthHandler', options));
 }
 
+// Exported uncalled as a method, the factory is called with the request, which would otherwise fail on a missing option
 function assertDiscoveryHandlerCalled(caller: string, options: unknown) {
   if (options instanceof Request) {
     throw new Error(

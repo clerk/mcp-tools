@@ -9,7 +9,7 @@ import {
   failFor,
   isPlainObject,
 } from './discovery-options';
-import type { DiscoveryAnswer, DiscoveryRequest } from './discovery-response';
+import { type DiscoveryAnswer, type DiscoveryRequest, jsonErrorAnswer } from './discovery-response';
 import { type McpResourceUrl, assertResourceUrls } from './resource-url';
 import {
   type ServerCard,
@@ -245,8 +245,6 @@ export function mcpRegistryAuthResponder(
   }
   assertKnownKeys(fail, options, {
     allowed: registryAuthKeys,
-    generated: new Set(),
-    generatedMessage: () => '',
     unknownMessage: (key) => `does not take ${key}. It takes only publicKey`,
   });
   const { publicKey } = options;
@@ -269,14 +267,6 @@ export function mcpRegistryAuthResponder(
     if (method === 'HEAD') {
       return { status: 200, headers: { ...headers, 'Content-Length': contentLength }, body: null };
     }
-    return {
-      status: 405,
-      headers: {
-        Allow: REGISTRY_AUTH_ALLOW,
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store',
-      },
-      body: JSON.stringify({ error: 'method_not_allowed' }),
-    };
+    return jsonErrorAnswer(405, 'method_not_allowed', { Allow: REGISTRY_AUTH_ALLOW });
   };
 }
