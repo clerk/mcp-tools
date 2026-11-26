@@ -121,21 +121,21 @@ export function createClerkMcpWorker<Env = ClerkEnv, Ctx = WorkerExecutionContex
     return created;
   };
 
-  const authedHandler = fetchInstrumentHandler<Env, Ctx>(
-    async (request, { authInfo, env }) => {
-      const handler = await loadMcpHandler(env);
-      return handler.fetch(request, { ...(authInfo && { authInfo }) });
-    },
-    // Taking `server` out of the options union leaves one object type that no longer matches it, so it is cast back
-    authOptions as McpAuthOptions<Env, Ctx>,
-    {
-      caller: createClerkMcpWorkerCaller,
-      callForm: createClerkMcpWorkerCallForm,
-      reportingCaller: 'createClerkMcpWorker',
-    },
-  );
-
-  return { fetch: authedHandler };
+  return {
+    fetch: fetchInstrumentHandler<Env, Ctx>(
+      async (request, { authInfo, env }) => {
+        const handler = await loadMcpHandler(env);
+        return handler.fetch(request, { ...(authInfo && { authInfo }) });
+      },
+      // Taking `server` out of the options union leaves one object type that no longer matches it, so it is cast back
+      authOptions as McpAuthOptions<Env, Ctx>,
+      {
+        caller: createClerkMcpWorkerCaller,
+        callForm: createClerkMcpWorkerCallForm,
+        reportingCaller: 'createClerkMcpWorker',
+      },
+    ),
+  };
 }
 
 async function createSdkHandler(

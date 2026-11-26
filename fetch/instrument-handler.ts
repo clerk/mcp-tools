@@ -18,7 +18,6 @@ import { type McpResourceUrl, matchResourceUrl } from '../resource-url';
 import { type McpAuthFailure, metadataCorsHeaders } from '../server';
 import {
   type ReportingOption,
-  type ToolCallReporting,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
   checkToolCallContext,
@@ -182,9 +181,12 @@ export function clerkInstrumentHandler<Env = ClerkEnv, Ctx = WorkerExecutionCont
 export function fetchInstrumentHandler<Env, Ctx>(
   handler: McpHandler<Env, Ctx>,
   options: McpAuthOptions<Env, Ctx>,
-  names: { caller: string; callForm: string; reportingCaller: string },
+  {
+    caller,
+    callForm,
+    reportingCaller,
+  }: { caller: string; callForm: string; reportingCaller: string },
 ): (request: Request, env: Env, ctx: Ctx) => Promise<Response> {
-  const { caller, callForm, reportingCaller } = names;
   assertVerifierOrResourceUrl(
     options,
     `Clerk error: ${caller} needs a resourceUrl to verify tokens with Clerk. Call it as ${callForm}`,
@@ -202,11 +204,34 @@ export function fetchInstrumentHandler<Env, Ctx>(
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY in the Worker env',
   );
 
+  // Reports a 401, 403 or 421, reading a copy of the body after the answer, and keeps the Worker alive until it is sent
+  const reportFailure = (
+    fetchRequest: McpFetchRequest<Env, Ctx>,
+    keys: ClerkEnv,
+    answer: { failure: McpAuthFailure; status: number; authInfo: AuthInfo | undefined },
+  ) => {
+    if (!reporting) return;
+    const { request, ctx } = fetchRequest;
+    const report = reportAuthFailure({
+      caller: reportingCaller,
+      reporting,
+      answer,
+      // `readJsonBody` takes its copy now, before the answer, and reads it afterwards, so the request is untouched and
+      // the answer never waits for the body
+      body: readJsonBody(request, undefined, AUTH_FAILURE_BODY_LIMIT),
+      request: fetchRequest,
+      ...reportFields(request, keys),
+      sessionIdHash: hashSessionId(
+        keys.CLERK_PUBLISHABLE_KEY,
+        request.headers.get('mcp-session-id'),
+      ),
+    })
+      .then((send) => send?.())
+      .catch(() => undefined);
+    waitUntil(ctx, report);
+  };
+
   const isMetadataRequest = metadataRoute(authOptions.resourceUrl);
-  const serve = (request: Request, authInfo: AuthInfo | undefined, env: Env, ctx: Ctx) =>
-    typeof handler === 'function'
-      ? handler(request, { authInfo, env, ctx })
-      : handler.fetch(request, { ...(authInfo && { authInfo }) });
 
   return async (request, env, ctx) => {
     const keys = workerKeys(env);
@@ -235,15 +260,13 @@ export function fetchInstrumentHandler<Env, Ctx>(
             () => {},
           );
         } catch {}
-        if (reporting) {
-          try {
-            reportFetchAuthFailure(reportingCaller, reporting, fetchRequest, keys, {
-              failure: result.failure,
-              status: result.status,
-              authInfo: result.authInfo,
-            });
-          } catch {}
-        }
+        try {
+          reportFailure(fetchRequest, keys, {
+            failure: result.failure,
+            status: result.status,
+            authInfo: result.authInfo,
+          });
+        } catch {}
       }
       return Response.json(result.body, result);
     }
@@ -260,7 +283,10 @@ export function fetchInstrumentHandler<Env, Ctx>(
       sessionIdHash: hashing && (await hashing),
     });
 
-    const response = await serve(request, authInfo, env, ctx);
+    const response =
+      typeof handler === 'function'
+        ? await handler(request, { authInfo, env, ctx })
+        : await handler.fetch(request, { ...(authInfo && { authInfo }) });
     if (!context || !reporting) return response;
 
     let ended!: () => void;
@@ -278,31 +304,6 @@ export function fetchInstrumentHandler<Env, Ctx>(
       ended();
     });
   };
-}
-
-// Reports a 401, 403 or 421, reading a copy of the body after the answer, and keeps the Worker alive until it is sent
-function reportFetchAuthFailure<Env, Ctx>(
-  caller: string,
-  reporting: ToolCallReporting<McpFetchRequest<Env, Ctx>>,
-  fetchRequest: McpFetchRequest<Env, Ctx>,
-  keys: ClerkEnv,
-  answer: { failure: McpAuthFailure; status: number; authInfo: AuthInfo | undefined },
-) {
-  const { request, ctx } = fetchRequest;
-  const report = reportAuthFailure({
-    caller,
-    reporting,
-    answer,
-    // `readJsonBody` takes its copy now, before the answer, and reads it afterwards, so the request is untouched and
-    // the answer never waits for the body
-    body: readJsonBody(request, undefined, AUTH_FAILURE_BODY_LIMIT),
-    request: fetchRequest,
-    ...reportFields(request, keys),
-    sessionIdHash: hashSessionId(keys.CLERK_PUBLISHABLE_KEY, request.headers.get('mcp-session-id')),
-  })
-    .then((send) => send?.())
-    .catch(() => undefined);
-  waitUntil(ctx, report);
 }
 
 // The Clerk keys of a Worker env, which may be missing outside Workers
