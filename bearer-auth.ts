@@ -765,20 +765,104 @@ type TokenVerifier = (
  * The adapters read the values themselves: Next.js only inlines `process.env.NEXT_PUBLIC_*` where it is written out.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param keys - Each environment variable's name and value
+ * @param variable - What the message calls a key, such as `variable in the Worker env`
  * @returns The same keys, each with a value
  */
 export function requireClerkEnvKeys<K extends string>(
   caller: string,
   keys: Record<K, string | undefined>,
+  variable = 'environment variable',
 ): Record<K, string> {
   for (const [name, value] of Object.entries(keys)) {
     if (!value) {
       throw new Error(
-        `Clerk error: ${caller} needs the ${name} environment variable or a clerkClient option`,
+        `Clerk error: ${caller} needs the ${name} ${variable} or a clerkClient option`,
       );
     }
   }
   return keys as Record<K, string>;
+}
+
+/**
+ * The environment variables a Clerk client is built from, as a Cloudflare Workers `env` or `process.env` holds them.
+ */
+export type ClerkEnv = {
+  CLERK_PUBLISHABLE_KEY?: string | undefined;
+  CLERK_SECRET_KEY?: string | undefined;
+  CLERK_API_URL?: string | undefined;
+  CLERK_API_VERSION?: string | undefined;
+  CLERK_JWT_KEY?: string | undefined;
+};
+
+// The clients `envClerkClient` built, keyed by every setting, the secret included (in memory only). On Cloudflare
+// Workers the settings are only known per request, on the Worker's `env`, so the client can't be built at setup.
+const envClerkClients = new Map<string, ClerkOAuthClient>();
+
+/**
+ * The settings a Clerk client is built from: the secret and publishable keys, and `CLERK_API_URL`,
+ * `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as `clerkClient` from `@clerk/express` reads them.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param env - The environment to read
+ * @param variable - What the message calls a key, such as `variable in the Worker env`; `undefined` keeps
+ * `requireClerkEnvKeys`' default, `environment variable`
+ * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
+ * not set.
+ */
+function requireClerkKeys(caller: string, env: ClerkEnv, variable: string | undefined) {
+  const {
+    CLERK_SECRET_KEY,
+    CLERK_PUBLISHABLE_KEY,
+    CLERK_API_URL,
+    CLERK_API_VERSION,
+    CLERK_JWT_KEY,
+  } = env;
+  const keys = requireClerkEnvKeys(caller, { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY }, variable);
+  // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
+  return {
+    secretKey: keys.CLERK_SECRET_KEY,
+    publishableKey: keys.CLERK_PUBLISHABLE_KEY,
+    ...(CLERK_API_URL && { apiUrl: CLERK_API_URL }),
+    ...(CLERK_API_VERSION && { apiVersion: CLERK_API_VERSION }),
+    ...(CLERK_JWT_KEY && { jwtKey: CLERK_JWT_KEY }),
+  };
+}
+
+/**
+ * The default Clerk client of an adapter that reads its keys per request, built from `env` and kept for each set of
+ * settings, loading `@clerk/backend` the first time. The package is an optional peer that only this path needs, so it
+ * is loaded with `import()` inside `try`: a bundler such as esbuild fails the build on a bare `import()` of a
+ * missing package, but not on one inside `try`.
+ * @param caller - The entry point named in the messages, such as `mcpAuth`
+ * @param env - The environment to read the keys from, such as a Worker's `env`, or Hono's `env(c)`. Only it is read.
+ * @param variable - What the missing-key message calls a key, such as `variable in the Worker env`. Defaults to
+ * `environment variable`.
+ * @returns The client, the same one for the same settings. It throws a `Clerk error:` naming a missing key, or
+ * asking to install `@clerk/backend` when it can't be loaded.
+ */
+export async function envClerkClient(
+  caller: string,
+  env: ClerkEnv,
+  variable?: string,
+): Promise<ClerkOAuthClient> {
+  const keys = requireClerkKeys(caller, env, variable);
+  // `requireClerkKeys` builds the settings in one key order and leaves out the ones not set, so each set of settings
+  // has one cache key
+  const cacheKey = JSON.stringify(keys);
+  const cached = envClerkClients.get(cacheKey);
+  if (cached) return cached;
+
+  let backend: typeof import('@clerk/backend');
+  try {
+    backend = await import('@clerk/backend');
+  } catch (error) {
+    throw new Error(`Clerk error: install @clerk/backend, or pass clerkClient to ${caller}`, {
+      cause: error,
+    });
+  }
+
+  const client = backend.createClerkClient(keys);
+  envClerkClients.set(cacheKey, client);
+  return client;
 }
 
 // The Frontend API URL of the publishable key a metadata handler read from the app's environment, or an error when it
@@ -871,12 +955,18 @@ export const methodNotAllowed = {
 } as const;
 
 /**
+ * The well-known path of the protected resource metadata (RFC 9728 section 3), inserted before a resource's path and
+ * query.
+ */
+export const PROTECTED_RESOURCE_WELL_KNOWN = '/.well-known/oauth-protected-resource';
+
+/**
  * The RFC 9728 section 3 metadata URL for a resource: the well-known path goes between the host and the resource's
  * path and query.
  */
 export function resourceMetadataUrlFor(resourceUrl: string): string {
   const { origin, pathname, search } = new URL(resourceUrl);
-  return `${origin}/.well-known/oauth-protected-resource${pathname === '/' ? '' : pathname}${search}`;
+  return `${origin}${PROTECTED_RESOURCE_WELL_KNOWN}${pathname === '/' ? '' : pathname}${search}`;
 }
 
 // The resource a protected resource metadata URL describes, the inverse of `resourceMetadataUrlFor`: the well-known
@@ -885,7 +975,7 @@ export function resourceMetadataUrlFor(resourceUrl: string): string {
 // 9728 section 3.3 has clients discard metadata whose `resource` is not identical to the URL they derived it from.
 function resourceFromMetadataUrl(metadataUrl: string): string {
   const { origin, pathname, search } = new URL(metadataUrl);
-  return `${origin}${pathname.replace('/.well-known/oauth-protected-resource', '')}${search}`;
+  return `${origin}${pathname.replace(PROTECTED_RESOURCE_WELL_KNOWN, '')}${search}`;
 }
 
 /**

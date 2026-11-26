@@ -2,6 +2,7 @@ import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../m
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
+  type ClerkEnv,
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertAuthorizationServerMetadataHandlerCalled,
@@ -12,10 +13,10 @@ import {
   assertVerifierOrResourceUrl,
   authorizationServerMetadataAnswer,
   createBearerAuth,
+  envClerkClient,
   methodNotAllowed,
   protectedResourceMetadataAnswer,
   readJsonBody,
-  requireClerkEnvKeys,
   serverErrorAnswer,
 } from '../bearer-auth';
 import {
@@ -31,20 +32,15 @@ import {
   type ReportingOption,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
-  checkToolCallContext,
+  flushAfterResponse,
   hashSessionId,
-  onResponseEnd,
   reportAuthFailure,
   reportingKey,
   resolveReporting,
   withoutReporting,
 } from '../tool-call-reporting';
-import {
-  type ClerkOAuthClient,
-  type McpAuthError,
-  type McpAuthFailure,
-  metadataCorsHeaders,
-} from '../server';
+import { type McpAuthError, type McpAuthFailure, metadataCorsHeaders } from '../server';
+import { warnStreamableHttpHandlerDeprecated } from '../streamable-http-deprecation';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -110,73 +106,6 @@ interface WebStandardStreamableHttpTransport {
    * Closes the transport.
    */
   close(): Promise<void>;
-}
-
-type ClerkEnv = {
-  CLERK_PUBLISHABLE_KEY?: string;
-  CLERK_SECRET_KEY?: string;
-  CLERK_API_URL?: string;
-  CLERK_API_VERSION?: string;
-  CLERK_JWT_KEY?: string;
-};
-
-// The clients `mcpAuth` built from the environment, keyed by every setting, the secret included (in memory only). On
-// Cloudflare Workers the settings are only known per request, on `c.env`, so the client can't be built at setup.
-const envClerkClients = new Map<string, ClerkOAuthClient>();
-
-/**
- * The settings a Clerk client is built from, read from the app's environment through `env(c)`: the secret and
- * publishable keys, and `CLERK_API_URL`, `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as
- * `clerkClient` from `@clerk/express` reads them.
- * @param c - The Hono context of the request
- * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
- * not set.
- */
-function requireClerkKeys(c: Context, caller: string) {
-  const {
-    CLERK_SECRET_KEY,
-    CLERK_PUBLISHABLE_KEY,
-    CLERK_API_URL,
-    CLERK_API_VERSION,
-    CLERK_JWT_KEY,
-  } = env<ClerkEnv>(c);
-  const keys = requireClerkEnvKeys(caller, { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
-  // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
-  return {
-    secretKey: keys.CLERK_SECRET_KEY,
-    publishableKey: keys.CLERK_PUBLISHABLE_KEY,
-    ...(CLERK_API_URL && { apiUrl: CLERK_API_URL }),
-    ...(CLERK_API_VERSION && { apiVersion: CLERK_API_VERSION }),
-    ...(CLERK_JWT_KEY && { jwtKey: CLERK_JWT_KEY }),
-  };
-}
-
-/**
- * The Clerk client built from the environment's keys, loading `@clerk/backend` the first time. The package is an
- * optional peer that only this path needs, so it is loaded with `import()` inside `try`: a bundler such as esbuild
- * fails the build on a bare `import()` of a missing package, but not on one inside `try`.
- * @param keys - The settings `requireClerkKeys` read
- * @returns The client, the same one for the same settings
- */
-async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>, caller: string) {
-  // `requireClerkKeys` builds the settings in one key order and leaves out the ones not set, so each set of settings
-  // has one cache key
-  const cacheKey = JSON.stringify(keys);
-  const cached = envClerkClients.get(cacheKey);
-  if (cached) return cached;
-
-  let backend: typeof import('@clerk/backend');
-  try {
-    backend = await import('@clerk/backend');
-  } catch (error) {
-    throw new Error(`Clerk error: install @clerk/backend, or pass clerkClient to ${caller}`, {
-      cause: error,
-    });
-  }
-
-  const client = backend.createClerkClient(keys);
-  envClerkClients.set(cacheKey, client);
-  return client;
 }
 
 /**
@@ -375,6 +304,7 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
  * );
  * ```
+ * @deprecated Use `clerkInstrumentHandler(handler, options)`, which authenticates the same way and can report tool calls
  */
 export function mcpAuth(options: MiddlewareAuthOptions<Context>): MiddlewareHandler {
   options = withoutReporting('mcpAuth', options);
@@ -402,7 +332,7 @@ function honoAuthenticator(
   const authenticate = createBearerAuth(
     caller,
     options,
-    (c: Context) => envClerkClient(requireClerkKeys(c, caller), caller),
+    (c: Context) => envClerkClient(caller, env<ClerkEnv>(c)),
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY',
   );
 
@@ -501,7 +431,10 @@ function requestWithBody(c: Context): Promise<Request> {
  * @typeParam Transport - The transport the class creates, inferred from the class alone
  * @typeParam Server - The server `createServer` returns. It is a separate type parameter so that `Transport` is not
  * inferred from the SDK's general `Transport` interface, which `McpServer.connect` takes.
- * @deprecated Use `clerkInstrumentHandler(handler, options)` with the handler `createMcpHandler` from MCP SDK 2.x returns
+ * @deprecated `streamableHttpHandler` is the MCP SDK 1.x path (`@modelcontextprotocol/sdk`): it can't serve protocol
+ * revision 2026-07-28 or `server/discover`, so clients fall back to an older revision. Build the server with MCP SDK
+ * 2.x (`@modelcontextprotocol/server`) and serve the handler `createMcpHandler` returns with
+ * `clerkInstrumentHandler(handler, options)`. `streamableHttpHandler` will be removed in `@clerk/mcp-tools` 2.0.
  */
 export function streamableHttpHandler<
   Transport extends WebStandardStreamableHttpTransport,
@@ -513,6 +446,7 @@ export function streamableHttpHandler<
     'WebStandardStreamableHTTPServerTransport',
     'webStandardStreamableHttp.js',
   );
+  warnStreamableHttpHandlerDeprecated();
 
   return async (c: Context) => {
     if (c.req.method !== 'POST') {
@@ -665,19 +599,11 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
         : await handler.fetch(request, { ...(authInfo && { authInfo }) });
     if (!context || !reporting) return response;
 
-    let ended!: () => void;
-    const end = new Promise<void>((resolve) => (ended = resolve));
-    try {
-      c.executionCtx.waitUntil(end.then(() => context.flush()));
-    } catch {}
-    return onResponseEnd(response, () => {
-      checkToolCallContext('clerkInstrumentHandler', context, reporting, {
-        method: c.req.method,
-        status: response.status,
-        mcpMethod: c.req.header('mcp-method'),
-      });
-      ended();
-    });
+    return flushAfterResponse(
+      response,
+      { caller: 'clerkInstrumentHandler', context, reporting, request },
+      (start) => c.executionCtx.waitUntil(start()),
+    );
   };
 }
 

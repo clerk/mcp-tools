@@ -8,37 +8,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vit
 
 import { createBearerAuth, serverErrorAnswer, verifyClerkOAuthToken } from './bearer-auth';
 import { isClerkAuthInfo, McpAuthError, McpTokenVerificationError } from './server';
-import { FAKE_PK } from './test/mcp-harness';
+import { FAKE_PK, clerkAccessToken as accessToken, clerkJwtKey } from './test/mcp-harness';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
-const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 
 const clerkClient = createClerkClient({
   secretKey: 'sk_test_clerk_verification',
   publishableKey: FAKE_PK,
-  jwtKey: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+  jwtKey: clerkJwtKey(),
 });
-
-function accessToken(claims: Record<string, unknown>) {
-  const now = Math.floor(Date.now() / 1000);
-  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  const signed = [
-    encode({ alg: 'RS256', typ: 'at+jwt', kid: 'ins_test' }),
-    encode({
-      iss: 'https://clerk.example.com',
-      sub: 'user_123',
-      client_id: 'client_123',
-      scope: 'profile email',
-      jti: 'oat_123',
-      iat: now - 10,
-      nbf: now - 10,
-      exp: now + 300,
-      ...claims,
-    }),
-  ].join('.');
-  const signature = createSign('RSA-SHA256').update(signed).sign(privateKey, 'base64url');
-  return `${signed}.${signature}`;
-}
 
 describe('verifyClerkOAuthToken with real Clerk verification', () => {
   test.each([

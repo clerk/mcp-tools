@@ -9,6 +9,7 @@ export default defineConfig({
     'next/client.ts',
     'express/index.ts',
     'hono/index.ts',
+    'fetch/index.ts',
     'stores/fs.ts',
     'stores/redis.ts',
     'stores/postgres.ts',
