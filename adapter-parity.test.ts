@@ -457,6 +457,23 @@ async function reportedError(
   return String(error);
 }
 
+/** Each auth entry point on its own with `options`, as `reportedError` mounts it. */
+function bareAuth(name: AuthEntry, options: object): unknown {
+  switch (name) {
+    case 'next':
+      return nextAdapter.withClerkMcpAuth(
+        async () => Response.json({ reached: true }),
+        options as nextAdapter.McpAuthOptions,
+      );
+    case 'express':
+      return expressAdapter.mcpAuth(options as expressAdapter.McpAuthOptions);
+    case 'hono':
+      return honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions);
+    default:
+      return fetchAuth(name, options, () => Response.json({ reached: true }));
+  }
+}
+
 describe.each(protectedResourceApps)('%s protectedResourceMetadataHandler', (_name, mount) => {
   // RFC 9728 section 3.3: the `resource` must be identical to the URL the metadata URL was derived from, so each
   // suffix maps back to the resource whose `resourceMetadataUrlFor` it is
@@ -700,6 +717,12 @@ const verifyToken = (token: string): AuthInfo | undefined => {
 /** The options `failureApps` passes to each adapter: only a `verifyToken`, which suits every adapter's request type. */
 type FailureAppOptions = { verifyToken: (token: string) => AuthInfo | undefined };
 
+/** The fetch entry's `failureApps` entry for `kind`. */
+function fetchFailureApp(kind: 'fetch' | 'fetch worker') {
+  return (options: FailureAppOptions, record: (failure: unknown) => void): App =>
+    fetchAuth(kind, { ...options, onAuthFailure: record }, () => Response.json({ reached: true }));
+}
+
 /** Each adapter's auth entry point on /mcp, calling `record` with the failure it reports for a request it answers. */
 const failureApps: Record<
   AuthEntry,
@@ -735,14 +758,8 @@ const failureApps: Record<
       ...options,
       onAuthFailure: record,
     }),
-  fetch: (options, record) =>
-    fetchAuth('fetch', { ...options, onAuthFailure: record }, () =>
-      Response.json({ reached: true }),
-    ),
-  'fetch worker': (options, record) =>
-    fetchAuth('fetch worker', { ...options, onAuthFailure: record }, () =>
-      Response.json({ reached: true }),
-    ),
+  fetch: fetchFailureApp('fetch'),
+  'fetch worker': fetchFailureApp('fetch worker'),
 };
 
 /** POSTs `Bearer t` to the adapter's auth entry point with `verifyToken`, with the failure it reported. */
@@ -1196,17 +1213,7 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
           clerkClient: resolve,
           publicAccess: { methods: ['initialize'] },
         };
-        const handler =
-          name === 'next'
-            ? nextAdapter.withClerkMcpAuth(
-                async () => Response.json({ reached: true }),
-                options as nextAdapter.McpAuthOptions,
-              )
-            : name === 'express'
-              ? expressAdapter.mcpAuth(options as expressAdapter.McpAuthOptions)
-              : name === 'hono'
-                ? honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions)
-                : fetchAuth(name, options, () => Response.json({ reached: true }));
+        const handler = bareAuth(name, options);
 
         for (const init of [
           { method: 'POST' },
