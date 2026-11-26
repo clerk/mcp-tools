@@ -2570,16 +2570,25 @@ describe.each<'hono' | 'next' | 'fetch'>(['hono', 'next', 'fetch'])(
         body,
         duplex: 'half',
       } as RequestInit;
-      const send =
-        adapter === 'hono'
-          ? honoApp(sdkV2Handler(), options as Partial<honoAdapter.McpAuthOptions>).fetch
-          : adapter === 'fetch'
-            ? workerApp(sdkV2Handler(), options as Partial<fetchEntry.McpAuthOptions>).fetch
-            : (input: string, requestInit: RequestInit) =>
-                nextAdapter.clerkInstrumentHandler(
-                  sdkV2Handler(),
-                  options as nextAdapter.McpAuthOptions,
-                )(new Request(input, withUserAgent(requestInit)));
+      // Each adapter's `clerkInstrumentHandler`, built when the request is sent, as `sendToAdapter` builds them
+      const send = (input: string, requestInit: RequestInit) => {
+        if (adapter === 'hono') {
+          return honoApp(sdkV2Handler(), options as Partial<honoAdapter.McpAuthOptions>).fetch(
+            input,
+            requestInit,
+          );
+        }
+        if (adapter === 'fetch') {
+          return workerApp(sdkV2Handler(), options as Partial<fetchEntry.McpAuthOptions>).fetch(
+            input,
+            requestInit,
+          );
+        }
+        return nextAdapter.clerkInstrumentHandler(
+          sdkV2Handler(),
+          options as nextAdapter.McpAuthOptions,
+        )(new Request(input, withUserAgent(requestInit)));
+      };
 
       // The body hasn't arrived yet, and the challenge doesn't wait for it
       const response = await send(RESOURCE_URL, init);
