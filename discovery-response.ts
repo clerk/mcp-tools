@@ -177,6 +177,20 @@ export function aiCatalogResponder(caller: string, options: unknown) {
 }
 
 /**
+ * Checks a discovery handler's `maxAge` option.
+ * @param caller - The entry point named in error messages
+ * @param maxAge - The option, unchecked
+ * @returns The seconds a cache may reuse the document for, `3600` when the option is left out
+ */
+export function checkedMaxAge(caller: string, maxAge: unknown): number {
+  const seconds = maxAge === undefined ? DEFAULT_MAX_AGE : maxAge;
+  if (typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 0) {
+    failFor(caller)('maxAge must be a whole number of seconds, 0 or more, or left out for 3600');
+  }
+  return seconds as number;
+}
+
+/**
  * The answers of a discovery handler, from the document a request's URL selects.
  * @param caller - The entry point named in error messages
  * @param config - The cache lifetime, the media type a request gets, and `build`, called once after `maxAge` is
@@ -190,10 +204,7 @@ function discoveryResponder(
     build: () => DiscoveryDocuments;
   },
 ) {
-  const maxAge = config.maxAge === undefined ? DEFAULT_MAX_AGE : config.maxAge;
-  if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
-    failFor(caller)('maxAge must be a whole number of seconds, 0 or more, or left out for 3600');
-  }
+  const maxAge = checkedMaxAge(caller, config.maxAge);
   // RFC 9111 section 5.2.2.9: `public` explicitly marks the document cacheable, including for a shared cache and a
   // request with an Authorization header (section 3.5). With 0, `no-cache` has a cache revalidate before each reuse
   // (section 5.2.2.4), which the ETag makes cheap.

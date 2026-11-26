@@ -1163,7 +1163,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 
 - `generateRegistryServerJson`
   - **Description:** Generates the `server.json` for the official MCP Registry from the Server Card options, as described in [Publish to the MCP Registry](#publish-to-the-mcp-registry): the card's `name`, `version`, `description`, `title`, `websiteUrl`, `icons`, and `repository`, the 2025-12-11 `$schema`, and one streamable HTTP remote for each `resourceUrl`. It throws a `Clerk error:` for anything the card can't have and for what the registry rejects: a non-https icon, website, or remote, a `localhost` remote, an icon media type or size the schema doesn't list, a repository off GitHub and GitLab, or the version `latest`. It fetches nothing. The document is frozen.
-  - **Params:** the `serverCardHandler` options (`ServerCardHandlerOptions`); `maxAge` is ignored
+  - **Params:** the `serverCardHandler` options; `maxAge` is checked, then ignored
   - **Returns:** `RegistryServerJson`
 
 - `McpAuthError`

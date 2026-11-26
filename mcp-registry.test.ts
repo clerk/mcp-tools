@@ -112,6 +112,12 @@ describe('generateRegistryServerJson', () => {
     expect(serverJson).not.toHaveProperty('maxAge');
   });
 
+  test.each(['soon', -1, 1.5])('rejects a maxAge of %j, as serverCardHandler does', (maxAge) => {
+    expect(() => generateRegistryServerJson({ ...full, maxAge } as never)).toThrow(
+      'Clerk error: generateRegistryServerJson maxAge must be a whole number of seconds, 0 or more, or left out for 3600',
+    );
+  });
+
   test("leaves out the card's _meta, which the registry would drop", () => {
     const serverJson = generateRegistryServerJson({
       ...required,

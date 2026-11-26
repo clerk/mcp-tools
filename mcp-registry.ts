@@ -13,6 +13,7 @@ import {
   type DiscoveryAnswer,
   type DiscoveryRequest,
   type ServerCardHandlerOptions,
+  checkedMaxAge,
   jsonErrorAnswer,
 } from './discovery-response';
 import { assertResourceUrls } from './resource-url';
@@ -54,7 +55,7 @@ export type RegistryServerJson = {
  * @see https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md
  * @param options - The options `serverCardHandler` takes, so one object describes both. `name` is the registry name
  * too, in the reverse-DNS namespace you prove you own, such as `com.example/weather` for `example.com`. Each
- * `resourceUrl` becomes one streamable HTTP remote. `maxAge` is ignored, and `_meta` is not copied: the registry keeps
+ * `resourceUrl` becomes one streamable HTTP remote. `maxAge` is checked as `serverCardHandler` checks it, then ignored, and `_meta` is not copied: the registry keeps
  * only its own `io.modelcontextprotocol.registry/publisher-provided` key, which a card's `_meta` can't use.
  * @returns The `server.json`, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the
  * registry would reject.
@@ -76,8 +77,9 @@ export function generateRegistryServerJson(options: ServerCardHandlerOptions): R
       "takes the Server Card options, as generateRegistryServerJson({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })",
     );
   }
-  // The handler's cache lifetime has no place in server.json
-  const { resourceUrl, maxAge: _maxAge, ...card } = options;
+  // The handler's cache lifetime has no place in server.json, but is checked as the handler checks it
+  const { resourceUrl, maxAge, ...card } = options;
+  checkedMaxAge(caller, maxAge);
   assertResourceUrls(caller, resourceUrl);
   // A card for each URL checks the options as serverCardHandler does, so whatever the card takes the entry takes too
   const cards = [resourceUrl]

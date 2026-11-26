@@ -236,7 +236,7 @@ describe('MCP Registry types', () => {
     generateRegistryServerJson({ ...card, maxAge: 60 });
   });
 
-  test('generateRegistryServerJson rejects generated fields and handler options', () => {
+  test('generateRegistryServerJson rejects generated fields and needs a resourceUrl', () => {
     // @ts-expect-error remotes are generated
     generateRegistryServerJson({ ...card, remotes: [] });
     // @ts-expect-error $schema is generated
