@@ -1816,7 +1816,7 @@ const discoveryCors = {
   'access-control-allow-methods': 'GET, HEAD, OPTIONS',
   'access-control-allow-headers': 'Content-Type, If-Match, If-None-Match',
   'access-control-expose-headers': 'ETag',
-  // The pinned discovery CORS block sets no preflight lifetime
+  // Only the preflight sets a preflight lifetime
   'access-control-max-age': null,
 };
 
@@ -1858,13 +1858,19 @@ describe.each(discoveryApps)('%s', (_name, mount, doc) => {
     });
   });
 
-  test('answers the CORS preflight without caching or a body', async () => {
+  test('answers the CORS preflight with a day-long preflight lifetime, without caching or a body', async () => {
     const res = await serve(mount(doc.options), doc.path, { method: 'OPTIONS' });
 
     expect(res.status).toBe(200);
     expect(res.body).toBeNull();
     expect(res.allow).toBe('GET, HEAD, OPTIONS');
-    expectHeaders(res.headers, { ...discoveryCors, 'cache-control': null, etag: null });
+    expectHeaders(res.headers, {
+      ...discoveryCors,
+      // The same lifetime as `metadataCorsHeaders`
+      'access-control-max-age': '86400',
+      'cache-control': null,
+      etag: null,
+    });
   });
 
   test.each(['POST', 'PUT', 'DELETE', 'PATCH'])(

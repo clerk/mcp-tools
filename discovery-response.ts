@@ -175,7 +175,13 @@ function discoveryResponder(
 
   const answer = ({ method, url, ifMatch, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
     if (method === 'OPTIONS') {
-      return { status: 200, headers: { ...discoveryCorsHeaders, Allow: ALLOW }, body: null };
+      // A browser preflights each revalidation, as If-None-Match is not safelisted, and without Access-Control-Max-Age
+      // keeps the preflight only 5 seconds (Fetch standard); 86400 matches `metadataCorsHeaders`, and browsers cap it
+      return {
+        status: 200,
+        headers: { ...discoveryCorsHeaders, 'Access-Control-Max-Age': '86400', Allow: ALLOW },
+        body: null,
+      };
     }
     if (method !== 'GET' && method !== 'HEAD') {
       return errorAnswer(405, 'method_not_allowed', { Allow: ALLOW });
