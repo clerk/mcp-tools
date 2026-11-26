@@ -120,8 +120,6 @@ const PINNED: Record<string, Surface> = {
       'FeedbackKind',
       'FeedbackOrigin',
       'FeedbackReport',
-      'McpAppViewCsp',
-      'McpAppViewResource',
       'McpAppViewResourceOptions',
       'SubmitFeedbackOptions',
       'SubmitFeedbackTool',

@@ -39,9 +39,4 @@ export {
   submitFeedbackTool,
 } from './feedback';
 export { ERROR_CAUSE_META_KEY, ERROR_CODE_META_KEY } from './mcp-tool';
-export {
-  type McpAppViewCsp,
-  type McpAppViewResource,
-  type McpAppViewResourceOptions,
-  mcpAppViewResource,
-} from './mcp-app-view';
+export { type McpAppViewResourceOptions, mcpAppViewResource } from './mcp-app-view';

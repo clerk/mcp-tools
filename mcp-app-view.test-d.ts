@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { describe, test } from 'vitest';
 
-import { type McpAppViewCsp, mcpAppViewResource } from './tools';
+import { type McpAppViewResourceOptions, mcpAppViewResource } from './tools';
 
 const html = '<!DOCTYPE html>';
 
@@ -14,7 +14,9 @@ describe('mcpAppViewResource', () => {
   });
 
   test('takes the CSP as readonly origin lists', () => {
-    const csp = { resourceDomains: ['https://cdn.example.com'] } as const satisfies McpAppViewCsp;
+    const csp = {
+      resourceDomains: ['https://cdn.example.com'],
+    } as const satisfies McpAppViewResourceOptions['csp'];
     mcpAppViewResource({
       name: 'card',
       uri: 'ui://server/card.html',

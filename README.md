@@ -1198,7 +1198,7 @@ Needs `zod` in your app's own dependencies; see [Collecting feedback from agents
 - `ERROR_CODE_META_KEY`: `'clerk.com/error_code'`, the `_meta` key that holds the code of every error result both tools return.
 - `ERROR_CAUSE_META_KEY`: `'clerk.com/error_cause'`, the `_meta` key that holds the caller's code behind an error result. `create_browser_session` sets it when its `organizationId` function throws an `OrganizationLookupError`.
 - `OrganizationLookupError`: thrown from a `createBrowserSessionTool` `organizationId` function to give the agent a specific text and a code for an `organization_lookup_failed` result. See [Signed-in browser links for agents](#signed-in-browser-links-for-agents).
-- `mcpAppViewResource(options)`: an MCP App view, as arguments for `server.registerResource(...)`. `McpAppViewResourceOptions` and `McpAppViewCsp` type its options. See [Serving MCP App views](#serving-mcp-app-views).
+- `mcpAppViewResource(options)`: an MCP App view, as arguments for `server.registerResource(...)`. `McpAppViewResourceOptions` types its options. See [Serving MCP App views](#serving-mcp-app-views).
 
 #### Framework-Specific Utilities
 

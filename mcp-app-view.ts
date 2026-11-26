@@ -18,7 +18,7 @@ type CspKey = (typeof CSP_KEYS)[number];
  * `https://cdn.example.com`, or `https://*.example.com` for its subdomains: `*` and a bare scheme such as `https:`,
  * which would allow every origin, are rejected.
  */
-export type McpAppViewCsp = {
+type McpAppViewCsp = {
   /**
    * Origins for `fetch`, XHR, and WebSocket requests: CSP `connect-src`.
    */
@@ -85,7 +85,7 @@ type McpAppViewUiMeta = {
  * Arguments for `McpServer.registerResource`, on MCP SDK v1 and v2: the view's name, URI, listing metadata, and the
  * read callback that returns its HTML.
  */
-export type McpAppViewResource = [
+type McpAppViewResource = [
   name: string,
   uri: string,
   config: { title?: string; description?: string; mimeType: typeof MCP_APP_MIME_TYPE },
