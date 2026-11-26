@@ -1535,6 +1535,76 @@ describe('request reports', () => {
   });
 });
 
+describe('client IDs in reports', () => {
+  const CLIENT_ID_URL = 'https://app.example.com/oauth/client-metadata.json';
+
+  async function reportedClientId(clientId: string) {
+    const sink = reportSink();
+    const app = honoApp(sdkV2Handler(), {
+      clerkClient: {
+        authenticateRequest: async () => {
+          const state = await clerkClient.authenticateRequest();
+          return { ...state, toAuth: () => ({ ...state.toAuth(), clientId }) };
+        },
+      },
+      reporting: { fetch: sink.fetch, secretKey: SECRET_KEY },
+    } as Partial<honoAdapter.McpAuthOptions>);
+
+    const response = await app.fetch(RESOURCE_URL, toolCallInit('ping'));
+    expect(response.status).toBe(200);
+    await response.text();
+    await app.settled();
+
+    const [call] = sink.calls();
+    expect(call).toMatchObject({ type: 'tool_call', user_id: USER_ID });
+    return { clientId: call!.client_id, sink };
+  }
+
+  test('report a Client Identifier URL as the golden batch does', async () => {
+    const { clientId, sink } = await reportedClientId(CLIENT_ID_URL);
+
+    expect(clientId).toBe(CLIENT_ID_URL);
+    expect(golden.events).toContainEqual(expect.objectContaining({ client_id: CLIENT_ID_URL }));
+    expectGoldenShape(sink.bodies);
+  });
+
+  test.each([
+    ['an opaque ID of 128 characters', 'a'.repeat(128)],
+    ['a URL with a port', 'https://app.example.com:443/client'],
+    ['a URL with a query', 'https://app.example.com/client?tenant=acme'],
+    ['a URL with an IPv6 host', 'https://[2001:db8::1]/client'],
+    ['a URL of 512 characters', `https://app.example.com/${'a'.repeat(488)}`],
+  ])('report %s as sent', async (_, sent) => {
+    expect((await reportedClientId(sent)).clientId).toBe(sent);
+  });
+
+  test.each([
+    ['an opaque ID of 129 characters', 'a'.repeat(129)],
+    ['a URL of 513 characters', `https://app.example.com/${'a'.repeat(489)}`],
+    ['an http URL', 'http://app.example.com/client'],
+    ['an upper-case scheme', 'HTTPS://app.example.com/client'],
+    ['a URL without slashes after the scheme', 'https:app.example.com/client'],
+    ['a URL with backslashes', 'https:\\\\app.example.com\\client'],
+    ['a URL without a path', 'https://app.example.com'],
+    ['a URL without a host', 'https:///client'],
+    ['a URL with credentials', 'https://user:secret@app.example.com/client'],
+    ['a URL with an empty userinfo', 'https://@app.example.com/client'],
+    ['a URL with a fragment', 'https://app.example.com/client#acme'],
+    ['a URL with an empty fragment', 'https://app.example.com/client#'],
+    ['a URL with a space', 'https://app.example.com/my client'],
+    ['a URL with a tab', 'https://app.example.com/my\tclient'],
+    ['a URL with a newline', 'https://app.example.com/client\n'],
+    ['a URL with a leading space', ' https://app.example.com/client'],
+    ['a URL with a non-ASCII character', 'https://app.example.com/clïent'],
+    ['a URL with an invalid port', 'https://app.example.com:99999/client'],
+  ])('leave out %s', async (_, sent) => {
+    const { clientId, sink } = await reportedClientId(sent);
+
+    expect(clientId).toBeUndefined();
+    expect(JSON.stringify(sink.bodies)).not.toContain(JSON.stringify(sent).slice(1, -1));
+  });
+});
+
 describe('reporting options', () => {
   test('defaults every field on', () => {
     expect(resolveReporting('clerkInstrumentHandler', true)).toEqual({

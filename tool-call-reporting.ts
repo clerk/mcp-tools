@@ -116,6 +116,9 @@ const URI_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]{0,31}$/;
 const MAX_ITEM_COUNT = 1_000_000;
 const MAX_ERROR_CODE_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
+// A Client Identifier URL (draft-ietf-oauth-client-id-metadata-document-03, section 3): printable ASCII, an https
+// URL with a host and a path, without userinfo or a fragment. It is compared as a plain string, so it is sent as is.
+const CLIENT_ID_URL_PATTERN = /^(?=[!-~]{1,512}$)https:\/\/[^/?#@\\]+\/[^#\\]*$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
 const ORG_ID_PATTERN = /^org_\w{27}$/;
 const MAX_USER_AGENT_LENGTH = 512;
@@ -765,6 +768,16 @@ export function hashSessionId(
   })();
 }
 
+function isReportableClientId(clientId: string): boolean {
+  if (ID_PATTERN.test(clientId)) return true;
+  if (!CLIENT_ID_URL_PATTERN.test(clientId)) return false;
+  try {
+    return new URL(clientId).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function requestDetails<Req>(
   caller: string,
   reporting: ToolCallReporting<Req>,
@@ -785,7 +798,7 @@ function requestDetails<Req>(
       auth?: { id?: unknown; orgId?: unknown };
     };
     if (typeof userId === 'string' && USER_ID_PATTERN.test(userId)) details.user_id = userId;
-    if (ID_PATTERN.test(authInfo.clientId)) details.client_id = authInfo.clientId;
+    if (isReportableClientId(authInfo.clientId)) details.client_id = authInfo.clientId;
     if (typeof auth?.id === 'string' && ID_PATTERN.test(auth.id)) {
       details.oauth_access_token_id = auth.id;
     }

@@ -101,6 +101,23 @@
       "session_id_hash": "55bb9bef53cfd2eeb24ce14a530b4155"
     },
     {
+      "type": "tool_call",
+      "occurred_at": 1795605605000,
+      "server_name": "acme-mcp",
+      "protocol_version": "2025-11-25",
+      "user_id": "user_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "client_id": "https://app.example.com/oauth/client-metadata.json",
+      "oauth_access_token_id": "oat_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "org_id": "org_2xhFjEI5X2qWRvtV13BzSj8H6Dk",
+      "ip_address": "203.0.113.7",
+      "user_agent": "claude-code/2.1.0",
+      "tool_name": "ping",
+      "status": "success",
+      "duration_ms": 12,
+      "handler_ms": 9,
+      "session_id_hash": "55bb9bef53cfd2eeb24ce14a530b4155"
+    },
+    {
       "type": "auth_failure",
       "occurred_at": 1795605601000,
       "ip_address": "203.0.113.7",
