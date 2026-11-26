@@ -2,6 +2,7 @@ import type { AuthInfo, McpServerLike, StreamableHttpTransportClass } from '../m
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { env } from 'hono/adapter';
 import {
+  type ClerkEnv,
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertAuthorizationServerMetadataHandlerCalled,
@@ -12,10 +13,9 @@ import {
   assertVerifierOrResourceUrl,
   authorizationServerMetadataAnswer,
   createBearerAuth,
+  envClerkClient,
   methodNotAllowed,
   protectedResourceMetadataAnswer,
-  type ClerkEnv,
-  envClerkClient,
   readJsonBody,
   serverErrorAnswer,
 } from '../bearer-auth';
