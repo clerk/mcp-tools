@@ -1,6 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
+import { isAppView } from './app-view-registry';
 import { copyClerkVerification } from './clerk-auth-info';
 import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
@@ -82,8 +83,7 @@ type DiscoveryOptions =
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
        * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
-       * opens.
-       * Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
+       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
        * it reaches something protected. A request with a token is verified as usual.
        */
       publicAccess?: PublicAccess | undefined;
@@ -94,8 +94,7 @@ type DiscoveryOptions =
        * their descriptions and schemas (protected ones included), without a token. `true`, the default, opens
        * `initialize` with its `notifications/initialized`, `server/discover`, `ping`, `tools/list`,
        * `resources/list`, `resources/templates/list`, and `prompts/list`, so a GET without a token gets a 405
-       * rather than the 401. Calls still need a token, except a `resources/read` of a `ui://` MCP App view, which
-       * `publicAccess.views` opens by default, and the ones `publicAccess` names, and so do
+       * rather than the 401. Calls still need a token, except the ones `publicAccess` names, and so do
        * `notifications/cancelled`, `notifications/progress`, and `notifications/roots/list_changed`, which are not
        * checked against the caller. `false` requires a token for every MCP request, as 0.9 did. It is only about
        * these MCP methods: protected resource metadata (RFC 9728) and the Server Card are public either way, and
@@ -107,8 +106,7 @@ type DiscoveryOptions =
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
        * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
-       * opens.
-       * Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
+       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
        * it reaches something protected. A request with a token is verified as usual.
        */
       publicAccess?: (PublicAccess & { methods?: undefined }) | undefined;
@@ -366,7 +364,7 @@ function opensSome(option: boolean | readonly string[] | undefined): boolean {
 /**
  * What a request without a token may do under `discoverable` and `publicAccess`: `undefined` when it may do
  * nothing. A `publicAccess.methods` list opens exactly the methods it names. Otherwise `discoverable`, true by
- * default, opens every `McpPublicMethod`.
+ * default, opens every `McpPublicMethod` and, unless `views` is `false`, the views `mcpAppViewResource` built.
  * @param options - The entry point's options, already checked
  * @returns The `PublicAccess` the request rules apply
  */
@@ -374,16 +372,7 @@ function effectivePublicAccess({
   discoverable,
   publicAccess,
 }: Pick<BaseAuthOptions, 'discoverable' | 'publicAccess'>): PublicAccess | undefined {
-  // `views` is on by default whenever the server is discoverable, which a list is only when it opens the handshake,
-  // so a client without a token can connect, and resources/list, so it can find the views
-  if (publicAccess?.methods !== undefined) {
-    return {
-      ...publicAccess,
-      views:
-        publicAccess.views ??
-        (opensHandshake(publicAccess) && publicAccess.methods.includes('resources/list')),
-    };
-  }
+  if (publicAccess?.methods !== undefined) return publicAccess;
   if (discoverable === false) return undefined;
   return { ...publicAccess, views: publicAccess?.views ?? true, methods: allPublicMethods };
 }
@@ -396,6 +385,12 @@ function isNameList(value: unknown): value is string[] {
 function opensNamed(option: boolean | readonly string[] | undefined, value: unknown): boolean {
   if (option === true) return true;
   return typeof value === 'string' && Array.isArray(option) && option.includes(value);
+}
+
+// Whether a read of, or a subscription to, the resource at `uri` is open: `resources` opens it, or it is the exact URI of
+// a view `mcpAppViewResource` built and `views` is on
+function opensResource(publicAccess: PublicAccess, uri: unknown): boolean {
+  return opensNamed(publicAccess.resources, uri) || (publicAccess.views === true && isAppView(uri));
 }
 
 function opensMethod({ methods }: PublicAccess, method: McpPublicMethod): boolean {
@@ -426,14 +421,8 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
       const name = param('name');
       return typeof name === 'string' && (publicAccess.tools ?? []).includes(name);
     }
-    case 'resources/read': {
-      const uri = param('uri');
-      // The scheme is compared as the client sends it, so a URI that only differs in case stays closed
-      if (publicAccess.views === true && typeof uri === 'string' && uri.startsWith('ui://')) {
-        return true;
-      }
-      return opensNamed(publicAccess.resources, uri);
-    }
+    case 'resources/read':
+      return opensResource(publicAccess, param('uri'));
     case 'prompts/get':
       return opensNamed(publicAccess.prompts, param('name'));
     // The client sends this right after `initialize` succeeds, so it is part of that handshake
@@ -454,7 +443,7 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
       const uris = (notifications as { resourceSubscriptions?: unknown }).resourceSubscriptions;
       return (
         uris === undefined ||
-        (Array.isArray(uris) && uris.every((uri) => opensNamed(publicAccess.resources, uri)))
+        (Array.isArray(uris) && uris.every((uri) => opensResource(publicAccess, uri)))
       );
     }
     default:

@@ -5,6 +5,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createMcpHandler, McpServer as McpServerV2 } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { isAppView } from './app-view-registry';
 import { type McpAppViewResourceOptions, mcpAppViewResource } from './tools';
 import { connectTool } from './test/mcp-harness';
 
@@ -233,5 +234,24 @@ describe('mcpAppViewResource options', () => {
       html: HTML.replace('<!DOCTYPE html>', '<!doctype html>'),
     });
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+// publicAccess.views opens exactly the URIs this records
+describe('mcpAppViewResource view registry', () => {
+  test('records the exact URI of each view it builds', () => {
+    const uri = nextUri();
+    expect(isAppView(uri)).toBe(false);
+    mcpAppViewResource({ name: 'v', uri, html: HTML });
+    expect(isAppView(uri)).toBe(true);
+    for (const other of [`${uri}?x`, uri.toUpperCase(), uri.slice(0, -1), 7]) {
+      expect(isAppView(other)).toBe(false);
+    }
+  });
+
+  test('records nothing for options it rejects', () => {
+    const uri = nextUri();
+    expect(() => mcpAppViewResource({ name: '', uri, html: HTML })).toThrow('Clerk error:');
+    expect(isAppView(uri)).toBe(false);
   });
 });

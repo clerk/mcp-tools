@@ -49,6 +49,10 @@ const PUBLIC_TOOLS: ServerOptions = { publicAccess: { tools: ['search_docs', 'sl
 const VIEW_URIS = ['ui://docs/viewer.html', 'ui://docs/editor.html'] as const;
 const VIEW_HTML =
   '<!DOCTYPE html><html><head><meta name="color-scheme" content="light dark"></head></html>';
+// Built at module scope, as the README advises, so their URIs are recorded before the first request
+const VIEWS = VIEW_URIS.map((uri) => mcpAppViewResource({ name: uri, uri, html: VIEW_HTML }));
+// A ui:// resource registered without mcpAppViewResource, which views does not open
+const PLAIN_UI_URI = 'ui://docs/plain.html';
 
 // `streamableHttpHandler` serves the protocol revisions before 2026-07-28, and MCP SDK 2's `createMcpHandler` serves
 // 2026-07-28 as well
@@ -90,9 +94,10 @@ function startServer(
       contents: [{ uri: uri.href, text: 'guide' }],
     }));
     // MCP App view templates, which hosts may prefetch before the user signs in
-    for (const uri of VIEW_URIS) {
-      server.registerResource(...mcpAppViewResource({ name: uri, uri, html: VIEW_HTML }));
-    }
+    for (const view of VIEWS) server.registerResource(...view);
+    server.registerResource('plain', PLAIN_UI_URI, {}, async (uri) => ({
+      contents: [{ uri: uri.href, mimeType: 'text/html', text: VIEW_HTML }],
+    }));
     server.registerResource(
       'page',
       new ResourceTemplate('docs://pages/{slug}', { list: undefined }),
@@ -334,7 +339,11 @@ describe('a server with publicAccess, discoverable by default', () => {
     const { client, redirects, answers } = await connect();
 
     const { resources } = await client.listResources();
-    expect(resources.map((resource) => resource.uri)).toEqual(['docs://guide', ...VIEW_URIS]);
+    expect(resources.map((resource) => resource.uri)).toEqual([
+      'docs://guide',
+      ...VIEW_URIS,
+      PLAIN_UI_URI,
+    ]);
     const { resourceTemplates } = await client.listResourceTemplates();
     expect(resourceTemplates.map((template) => template.uriTemplate)).toEqual([
       'docs://pages/{slug}',
@@ -480,12 +489,13 @@ describe('MCP App views on a server with publicAccess', () => {
 
   test.each([
     { name: 'publicAccess left out', options: {} },
+    { name: 'discoverable: true', options: { discoverable: true } },
     {
-      name: 'a methods list that opens resources/list',
-      options: { publicAccess: { methods: ['initialize', 'resources/list'] } },
+      name: 'a methods list and views: true',
+      options: { publicAccess: { methods: ['initialize', 'resources/list'], views: true } },
     },
   ] satisfies { name: string; options: ServerOptions }[])(
-    'opens views by default with $name',
+    'opens views with $name',
     async ({ options }) => {
       const res = await read(options, VIEW_URIS[1]);
       expect(res.status).toBe(200);
@@ -495,22 +505,21 @@ describe('MCP App views on a server with publicAccess', () => {
     },
   );
 
-  test('keeps a resource outside the ui:// scheme behind the challenge', async () => {
-    const res = await read(PUBLIC_TOOLS, 'docs://guide');
-    expect(res.status).toBe(401);
-    expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
-  });
+  test.each(['docs://guide', PLAIN_UI_URI, 'ui://docs/unregistered.html'])(
+    'keeps %s, which mcpAppViewResource did not build, behind the challenge',
+    async (uri) => {
+      const res = await read(PUBLIC_TOOLS, uri);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
+    },
+  );
 
   test.each([
     { name: 'views: false', options: { publicAccess: { views: false } } },
+    // A methods list chooses exactly what is open, so views stays off unless it is set too
     {
-      name: 'a methods list without resources/list',
-      options: { publicAccess: { methods: ['initialize'] } },
-    },
-    // No client without a token can connect to such a server, so its views stay behind a token too
-    {
-      name: 'a methods list with resources/list but no handshake',
-      options: { publicAccess: { methods: ['resources/list'] } },
+      name: 'a methods list that opens resources/list',
+      options: { publicAccess: { methods: ['initialize', 'resources/list'] } },
     },
   ] satisfies { name: string; options: ServerOptions }[])(
     'challenges a view read without a token with $name',
@@ -527,6 +536,24 @@ describe('MCP App views on a server with publicAccess', () => {
     const named = await read(options, VIEW_URIS[1]);
     expect(named.status).toBe(200);
     await named.body?.cancel();
+  });
+
+  // Protocol revision 2026-07-28: subscriptions/listen replaces resources/subscribe, so a view views opens can be
+  // subscribed to without a token too, and a resource it does not open still closes the request
+  test('admits a subscriptions/listen to an open view, but not one that also names a closed resource', async () => {
+    const { fetchImpl } = startServer(undefined, PUBLIC_TOOLS, 'createMcpHandler');
+    const listen = (resourceSubscriptions: string[]) =>
+      postRequest(fetchImpl, 'subscriptions/listen', { notifications: { resourceSubscriptions } });
+
+    const listening = await listen([VIEW_URIS[0]]);
+    expect(listening.status).toBe(200);
+    await listening.body?.cancel();
+
+    for (const closed of [[VIEW_URIS[0], 'docs://guide'], [PLAIN_UI_URI]]) {
+      const res = await listen(closed);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Bearer /);
+    }
   });
 
   test('a client with a token reads a view with views: false', async () => {
