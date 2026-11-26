@@ -146,7 +146,7 @@ For framework-specific implementations, see:
 
 An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
 
-`generateAICatalog` builds a catalog that links to Server Cards, minimal (Level 1), or Discoverable (Level 2) with a `host`, and each adapter's `ardHandler` and `aiCatalogHandler` serve one (Hono, Express, and Next.js):
+`generateAICatalog` builds a catalog that links to Server Cards, minimal (Level 1), or Discoverable (Level 2) with a `host`, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
 - **Required:** `entries`, a list of `{ identifier, displayName, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
 - **Optional:** an entry's `representativeQueries`, the sample requests the server answers, and its `trustManifest`, `{ identity, identityType?, attestations? }`, the [ARD](https://agenticresourcediscovery.org/spec) v0.91 trust manifest, which defaults from a `urn:air:<domain>:…` identifier (`null` publishes none); and the catalog's `host`, `{ displayName, identifier, documentationUrl? }`. See [ARD discovery](#ard-discovery).
@@ -176,9 +176,9 @@ const catalog = generateAICatalog({
 });
 ```
 
-Serve the catalog at both paths, `ardHandler` at `/.well-known/ard.json` and `aiCatalogHandler` with the same options at `/.well-known/ai-catalog.json`. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. Neither handler reads the path, and both answer with the same bytes and `ETag`, so one path's `ETag` revalidates the other's copy; only the `Content-Type` differs.
+Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler reads the path only to pick the `Content-Type`, so it needs no configuration for either, and both answer with the same bytes and `ETag`, so one path's `ETag` revalidates the other's copy.
 
-The handlers answer as the Server Card handlers do, `ardHandler` with `application/json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves `ard.json` with, and `aiCatalogHandler` with the AI Catalog's own `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
+The handler answers as the Server Card handlers do, with `application/json` at a path ending in `/.well-known/ard.json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves `ard.json` with, and with the AI Catalog's own `application/ai-catalog+json` at any other path: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
 
 For framework-specific implementations, see:
 
@@ -190,17 +190,17 @@ For framework-specific implementations, see:
 
 [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 is how agents and registries find a domain's catalog: a consumer fetches `/.well-known/ard.json` on the host it is resolving and follows a `rel="ard"` link ([section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms)). To be found:
 
-- **Serve the catalog on the host that is scanned.** A scanner or consumer resolving `mcp.example.com` reads `https://mcp.example.com/.well-known/ard.json`. A catalog on the apex `example.com` does not cover an MCP endpoint on a subdomain, so mount `ardHandler` on the host that serves the endpoint, and on the apex too if that is also scanned.
-- **Serve `ard.json` as `application/json`.** `ardHandler` does, as the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) ("Step 2: Host the manifest") shows; `aiCatalogHandler` keeps the AI Catalog's `application/ai-catalog+json` for `ai-catalog.json`.
+- **Serve the catalog on the host that is scanned.** A scanner or consumer resolving `mcp.example.com` reads `https://mcp.example.com/.well-known/ard.json`. A catalog on the apex `example.com` does not cover an MCP endpoint on a subdomain, so mount `aiCatalogHandler` on the host that serves the endpoint, and on the apex too if that is also scanned.
+- **Serve `ard.json` as `application/json`.** `aiCatalogHandler` does at any path ending in `/.well-known/ard.json`, as the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) ("Step 2: Host the manifest") shows, and keeps the AI Catalog's `application/ai-catalog+json` for `ai-catalog.json`.
 - **Link the catalog from the homepage.** `ardLinkHeader()` returns `</.well-known/ard.json>; rel="ard"` for the homepage's `Link` header. Pass a path or an absolute http or https URL to link a catalog elsewhere.
 - **Add `representativeQueries` to each entry.** ARD's [4.2 Entry Terms](https://agenticresourcediscovery.org/spec/#42-entry-terms) says an entry SHOULD carry 2 to 5 sample natural-language requests, which a registry indexes for search; without them ARD's conformance tester warns. From 1 to 20 are accepted, each with more than whitespace and no control characters; ARD's count is advice, so it is not enforced.
 - **Name the operator with `host`.** `{ displayName, identifier, documentationUrl? }`, the AI Catalog's Host Info, makes the catalog Level 2 (Discoverable). `identifier` is a domain name or a DID without whitespace, and `documentationUrl` an https URL without credentials. Other Host Info members, such as `logoUrl`, are not supported.
 - **Bind each entry to its publisher.** ARD's [4.5.1 Publisher Authority Binding](https://agenticresourcediscovery.org/spec/#451-publisher-authority-binding) requires the entry's `trustManifest.identity` to align with the publisher domain of its `urn:air:<publisher>:…` identifier. When an entry has no `trustManifest` and its identifier is `urn:air:<domain>:<name>` with a domain name of two or more labels, the catalog emits `{ identity: 'https://<domain>', identityType: 'https' }`, the domain lowercased. Any other identifier gets none. Set `trustManifest: null` to publish none, or set your own manifest, which is emitted as given.
 
 ```ts
-import { aiCatalogHandler, ardHandler, ardLinkHeader } from '@clerk/mcp-tools/hono';
+import { aiCatalogHandler, ardLinkHeader } from '@clerk/mcp-tools/hono';
 
-const catalog = {
+const catalog = aiCatalogHandler({
   host: { displayName: 'Example Inc.', identifier: 'example.com' },
   entries: [
     {
@@ -211,10 +211,10 @@ const catalog = {
       // Defaults to { identity: 'https://example.com', identityType: 'https' }
     },
   ],
-};
+});
 
-app.all('/.well-known/ard.json', ardHandler(catalog));
-app.all('/.well-known/ai-catalog.json', aiCatalogHandler(catalog));
+app.all('/.well-known/ard.json', catalog);
+app.all('/.well-known/ai-catalog.json', catalog);
 app.get('/', (c) => {
   c.header('Link', ardLinkHeader());
   return c.text('OK');

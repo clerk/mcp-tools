@@ -1740,7 +1740,7 @@ const catalogEntries = [
   },
 ];
 
-type DiscoveryHandler = 'serverCardHandler' | 'aiCatalogHandler' | 'ardHandler';
+type DiscoveryHandler = 'serverCardHandler' | 'aiCatalogHandler';
 
 // Each adapter's discovery handler on its paths, one handler mounted for every method so OPTIONS and others reach it.
 // The Next.js route is the handler each path's route file exports for every method.
@@ -1814,10 +1814,10 @@ const discoveryApps = discoveryAdapters.flatMap(([name, mount]) => [
     },
   ] as const,
   [
-    `${name} ardHandler`,
-    (options: Options) => mount('ardHandler', ARD_PATH, options),
+    `${name} aiCatalogHandler at ard.json`,
+    (options: Options) => mount('aiCatalogHandler', ARD_PATH, options),
     {
-      handler: 'ardHandler',
+      handler: 'aiCatalogHandler',
       path: ARD_PATH,
       type: ARD_TYPE,
       options: { entries: catalogEntries },
@@ -2415,8 +2415,9 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
   });
 
-  // The same handler on both paths, which still works though each adapter's README now mounts ardHandler at ard.json,
-  // answers both from the one catalog it built
+  // The same handler on both paths answers both from the one catalog it built, with the media type each path's
+  // specification gives it: application/json at ard.json, as the ARD publishing guide shows, and the AI Catalog's own
+  // type at ai-catalog.json
   test('serves byte-identical catalogs with the same caching headers at ard.json and ai-catalog.json', async () => {
     const app = mount(options);
     const fetchRaw = async (path: string, headers: Record<string, string> = {}) => {
@@ -2434,13 +2435,9 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     expect(catalog.status).toBe(200);
     expect(ard.text).toBe(catalog.text);
     expect(linkedCardCatalogErrors(JSON.parse(ard.text))).toEqual([]);
-    for (const name of [
-      'content-type',
-      'cache-control',
-      'etag',
-      'vary',
-      ...Object.keys(discoveryCors),
-    ]) {
+    expect(ard.headers.get('content-type')).toBe(ARD_TYPE);
+    expect(catalog.headers.get('content-type')).toBe(CATALOG_TYPE);
+    for (const name of ['cache-control', 'etag', 'vary', ...Object.keys(discoveryCors)]) {
       expect(ard.headers.get(name), name).toBe(catalog.headers.get(name));
     }
 
@@ -2616,50 +2613,38 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
   });
 });
 
-// ARD discovery: ardHandler serves the same catalog at the canonical ard.json path as application/json, which the ARD
-// publishing guide shows, while aiCatalogHandler keeps the AI Catalog's own media type at ai-catalog.json
-const ardPairApps = discoveryAdapters.map(
-  ([name, mount]) =>
-    [
-      name,
-      (options: Options) => ({
-        ard: mount('ardHandler', ARD_PATH, options),
-        catalog: mount('aiCatalogHandler', CATALOG_PATH, options),
-      }),
-    ] as const,
-);
-
-describe.each(ardPairApps)('%s ardHandler', (name, mount) => {
+// ARD discovery: aiCatalogHandler picks the media type from the request's path, application/json for a path ending in
+// /.well-known/ard.json, which the ARD publishing guide shows, and the AI Catalog's own type for any other path
+describe.each(discoveryAdapters)('%s aiCatalogHandler media type', (_name, mount) => {
   const options = { entries: catalogEntries };
 
-  test('serves the AI Catalog body and ETag as application/json, and ai-catalog.json keeps its own type', async () => {
-    const { ard, catalog } = mount(options);
-    const [ardRes, catalogRes] = await Promise.all([
-      serve(ard, ARD_PATH),
-      serve(catalog, CATALOG_PATH),
-    ]);
+  test.each([
+    [ARD_PATH, ARD_TYPE],
+    ['/tenant/.well-known/ard.json', ARD_TYPE],
+    [CATALOG_PATH, CATALOG_TYPE],
+    ['/catalog.json', CATALOG_TYPE],
+    ['/.well-known/ard.json.bak', CATALOG_TYPE],
+  ])('serves %s as %s', async (path, type) => {
+    const res = await serve(mount('aiCatalogHandler', path, options), path);
 
-    expect(ardRes.status).toBe(200);
-    expect(ardRes.body).toEqual(catalogRes.body);
-    expect(linkedCardCatalogErrors(ardRes.body)).toEqual([]);
-    expect(ardRes.headers.get('etag')).toBe(catalogRes.headers.get('etag'));
-    expectHeaders(ardRes.headers, {
-      'content-type': ARD_TYPE,
+    expect(res.status).toBe(200);
+    expect(linkedCardCatalogErrors(res.body)).toEqual([]);
+    expectHeaders(res.headers, {
+      'content-type': type,
       'cache-control': 'public, max-age=3600',
       ...discoveryCors,
     });
-    expect(catalogRes.headers.get('content-type')).toBe(CATALOG_TYPE);
   });
 
   // The ARD v0.91 discovery terms and the AI Catalog Level 2 host, served only when set
   test('serves representativeQueries and host only where they were set', async () => {
     const representativeQueries = ['What is the weather in Paris?', 'Will it rain tomorrow?'];
     const host = { displayName: 'Example Inc.', identifier: 'example.com' };
-    const { ard } = mount({
+    const app = mount('aiCatalogHandler', ARD_PATH, {
       host,
       entries: [{ ...catalogEntries[0]!, representativeQueries }, catalogEntries[1]!],
     });
-    const res = await serve(ard, ARD_PATH);
+    const res = await serve(app, ARD_PATH);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -2684,32 +2669,6 @@ describe.each(ardPairApps)('%s ardHandler', (name, mount) => {
       ],
     });
     expect(linkedCardCatalogErrors(res.body)).toEqual([]);
-  });
-
-  test.each([
-    ['no options', undefined, 'ardHandler takes an options object with entries'],
-    ['a specVersion', { ...options, specVersion: '0.9' }, 'ardHandler cannot set specVersion'],
-    [
-      'an entry without a displayName',
-      {
-        entries: [
-          { identifier: 'urn:air:example.com:x:mcp', url: 'https://example.com/mcp/server-card' },
-        ],
-      },
-      'ardHandler entries[0].displayName must be',
-    ],
-  ])('throws at setup for %s, naming ardHandler', (_case, invalid, message) => {
-    expect(() => mount(invalid as never).ard).toThrow(`Clerk error: ${message}`);
-  });
-
-  test.skipIf(name !== 'next')('throws a Clerk error when exported uncalled', () => {
-    expect(() =>
-      (nextAdapter.ardHandler as unknown as (req: Request) => unknown)(
-        new Request(`${origin}${ARD_PATH}`),
-      ),
-    ).toThrow(
-      'Clerk error: call ardHandler(options) and export its result from the route, instead of exporting ardHandler itself',
-    );
   });
 });
 

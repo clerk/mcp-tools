@@ -7,7 +7,8 @@ describe('discovery response entity-tag parsing', () => {
     const ifNoneMatch = `"a",${'\t'.repeat(length)}x`;
     const answer = respond({
       method: 'GET',
-      url: 'https://mcp.example.com/mcp',
+      url: 'https://mcp.example.com/.well-known/ai-catalog.json',
+      path: '/.well-known/ai-catalog.json',
       ifMatch: null,
       ifNoneMatch,
     });

@@ -205,8 +205,8 @@ const MAX_REPRESENTATIVE_QUERIES = 20;
 const generatedEntryKeys = new Set(['type']);
 
 /**
- * Validates the options of `generateAICatalog`, an `aiCatalogHandler`, or an `ardHandler` and generates the catalog,
- * a frozen copy that shares nothing with the options.
+ * Validates the options of `generateAICatalog` or an `aiCatalogHandler` and generates the catalog, a frozen copy that
+ * shares nothing with the options.
  * @param caller - The entry point named in error messages
  * @param options - The options, unchecked
  * @returns The catalog, frozen. It throws a `Clerk error:` naming the first option the catalog cannot have.

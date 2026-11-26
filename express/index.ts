@@ -23,7 +23,6 @@ import {
   type DiscoveryRequest,
   type ServerCardHandlerOptions,
   aiCatalogResponder,
-  ardResponder,
   serverCardResponder,
 } from '../discovery-response';
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
@@ -307,22 +306,23 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
  * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
  * request: to answer on several origins with their own cards, create one handler for each and pick it by origin. Mount
- * it at `/.well-known/ai-catalog.json`, and `ardHandler` with the same options at `/.well-known/ard.json`, with
- * `app.all` so OPTIONS and other methods reach them; importing it mounts nothing.
+ * it at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
  *
- * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
- * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight and another method a 405 with
- * `Cache-Control: no-store`. The request's URL is never read, so a request without a `Host` header still gets the
- * catalog.
+ * Any origin can read the catalog, served as `application/json` at a path ending in `/.well-known/ard.json`, the media
+ * type the ARD publishing guide serves it with, and as `application/ai-catalog+json` at any other path. GET and HEAD
+ * get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for
+ * `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight and another method a
+ * 405 with `Cache-Control: no-store`. Only the request's path is read, so a request without a `Host` header still gets
+ * the catalog, and both paths get the same body and `ETag`.
  * @see https://github.com/Agent-Card/ai-catalog
  * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+ * @see https://agenticresourcediscovery.org/how_to_publish/
  * @param options - See `AICatalogHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
  * @example
  * ```ts
  * app.all(
- *   "/.well-known/ai-catalog.json",
+ *   ["/.well-known/ard.json", "/.well-known/ai-catalog.json"],
  *   aiCatalogHandler({
  *     entries: [
  *       {
@@ -337,36 +337,6 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  */
 export function aiCatalogHandler(options: AICatalogHandlerOptions) {
   return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
-}
-
-/**
- * An Express handler that serves the AI Catalog `aiCatalogHandler` does at `/.well-known/ard.json`, the canonical
- * path of Agentic Resource Discovery (ARD) v0.91, as `application/json`, the media type the ARD publishing guide
- * serves it with. It takes the same options and answers the same way: the same body, weak `ETag`, caching, public
- * CORS, conditional requests, and 405. Mount it with `app.all` at `/.well-known/ard.json`, and `aiCatalogHandler`
- * with the same options at `/.well-known/ai-catalog.json`, which keeps the AI Catalog's `application/ai-catalog+json`.
- * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
- * @see https://agenticresourcediscovery.org/how_to_publish/
- * @param options - See `AICatalogHandlerOptions`
- * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
- * @example
- * ```ts
- * const options = {
- *   entries: [
- *     {
- *       identifier: "urn:air:example.com:weather",
- *       displayName: "Weather",
- *       url: "https://mcp.example.com/mcp/server-card",
- *     },
- *   ],
- * };
- *
- * app.all("/.well-known/ard.json", ardHandler(options));
- * app.all("/.well-known/ai-catalog.json", aiCatalogHandler(options));
- * ```
- */
-export function ardHandler(options: AICatalogHandlerOptions) {
-  return discoveryHandler(ardResponder('ardHandler', options));
 }
 
 /**
@@ -401,6 +371,7 @@ function discoveryHandler(
     const { status, headers, body } = respond({
       method: req.method,
       url: getRequestUrl(req),
+      path: `${req.baseUrl}${req.path}`,
       // Node joins repeated If-Match and If-None-Match headers with commas
       ifMatch: req.get('if-match'),
       ifNoneMatch: req.get('if-none-match'),

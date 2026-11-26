@@ -297,12 +297,12 @@ app.all(
 
 ### `aiCatalogHandler(options)`
 
-Handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount it with `app.all` at `/.well-known/ai-catalog.json`, and [`ardHandler`](#ardhandleroptions) with the same options at `/.well-known/ard.json`, so both [catalog paths](../README.md#discovery-ai-catalogs) serve it:
+Handler that serves an [AI Catalog](../README.md#discovery-ai-catalogs) linking to MCP Server Cards. It takes the `generateAICatalog` options plus `maxAge`, as `serverCardHandler` does. It validates them and generates the catalog when it is created, throwing a `Clerk error:` for anything the catalog can't have, so it needs no Clerk keys or MCP SDK, never fetches the cards it links to, and later changes to the options change nothing. Mount the one handler with `app.all` at both [catalog paths](../README.md#discovery-ai-catalogs), `/.well-known/ard.json` and `/.well-known/ai-catalog.json`:
 
 ```ts
-import { aiCatalogHandler, ardHandler } from '@clerk/mcp-tools/hono';
+import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
 
-const catalog = {
+const catalog = aiCatalogHandler({
   entries: [
     {
       identifier: 'urn:air:example.com:weather',
@@ -310,26 +310,13 @@ const catalog = {
       url: 'https://mcp.example.com/mcp/server-card',
     },
   ],
-};
-
-app.all('/.well-known/ard.json', ardHandler(catalog));
-app.all('/.well-known/ai-catalog.json', aiCatalogHandler(catalog));
-```
-
-It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and treats earlier middleware headers the same way: its own `ETag`, `Cache-Control`, and `Content-Length` win, other earlier headers are kept, and a `cors()` middleware's `Access-Control-Allow-Origin` still wins. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
-
-### `ardHandler(options)`
-
-Handler that serves the same catalog as `aiCatalogHandler`, from the same options, at `/.well-known/ard.json` as `application/json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves it with. It answers exactly as `aiCatalogHandler` does otherwise, with the same body and `ETag`, so the two paths revalidate each other. Point the homepage at it with `ardLinkHeader()`; see [ARD discovery](../README.md#ard-discovery):
-
-```ts
-import { ardLinkHeader } from '@clerk/mcp-tools/hono';
-
-app.get('/', (c) => {
-  c.header('Link', ardLinkHeader()); // </.well-known/ard.json>; rel="ard"
-  return c.text('OK');
 });
+
+app.all('/.well-known/ard.json', catalog);
+app.all('/.well-known/ai-catalog.json', catalog);
 ```
+
+It answers as `serverCardHandler` does, with `application/json` at a path ending in `/.well-known/ard.json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves it with, and `application/ai-catalog+json` at any other path, and treats earlier middleware headers the same way: its own `ETag`, `Cache-Control`, and `Content-Length` win, other earlier headers are kept, and a `cors()` middleware's `Access-Control-Allow-Origin` still wins. Both paths get the same body and `ETag`. The catalog is the same for every request, so it never answers `421`; for several origins, create one handler for each, pick it by `new URL(c.req.url).origin`, and answer `421` for an origin without one rather than serving another origin's catalog.
 
 ### `mcpRegistryAuthHandler(options)`
 

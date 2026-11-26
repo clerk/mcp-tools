@@ -26,8 +26,8 @@ export type ServerCardHandlerOptions = Omit<ServerCardOptions, 'resourceUrl'> & 
 };
 
 /**
- * Options for an `aiCatalogHandler` or an `ardHandler`: the `generateAICatalog` options and the cache lifetime. The
- * catalog is the same for every request; an app that answers on several origins mounts one handler for each.
+ * Options for an `aiCatalogHandler`: the `generateAICatalog` options and the cache lifetime. The catalog is the same
+ * for every request; an app that answers on several origins mounts one handler for each.
  */
 export type AICatalogHandlerOptions = AICatalogOptions & {
   /**
@@ -47,6 +47,11 @@ export type DiscoveryRequest = {
    * for an Express request without a `Host` header that parses. A document served to every request never reads it.
    */
   url: string | undefined;
+  /**
+   * The path the request was made to, without its query, as the app received it. Only the AI Catalog reads it, to pick
+   * its media type.
+   */
+  path: string;
   /**
    * The request's `If-None-Match` field, its lines joined with commas
    */
@@ -113,7 +118,7 @@ export function serverCardResponder(caller: string, options: unknown) {
   assertResourceUrls(caller, configured);
   return discoveryResponder(caller, {
     maxAge,
-    mediaType: 'application/mcp-server-card+json',
+    mediaType: () => 'application/mcp-server-card+json',
     build: () => {
       // One URL is advertised whatever the request's origin, so the request's URL is never needed
       if (typeof configured === 'string') {
@@ -133,37 +138,27 @@ export function serverCardResponder(caller: string, options: unknown) {
   });
 }
 
-/**
- * Validates an `aiCatalogHandler`'s options and generates its catalog once, so the answers are fixed: changing the
- * options afterward changes nothing.
- * @param caller - The entry point named in error messages
- * @param options - The handler's options, unchecked
- * @returns The function that answers each request
- */
-export function aiCatalogResponder(caller: string, options: unknown) {
-  return catalogResponder(caller, options, 'application/ai-catalog+json');
-}
+// ARD v0.91 section 5.1's canonical path, which the ARD publishing guide ("Step 2: Host the manifest") serves as
+// `application/json`. The AI Catalog's own path, `/.well-known/ai-catalog.json`, and any other keep its media type.
+const ARD_PATH = '/.well-known/ard.json';
 
 /**
- * Validates an `ardHandler`'s options and generates its catalog once, as `aiCatalogResponder` does, served as
- * `application/json`: the ARD publishing guide ("Step 2: Host the manifest") serves `/.well-known/ard.json` with it.
+ * Validates an `aiCatalogHandler`'s options and generates its catalog once, so the answers are fixed: changing the
+ * options afterward changes nothing. Every path gets the same body and ETag; a path ending in `/.well-known/ard.json`
+ * gets it as `application/json`, and any other as `application/ai-catalog+json`.
  * @see https://agenticresourcediscovery.org/how_to_publish/
  * @param caller - The entry point named in error messages
  * @param options - The handler's options, unchecked
  * @returns The function that answers each request
  */
-export function ardResponder(caller: string, options: unknown) {
-  return catalogResponder(caller, options, 'application/json');
-}
-
-// One catalog, built from the handler's options, served with the given media type
-function catalogResponder(caller: string, options: unknown, mediaType: string) {
+export function aiCatalogResponder(caller: string, options: unknown) {
   // Anything but an object goes to the builder as it is, which names the options it takes
   const isObject = isPlainObject(options);
   const { maxAge, ...catalog } = isObject ? (options as AICatalogHandlerOptions) : {};
   return discoveryResponder(caller, {
     maxAge,
-    mediaType,
+    mediaType: ({ path }) =>
+      path.endsWith(ARD_PATH) ? 'application/json' : 'application/ai-catalog+json',
     // One catalog, whatever the request's URL
     build: () => ({ document: buildAICatalog(caller, isObject ? catalog : options) }),
   });
@@ -172,12 +167,16 @@ function catalogResponder(caller: string, options: unknown, mediaType: string) {
 /**
  * The answers of a discovery handler, from the document a request's URL selects.
  * @param caller - The entry point named in error messages
- * @param config - The cache lifetime, the documents' media type, and `build`, called once after `maxAge` is checked,
- * which builds the document or documents to serve
+ * @param config - The cache lifetime, the media type a request gets, and `build`, called once after `maxAge` is
+ * checked, which builds the document or documents to serve
  */
 function discoveryResponder(
   caller: string,
-  config: { maxAge: unknown; mediaType: string; build: () => DiscoveryDocuments },
+  config: {
+    maxAge: unknown;
+    mediaType: (request: DiscoveryRequest) => string;
+    build: () => DiscoveryDocuments;
+  },
 ) {
   const maxAge = config.maxAge === undefined ? DEFAULT_MAX_AGE : config.maxAge;
   if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
@@ -190,7 +189,8 @@ function discoveryResponder(
 
   const pick = representationPicker(config.build());
 
-  const answer = ({ method, url, ifMatch, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
+  const answer = (request: DiscoveryRequest): DiscoveryAnswer => {
+    const { method, url, ifMatch, ifNoneMatch } = request;
     if (method === 'OPTIONS') {
       return { status: 200, headers: { ...discoveryCorsHeaders, Allow: ALLOW }, body: null };
     }
@@ -212,7 +212,11 @@ function discoveryResponder(
     if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
       return { status: 304, headers: validators, body: null };
     }
-    return { status: 200, headers: { ...validators, 'Content-Type': config.mediaType }, body };
+    return {
+      status: 200,
+      headers: { ...validators, 'Content-Type': config.mediaType(request) },
+      body,
+    };
   };
 
   // HEAD gets the headers GET would, without the content. Its Content-Length is the GET's, which is known before any

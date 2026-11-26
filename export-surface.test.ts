@@ -59,7 +59,6 @@ const withServer = (values: string[], types: string[]): Surface => ({
 const ADAPTER: Surface = {
   values: [
     'aiCatalogHandler',
-    'ardHandler',
     'authorizationServerMetadataHandler',
     'mcpAuth',
     'mcpRegistryAuthHandler',
@@ -136,7 +135,6 @@ const PINNED: Record<string, Surface> = {
   './next': withServer(
     [
       'aiCatalogHandler',
-      'ardHandler',
       'authorizationServerMetadataHandler',
       'mcpRegistryAuthHandler',
       'metadataCorsHandler',

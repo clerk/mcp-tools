@@ -35,7 +35,6 @@ import {
   authorizationServerMetadataHandler,
   mcpAuth,
   aiCatalogHandler,
-  ardHandler,
   serverCardHandler,
   streamableHttpHandler,
 } from './index';
@@ -209,9 +208,9 @@ describe.each([
     'application/ai-catalog+json',
   ],
   [
-    'ardHandler',
+    'aiCatalogHandler at ard.json',
     () =>
-      ardHandler({
+      aiCatalogHandler({
         entries: [
           {
             identifier: 'urn:air:example.com:weather:mcp',

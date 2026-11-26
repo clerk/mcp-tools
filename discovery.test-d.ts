@@ -9,7 +9,6 @@ import {
   type AICatalogOptions,
   type ServerCardHandlerOptions,
   aiCatalogHandler,
-  ardHandler,
   ardLinkHeader,
   serverCardHandler,
 } from './hono';
@@ -179,21 +178,6 @@ describe('ARD discovery types', () => {
       url: 'https://example.com/mcp/server-card',
     },
   ];
-
-  test('ardHandler takes the aiCatalogHandler options and returns each adapter handler', () => {
-    const handler = ardHandler({ entries, maxAge: 0 });
-    expectTypeOf(handler).parameters.toEqualTypeOf<[Context]>();
-    expectTypeOf(handler).returns.toExtend<Response>();
-    expectTypeOf(next.ardHandler({ entries })).toEqualTypeOf<(req: Request) => Response>();
-    const expressHandler = expressAdapter.ardHandler({ entries });
-    expectTypeOf(expressHandler).parameters.toEqualTypeOf<[express.Request, express.Response]>();
-    expectTypeOf(expressHandler).toExtend<express.RequestHandler>();
-    expectTypeOf<Parameters<typeof ardHandler>[0]>().toEqualTypeOf<AICatalogHandlerOptions>();
-    // @ts-expect-error specVersion is generated
-    ardHandler({ entries, specVersion: '0.9' });
-    // @ts-expect-error entries are required
-    ardHandler({});
-  });
 
   test('entries take representativeQueries and a trust manifest, or null to publish none', () => {
     expectTypeOf<AICatalogEntryOptions['representativeQueries']>().toEqualTypeOf<

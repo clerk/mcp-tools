@@ -34,7 +34,6 @@ import {
   McpAuthError,
   type McpAuthOptions,
   aiCatalogHandler,
-  ardHandler,
   mcpAuth,
   protectedResourceMetadataHandler,
   serverCardHandler,
@@ -1133,9 +1132,9 @@ describe.each([
     'application/ai-catalog+json',
   ],
   [
-    'ardHandler',
+    'aiCatalogHandler at ard.json',
     () =>
-      ardHandler({
+      aiCatalogHandler({
         entries: [
           {
             identifier: 'urn:air:example.com:weather:mcp',
@@ -1466,5 +1465,33 @@ describe('serverCardHandler behind a proxy', () => {
 
     const vary = trustProxy ? 'X-Forwarded-Host, X-Forwarded-Proto' : null;
     expect(res).toEqual({ status: 421, vary, body: { error: 'misdirected_request' } });
+  });
+});
+
+describe('aiCatalogHandler on a router', () => {
+  // The media type follows the whole path the app received, the router's mount path included
+  test.each([
+    ['/tenant/.well-known/ard.json', 'application/json'],
+    ['/tenant/.well-known/ai-catalog.json', 'application/ai-catalog+json'],
+  ])('serves %s as %s', async (path, mediaType) => {
+    const router = express.Router();
+    router.all(
+      ['/.well-known/ard.json', '/.well-known/ai-catalog.json'],
+      aiCatalogHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:weather:mcp',
+            displayName: 'Weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      }),
+    );
+    const app = express();
+    app.use('/tenant', router);
+
+    const res = await withListening(app, (baseUrl) => fetch(`${baseUrl}${path}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe(mediaType);
   });
 });
