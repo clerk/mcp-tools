@@ -14,7 +14,6 @@ const SERVER: Surface = {
   values: [
     'McpAuthError',
     'McpTokenVerificationError',
-    'ardLinkHeader',
     'fetchAuthorizationServerMetadata',
     'generateAICatalog',
     'generateProtectedResourceMetadata',

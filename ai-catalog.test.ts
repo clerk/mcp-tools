@@ -1,10 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { ardLinkHeader, generateAICatalog } from './server';
-import * as expressAdapter from './express';
-import * as honoAdapter from './hono';
-import * as nextAdapter from './next';
+import { generateAICatalog } from './server';
 import { aiCatalogErrors, linkedCardCatalogErrors } from './test/ai-catalog-contract';
 
 // The AI Catalog v0.9 RC example at Agent-Card/ai-catalog@19208af (#141; the repo's formatter only rewraps it).
@@ -662,56 +659,6 @@ describe('generateAICatalog options', () => {
     expect(() => generateAICatalog({ entries: [{ ...weather, url }] })).toThrow(
       'Clerk error: generateAICatalog entries[0].url must be',
     );
-  });
-});
-
-// ARD v0.91, 5.1 Discovery Mechanisms: a consumer "MUST honour a rel="ard" link", and publishers "emit rel="ard"".
-// https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
-describe('ardLinkHeader', () => {
-  test('links the canonical ard.json path by default', () => {
-    expect(ardLinkHeader()).toBe('</.well-known/ard.json>; rel="ard"');
-  });
-
-  test.each([
-    ['/catalogs/ard.json', '</catalogs/ard.json>; rel="ard"'],
-    [
-      'https://example.com/.well-known/ard.json',
-      '<https://example.com/.well-known/ard.json>; rel="ard"',
-    ],
-  ])('links the catalog at %s', (target, header) => {
-    expect(ardLinkHeader(target)).toBe(header);
-  });
-
-  test.each([
-    '',
-    'ard.json',
-    '//evil.example/ard.json',
-    '/a b',
-    '/a>; rel="x"',
-    '/a\r\nSet-Cookie: x=1',
-    'javascript:alert(1)',
-    'https://user:pass@example.com/ard.json',
-  ])('rejects %j, which is not a path or an http(s) URL a Link header can carry', (target) => {
-    expect(() => ardLinkHeader(target)).toThrow('Clerk error: ardLinkHeader');
-  });
-
-  test('is re-exported by every adapter', () => {
-    for (const adapter of [expressAdapter, honoAdapter, nextAdapter]) {
-      expect(adapter.ardLinkHeader).toBe(ardLinkHeader);
-    }
-  });
-
-  test('sets the Link header of a Hono homepage', async () => {
-    const { Hono } = await import('hono');
-    const app = new Hono();
-    app.get('/', (c) => {
-      c.header('Link', ardLinkHeader());
-      return c.text('OK');
-    });
-
-    const res = await app.request('https://mcp.example.com/');
-
-    expect(res.headers.get('link')).toBe('</.well-known/ard.json>; rel="ard"');
   });
 });
 

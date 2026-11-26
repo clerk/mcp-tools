@@ -407,7 +407,6 @@ export {
   type AICatalogHost,
   type AICatalogOptions,
   type AICatalogTrustManifest,
-  ardLinkHeader,
   generateAICatalog,
 } from './ai-catalog';
 

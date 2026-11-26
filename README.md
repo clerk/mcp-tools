@@ -192,13 +192,13 @@ For framework-specific implementations, see:
 
 - **Serve the catalog on the host that is scanned.** A scanner or consumer resolving `mcp.example.com` reads `https://mcp.example.com/.well-known/ard.json`. A catalog on the apex `example.com` does not cover an MCP endpoint on a subdomain, so mount `aiCatalogHandler` on the host that serves the endpoint, and on the apex too if that is also scanned.
 - **Serve `ard.json` as `application/json`.** `aiCatalogHandler` does at any path ending in `/.well-known/ard.json`, as the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) ("Step 2: Host the manifest") shows, and keeps the AI Catalog's `application/ai-catalog+json` for `ai-catalog.json`.
-- **Link the catalog from the homepage.** `ardLinkHeader()` returns `</.well-known/ard.json>; rel="ard"` for the homepage's `Link` header. Pass a path or an absolute http or https URL to link a catalog elsewhere.
+- **Link the catalog from the homepage.** Send `Link: </.well-known/ard.json>; rel="ard"` on the homepage, which ARD consumers MUST honour ([section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms)). For a catalog elsewhere, put its path or URL between the `<` and `>` ([RFC 8288 section 3](https://www.rfc-editor.org/rfc/rfc8288#section-3)).
 - **Add `representativeQueries` to each entry.** ARD's [4.2 Entry Terms](https://agenticresourcediscovery.org/spec/#42-entry-terms) says an entry SHOULD carry 2 to 5 sample natural-language requests, which a registry indexes for search; without them ARD's conformance tester warns. From 1 to 20 are accepted, each with more than whitespace and no control characters; ARD's count is advice, so it is not enforced.
 - **Name the operator with `host`.** `{ displayName, identifier, documentationUrl? }`, the AI Catalog's Host Info, makes the catalog Level 2 (Discoverable). `identifier` is a domain name or a DID without whitespace, and `documentationUrl` an https URL without credentials. Other Host Info members, such as `logoUrl`, are not supported.
 - **Bind each entry to its publisher.** ARD's [4.5.1 Publisher Authority Binding](https://agenticresourcediscovery.org/spec/#451-publisher-authority-binding) requires the entry's `trustManifest.identity` to align with the publisher domain of its `urn:air:<publisher>:…` identifier. When an entry has no `trustManifest` and its identifier is `urn:air:<domain>:<name>` with a domain name of two or more labels, the catalog emits `{ identity: 'https://<domain>', identityType: 'https' }`, the domain lowercased. Any other identifier gets none. Set `trustManifest: null` to publish none, or set your own manifest, which is emitted as given.
 
 ```ts
-import { aiCatalogHandler, ardLinkHeader } from '@clerk/mcp-tools/hono';
+import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
 
 const catalog = aiCatalogHandler({
   host: { displayName: 'Example Inc.', identifier: 'example.com' },
@@ -216,7 +216,7 @@ const catalog = aiCatalogHandler({
 app.all('/.well-known/ard.json', catalog);
 app.all('/.well-known/ai-catalog.json', catalog);
 app.get('/', (c) => {
-  c.header('Link', ardLinkHeader());
+  c.header('Link', '</.well-known/ard.json>; rel="ard"');
   return c.text('OK');
 });
 ```
@@ -1155,11 +1155,6 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs): `specVersion` `0.9`, an optional `host`, and one entry for each `{ identifier, displayName, url, representativeQueries?, trustManifest? }`, with the generated type `application/mcp-server-card+json` and, for a `urn:air:<domain>:…` identifier without a `trustManifest`, the default `{ identity: 'https://<domain>', identityType: 'https' }` (`null` publishes none). It throws a `Clerk error:` for an unknown key, a `host` without a `displayName` and `identifier` or with a `documentationUrl` that isn't https, `representativeQueries` that isn't a list of 1 to 20 non-blank texts, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
   - **Params:** `AICatalogOptions`
   - **Returns:** `AICatalog`
-
-- `ardLinkHeader`
-  - **Description:** The `Link` header value that points ARD clients at the catalog from the homepage, `</.well-known/ard.json>; rel="ard"` by default (ARD v0.91 section 5.1). See [ARD discovery](#ard-discovery). It throws a `Clerk error:` for a target that isn't a path starting with one `/` or an absolute http or https URL without credentials, or that holds whitespace, control characters, `<`, `>`, or `"`.
-  - **Params:** `target?: string`
-  - **Returns:** `string`
 
 - `generateRegistryServerJson`
   - **Description:** Generates the `server.json` for the official MCP Registry from the Server Card options, as described in [Publish to the MCP Registry](#publish-to-the-mcp-registry): the card's `name`, `version`, `description`, `title`, `websiteUrl`, `icons`, and `repository`, the 2025-12-11 `$schema`, and one streamable HTTP remote for each `resourceUrl`. It throws a `Clerk error:` for anything the card can't have and for what the registry rejects: a non-https icon, website, or remote, a `localhost` remote, an icon media type or size the schema doesn't list, a repository off GitHub and GitLab, or the version `latest`. It fetches nothing. The document is frozen.

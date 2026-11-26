@@ -9,7 +9,6 @@ import {
   type AICatalogOptions,
   type ServerCardHandlerOptions,
   aiCatalogHandler,
-  ardLinkHeader,
   serverCardHandler,
 } from './hono';
 import {
@@ -207,12 +206,6 @@ describe('ARD discovery types', () => {
     aiCatalogHandler({ entries, host: { displayName: 'Example' } });
     // @ts-expect-error logoUrl is not supported
     aiCatalogHandler({ entries, host: { displayName: 'E', identifier: 'e.com', logoUrl: 'x' } });
-  });
-
-  test('ardLinkHeader takes an optional target and returns the header value', () => {
-    expectTypeOf(ardLinkHeader).toEqualTypeOf<(target?: string) => string>();
-    expectTypeOf(next.ardLinkHeader).toEqualTypeOf(ardLinkHeader);
-    expectTypeOf(expressAdapter.ardLinkHeader).toEqualTypeOf(ardLinkHeader);
   });
 });
 
