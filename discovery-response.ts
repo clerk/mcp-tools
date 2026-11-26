@@ -48,6 +48,10 @@ export type DiscoveryRequest = {
    */
   url: string | undefined;
   /**
+   * The path the request was made to, without its query, as the app received it, mount path included
+   */
+  path: string;
+  /**
    * The request's `If-None-Match` field, its lines joined with commas
    */
   ifNoneMatch: string | null | undefined;
@@ -78,23 +82,32 @@ const discoveryCorsHeaders = {
   'Access-Control-Expose-Headers': 'ETag',
 };
 
-// The JSON error a request gets, with its body even for HEAD: the responder drops a HEAD answer's body in one place.
-// `no-store` keeps every error out of caches (RFC 9111 section 5.2.2.5): without it, a 405 is heuristically cacheable
-// (RFC 9110 section 15.1), and a cache may reuse it with heuristic freshness (RFC 9111 section 4.2.2).
-const errorAnswer = (
+/**
+ * The JSON error a request gets, with its body even for HEAD. `no-store` keeps every error out of caches (RFC 9111
+ * section 5.2.2.5): without it, a 405 is heuristically cacheable (RFC 9110 section 15.1), and a cache may reuse it with
+ * heuristic freshness (RFC 9111 section 4.2.2).
+ * @param status - The error status
+ * @param error - The error code in the JSON body
+ * @param headers - More headers, such as `Allow` for a 405
+ * @returns A `DiscoveryAnswer` with the JSON `{ error }` body, `Content-Type: application/json`, and
+ * `Cache-Control: no-store`, without CORS headers
+ */
+export const jsonErrorAnswer = (
   status: 400 | 405 | 412 | 421,
   error: string,
   headers: Record<string, string> = {},
 ): DiscoveryAnswer => ({
   status,
-  headers: {
-    ...discoveryCorsHeaders,
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-store',
-    ...headers,
-  },
+  headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
   body: JSON.stringify({ error }),
 });
+
+// A discovery document's error, readable from any origin. The responder drops a HEAD answer's body in one place.
+const errorAnswer = (
+  status: 400 | 405 | 412 | 421,
+  error: string,
+  headers: Record<string, string> = {},
+): DiscoveryAnswer => jsonErrorAnswer(status, error, { ...discoveryCorsHeaders, ...headers });
 
 /**
  * Validates a `serverCardHandler`'s options and generates the card for each configured URL once, so the answers are
@@ -113,7 +126,7 @@ export function serverCardResponder(caller: string, options: unknown) {
   assertResourceUrls(caller, configured);
   return discoveryResponder(caller, {
     maxAge,
-    mediaType: 'application/mcp-server-card+json',
+    mediaType: () => 'application/mcp-server-card+json',
     build: () => {
       // One URL is advertised whatever the request's origin, so the request's URL is never needed
       if (typeof configured === 'string') {
@@ -133,9 +146,20 @@ export function serverCardResponder(caller: string, options: unknown) {
   });
 }
 
+// ARD v0.91 section 5.1's canonical path, which the ARD publishing guide ("Step 2: Host the manifest") serves as
+// `application/json`. The AI Catalog's own path, `/.well-known/ai-catalog.json`, and any other keep its media type.
+const ARD_PATH = '/.well-known/ard.json';
+
+// Express routes case-insensitively and with or without a trailing slash, `app.use` hands a handler its mount path
+// with one, and Next.js serves every route with one under `trailingSlash: true`, so the comparison ignores both
+const isArdPath = (path: string) => path.replace(/\/+$/, '').toLowerCase().endsWith(ARD_PATH);
+
 /**
  * Validates an `aiCatalogHandler`'s options and generates its catalog once, so the answers are fixed: changing the
- * options afterward changes nothing.
+ * options afterward changes nothing. Every path gets the same body and ETag; a path ending in `/.well-known/ard.json`,
+ * in any case and with or without a trailing slash, gets it as `application/json`, and any other as
+ * `application/ai-catalog+json`.
+ * @see https://agenticresourcediscovery.org/how_to_publish/
  * @param caller - The entry point named in error messages
  * @param options - The handler's options, unchecked
  * @returns The function that answers each request
@@ -146,26 +170,41 @@ export function aiCatalogResponder(caller: string, options: unknown) {
   const { maxAge, ...catalog } = isObject ? (options as AICatalogHandlerOptions) : {};
   return discoveryResponder(caller, {
     maxAge,
-    mediaType: 'application/ai-catalog+json',
+    mediaType: ({ path }) => (isArdPath(path) ? 'application/json' : 'application/ai-catalog+json'),
     // One catalog, whatever the request's URL
     build: () => ({ document: buildAICatalog(caller, isObject ? catalog : options) }),
   });
 }
 
 /**
+ * Checks a discovery handler's `maxAge` option.
+ * @param caller - The entry point named in error messages
+ * @param maxAge - The option, unchecked
+ * @returns The seconds a cache may reuse the document for, `3600` when the option is left out
+ */
+export function checkedMaxAge(caller: string, maxAge: unknown): number {
+  const seconds = maxAge === undefined ? DEFAULT_MAX_AGE : maxAge;
+  if (typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 0) {
+    failFor(caller)('maxAge must be a whole number of seconds, 0 or more, or left out for 3600');
+  }
+  return seconds as number;
+}
+
+/**
  * The answers of a discovery handler, from the document a request's URL selects.
  * @param caller - The entry point named in error messages
- * @param config - The cache lifetime, the documents' media type, and `build`, called once after `maxAge` is checked,
- * which builds the document or documents to serve
+ * @param config - The cache lifetime, the media type a request gets, and `build`, called once after `maxAge` is
+ * checked, which builds the document or documents to serve
  */
 function discoveryResponder(
   caller: string,
-  config: { maxAge: unknown; mediaType: string; build: () => DiscoveryDocuments },
+  config: {
+    maxAge: unknown;
+    mediaType: (request: DiscoveryRequest) => string;
+    build: () => DiscoveryDocuments;
+  },
 ) {
-  const maxAge = config.maxAge === undefined ? DEFAULT_MAX_AGE : config.maxAge;
-  if (typeof maxAge !== 'number' || !Number.isSafeInteger(maxAge) || maxAge < 0) {
-    failFor(caller)('maxAge must be a whole number of seconds, 0 or more, or left out for 3600');
-  }
+  const maxAge = checkedMaxAge(caller, config.maxAge);
   // RFC 9111 section 5.2.2.9: `public` explicitly marks the document cacheable, including for a shared cache and a
   // request with an Authorization header (section 3.5). With 0, `no-cache` has a cache revalidate before each reuse
   // (section 5.2.2.4), which the ETag makes cheap.
@@ -173,7 +212,8 @@ function discoveryResponder(
 
   const pick = representationPicker(config.build());
 
-  const answer = ({ method, url, ifMatch, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
+  const answer = (request: DiscoveryRequest): DiscoveryAnswer => {
+    const { method, url, ifMatch, ifNoneMatch } = request;
     if (method === 'OPTIONS') {
       return { status: 200, headers: { ...discoveryCorsHeaders, Allow: ALLOW }, body: null };
     }
@@ -195,7 +235,11 @@ function discoveryResponder(
     if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
       return { status: 304, headers: validators, body: null };
     }
-    return { status: 200, headers: { ...validators, 'Content-Type': config.mediaType }, body };
+    return {
+      status: 200,
+      headers: { ...validators, 'Content-Type': config.mediaType(request) },
+      body,
+    };
   };
 
   // HEAD gets the headers GET would, without the content. Its Content-Length is the GET's, which is known before any

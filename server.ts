@@ -134,9 +134,10 @@ export type McpPublicMethod =
 
 /**
  * What a request without an `Authorization` header may do besides what `discoverable` opens, as the `publicAccess`
- * option of `mcpAuth` and `withClerkMcpAuth`. A call is open only when it is listed here, and a request for anything
- * else gets the 401 challenge that starts authorization, so an MCP client signs in only when it reaches something
- * protected. A request that carries a token is verified as usual, whatever it asks for.
+ * option of `mcpAuth` and `withClerkMcpAuth`. A call is open only when it is listed here, or is a read of a view
+ * `views` opens, and a request for anything else gets the 401 challenge that starts authorization, so an MCP client
+ * signs in only when it reaches something protected. A request that carries a token is verified as usual, whatever it
+ * asks for.
  */
 export type PublicAccess = {
   /**
@@ -148,7 +149,7 @@ export type PublicAccess = {
    * the name, description, and input schema of every tool, the protected ones included. It never opens a call. With
    * `initialize` or `server/discover` open, a GET without a token gets a 405 rather than the 401, and a
    * `subscriptions/listen` (protocol revision 2026-07-28) is open when every resource in its `resourceSubscriptions`
-   * is one `resources` opens.
+   * is one `resources` or `views` opens.
    */
   methods?: readonly McpPublicMethod[] | undefined;
   /**
@@ -166,6 +167,16 @@ export type PublicAccess = {
    * The prompts a `prompts/get` may ask for without a token: `true` for every prompt, or a list of prompt names.
    */
   prompts?: boolean | readonly string[] | undefined;
+  /**
+   * Whether a `resources/read` or `subscriptions/listen` without a token may ask for an MCP App view: exactly the
+   * `ui://` URIs `mcpAppViewResource` built views for in this process, in any of its servers, and no other resource. It
+   * defaults to `true` when `discoverable` decides access, and to `false` next to a `methods` list. MCP Apps
+   * (2026-01-26) lets a host prefetch and cache a view before any tool runs, so before the user has signed in, and a
+   * scanner reads it to check the view. A view template is shared HTML: user data reaches it only through the result
+   * of an authenticated tool call. Set `views: false` when your server renders per-user data into a template, so every
+   * view needs a token; `resources` can still open single views by URI.
+   */
+  views?: boolean | undefined;
 };
 
 /**
@@ -388,11 +399,13 @@ export {
   type ServerCardRepository,
   generateServerCard,
 } from './server-card';
+export { type RegistryServerJson, generateRegistryServerJson } from './mcp-registry';
 export {
   type AICatalog,
   type AICatalogAttestation,
   type AICatalogEntry,
   type AICatalogEntryOptions,
+  type AICatalogHost,
   type AICatalogOptions,
   type AICatalogTrustManifest,
   generateAICatalog,

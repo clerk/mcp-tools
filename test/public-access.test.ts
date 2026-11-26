@@ -17,6 +17,7 @@ import {
   streamableHttpHandler,
 } from '../hono';
 import type { AuthInfo } from '../mcp-types';
+import { mcpAppViewResource } from '../tools';
 import { connectOAuthClient, expiresAt, oauthMetadata, textOf } from './mcp-harness';
 
 const ORIGIN = 'https://mcp.example.com';
@@ -45,6 +46,13 @@ type ReadBody = (context: Context) => Promise<unknown>;
 // The options besides the verifier and the URLs: by default, the server is discoverable and names two public tools
 type ServerOptions = Pick<McpAuthOptions, 'discoverable' | 'publicAccess'>;
 const PUBLIC_TOOLS: ServerOptions = { publicAccess: { tools: ['search_docs', 'slow_search'] } };
+const VIEW_URIS = ['ui://docs/viewer.html', 'ui://docs/editor.html'] as const;
+const VIEW_HTML =
+  '<!DOCTYPE html><html><head><meta name="color-scheme" content="light dark"></head></html>';
+// Built at module scope, as the README advises, so their URIs are recorded before the first request
+const VIEWS = VIEW_URIS.map((uri) => mcpAppViewResource({ name: uri, uri, html: VIEW_HTML }));
+// A ui:// resource registered without mcpAppViewResource, which views does not open
+const PLAIN_UI_URI = 'ui://docs/plain.html';
 
 // `streamableHttpHandler` serves the protocol revisions before 2026-07-28, and MCP SDK 2's `createMcpHandler` serves
 // 2026-07-28 as well
@@ -84,6 +92,11 @@ function startServer(
     );
     server.registerResource('guide', 'docs://guide', { description: 'The guide' }, async (uri) => ({
       contents: [{ uri: uri.href, text: 'guide' }],
+    }));
+    // MCP App view templates, which hosts may prefetch before the user signs in
+    for (const view of VIEWS) server.registerResource(...view);
+    server.registerResource('plain', PLAIN_UI_URI, {}, async (uri) => ({
+      contents: [{ uri: uri.href, mimeType: 'text/html', text: VIEW_HTML }],
     }));
     server.registerResource(
       'page',
@@ -148,6 +161,8 @@ function postRequest(
   fetchImpl: ReturnType<typeof startServer>['fetchImpl'],
   method: string,
   params: Record<string, unknown> = {},
+  // The `Mcp-Name` header that revision requires of a request that names a tool, resource, or prompt
+  name: string | undefined = undefined,
 ) {
   return fetchImpl(MCP_URL, {
     method: 'POST',
@@ -156,6 +171,7 @@ function postRequest(
       accept: 'application/json, text/event-stream',
       'mcp-protocol-version': '2026-07-28',
       'mcp-method': method,
+      ...(name !== undefined && { 'mcp-name': name }),
     },
     body: JSON.stringify({
       jsonrpc: '2.0',
@@ -323,7 +339,11 @@ describe('a server with publicAccess, discoverable by default', () => {
     const { client, redirects, answers } = await connect();
 
     const { resources } = await client.listResources();
-    expect(resources.map((resource) => resource.uri)).toEqual(['docs://guide']);
+    expect(resources.map((resource) => resource.uri)).toEqual([
+      'docs://guide',
+      ...VIEW_URIS,
+      PLAIN_UI_URI,
+    ]);
     const { resourceTemplates } = await client.listResourceTemplates();
     expect(resourceTemplates.map((template) => template.uriTemplate)).toEqual([
       'docs://pages/{slug}',
@@ -443,5 +463,130 @@ describe('a server with a publicAccess.methods list', () => {
       headers: { accept: 'text/event-stream' },
     });
     expect(get.status).toBe(401);
+  });
+});
+
+describe('MCP App views on a server with publicAccess', () => {
+  // A resources/read without a token, as a client on protocol revision 2026-07-28 sends it
+  async function read(options: ServerOptions, uri: string) {
+    const { fetchImpl } = startServer(undefined, options, 'createMcpHandler');
+    return postRequest(fetchImpl, 'resources/read', { uri }, uri);
+  }
+
+  test('lets a client without a token read a ui:// view template on a discoverable server', async () => {
+    const { client, redirects, answers } = await connect();
+    try {
+      const { contents } = await client.readResource({ uri: VIEW_URIS[0] });
+      expect(contents).toEqual([
+        { uri: VIEW_URIS[0], mimeType: 'text/html;profile=mcp-app', text: VIEW_HTML },
+      ]);
+      expect(redirects).toHaveLength(0);
+      expect(answers.filter((answer) => answer.endsWith(' 401'))).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test.each([
+    { name: 'publicAccess left out', options: {} },
+    { name: 'discoverable: true', options: { discoverable: true } },
+    {
+      name: 'a methods list and views: true',
+      options: { publicAccess: { methods: ['initialize', 'resources/list'], views: true } },
+    },
+  ] satisfies { name: string; options: ServerOptions }[])(
+    'opens views with $name',
+    async ({ options }) => {
+      const res = await read(options, VIEW_URIS[1]);
+      expect(res.status).toBe(200);
+      expect(await responseMessage(res)).toMatchObject({
+        result: { contents: [{ uri: VIEW_URIS[1] }] },
+      });
+    },
+  );
+
+  test.each(['docs://guide', PLAIN_UI_URI, 'ui://docs/unregistered.html'])(
+    'keeps %s, which mcpAppViewResource did not build, behind the challenge',
+    async (uri) => {
+      const res = await read(PUBLIC_TOOLS, uri);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
+    },
+  );
+
+  test.each([
+    { name: 'views: false', options: { publicAccess: { views: false } } },
+    // A methods list chooses exactly what is open, so views stays off unless it is set too
+    {
+      name: 'a methods list that opens resources/list',
+      options: { publicAccess: { methods: ['initialize', 'resources/list'] } },
+    },
+  ] satisfies { name: string; options: ServerOptions }[])(
+    'challenges a view read without a token with $name',
+    async ({ options }) => {
+      const res = await read(options, VIEW_URIS[0]);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata=/);
+    },
+  );
+
+  test('with views: false, opens only the views publicAccess.resources names', async () => {
+    const options: ServerOptions = { publicAccess: { views: false, resources: [VIEW_URIS[1]] } };
+    expect((await read(options, VIEW_URIS[0])).status).toBe(401);
+    const named = await read(options, VIEW_URIS[1]);
+    expect(named.status).toBe(200);
+    await named.body?.cancel();
+  });
+
+  // Protocol revision 2026-07-28: subscriptions/listen replaces resources/subscribe, so a view views opens can be
+  // subscribed to without a token too, and a resource it does not open still closes the request
+  test('admits a subscriptions/listen to an open view, but not one that also names a closed resource', async () => {
+    const { fetchImpl } = startServer(undefined, PUBLIC_TOOLS, 'createMcpHandler');
+    const listen = (resourceSubscriptions: string[]) =>
+      postRequest(fetchImpl, 'subscriptions/listen', { notifications: { resourceSubscriptions } });
+
+    const listening = await listen([VIEW_URIS[0]]);
+    expect(listening.status).toBe(200);
+    await listening.body?.cancel();
+
+    for (const closed of [[VIEW_URIS[0], 'docs://guide'], [PLAIN_UI_URI]]) {
+      const res = await listen(closed);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Bearer /);
+    }
+  });
+
+  // A view built inside the server factory is recorded only once the factory runs, after auth checked the request
+  test('warns once when a view is first built after a request was checked, and opens it from then on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const late = 'ui://docs/late.html';
+      expect((await read(PUBLIC_TOOLS, late)).status).toBe(401);
+
+      mcpAppViewResource({ name: late, uri: late, html: VIEW_HTML });
+      mcpAppViewResource({ name: late, uri: late, html: VIEW_HTML });
+      expect(warn.mock.calls).toEqual([
+        [
+          "Clerk warning: mcpAppViewResource built ui://docs/late.html after mcpAuth or withClerkMcpAuth checked a request in this process, so publicAccess.views may not have opened it for requests checked before it was built. Build views once at module scope, not inside the server factory; a module first loaded after another server's requests, such as a lazily loaded route, logs this too.",
+        ],
+      ]);
+      const opened = await read(PUBLIC_TOOLS, late);
+      expect(opened.status).toBe(200);
+      await opened.body?.cancel();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a client with a token reads a view with views: false', async () => {
+    const { fetchImpl } = startServer(undefined, { publicAccess: { views: false } });
+    const { client, connected } = connectOAuthClient(MCP_URL, fetchImpl, 'token_full');
+    await connected;
+    try {
+      const { contents } = await client.readResource({ uri: VIEW_URIS[0] });
+      expect(contents[0]).toMatchObject({ uri: VIEW_URIS[0] });
+    } finally {
+      await client.close();
+    }
   });
 });

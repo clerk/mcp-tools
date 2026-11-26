@@ -3,10 +3,19 @@ import type { Context } from 'hono';
 import { describe, expectTypeOf, test } from 'vitest';
 
 import {
+  type AICatalogEntryOptions,
   type AICatalogHandlerOptions,
+  type AICatalogHost,
+  type AICatalogOptions,
   type ServerCardHandlerOptions,
   aiCatalogHandler,
   serverCardHandler,
+} from './hono';
+import {
+  type McpRegistryAuthHandlerOptions,
+  type RegistryServerJson,
+  generateRegistryServerJson,
+  mcpRegistryAuthHandler,
 } from './hono';
 import * as next from './next';
 import * as expressAdapter from './express';
@@ -156,5 +165,103 @@ describe('Express discovery handler types', () => {
     expressAdapter.aiCatalogHandler({ entries, resourceUrl });
     // @ts-expect-error entries are required
     expressAdapter.aiCatalogHandler({});
+  });
+});
+
+describe('ARD discovery types', () => {
+  const entries = [
+    {
+      identifier: 'urn:air:example.com:weather:mcp',
+      displayName: 'Weather',
+      url: 'https://example.com/mcp/server-card',
+    },
+  ];
+
+  test('entries take representativeQueries and an optional trust manifest', () => {
+    expectTypeOf<AICatalogEntryOptions['representativeQueries']>().toEqualTypeOf<
+      readonly string[] | undefined
+    >();
+    aiCatalogHandler({
+      entries: [{ ...entries[0]!, representativeQueries: ['Will it rain?'] }],
+    });
+    aiCatalogHandler({
+      entries: [{ ...entries[0]!, trustManifest: { identity: 'https://example.com' } }],
+    });
+    // @ts-expect-error representativeQueries are text
+    aiCatalogHandler({ entries: [{ ...entries[0]!, representativeQueries: [1] }] });
+    // @ts-expect-error leave trustManifest out to publish none
+    aiCatalogHandler({ entries: [{ ...entries[0]!, trustManifest: null }] });
+  });
+
+  test('a catalog takes a host with a displayName and identifier', () => {
+    expectTypeOf<AICatalogOptions['host']>().toEqualTypeOf<AICatalogHost | undefined>();
+    aiCatalogHandler({ entries, host: { displayName: 'Example', identifier: 'example.com' } });
+    aiCatalogHandler({
+      entries,
+      host: {
+        displayName: 'Example',
+        identifier: 'example.com',
+        documentationUrl: 'https://docs.example.com',
+      },
+    });
+    // @ts-expect-error a host needs an identifier
+    aiCatalogHandler({ entries, host: { displayName: 'Example' } });
+    // @ts-expect-error logoUrl is not supported
+    aiCatalogHandler({ entries, host: { displayName: 'E', identifier: 'e.com', logoUrl: 'x' } });
+  });
+});
+
+describe('MCP Registry types', () => {
+  const card = {
+    name: 'com.example/weather',
+    version: '1.2.0',
+    description: 'Forecasts.',
+    resourceUrl: 'https://mcp.example.com/mcp',
+  };
+
+  test('generateRegistryServerJson takes the Server Card options, with one URL or a list', () => {
+    const serverJson = generateRegistryServerJson(card);
+    generateRegistryServerJson({
+      ...card,
+      resourceUrl: ['https://mcp.example.com/mcp', 'https://mcp.example.dev/mcp'],
+    });
+    expectTypeOf(serverJson).toEqualTypeOf<RegistryServerJson>();
+    expectTypeOf(serverJson.remotes).toEqualTypeOf<
+      readonly { readonly type: 'streamable-http'; readonly url: string }[]
+    >();
+    expectTypeOf<
+      Parameters<typeof generateRegistryServerJson>[0]
+    >().toEqualTypeOf<ServerCardHandlerOptions>();
+    // The Server Card handler's options, maxAge included, describe the registry entry too
+    generateRegistryServerJson({ ...card, maxAge: 60 });
+  });
+
+  test('generateRegistryServerJson rejects generated fields and needs a resourceUrl', () => {
+    // @ts-expect-error remotes are generated
+    generateRegistryServerJson({ ...card, remotes: [] });
+    // @ts-expect-error $schema is generated
+    generateRegistryServerJson({ ...card, $schema: 'https://example.com/schema.json' });
+    // @ts-expect-error resourceUrl is required
+    generateRegistryServerJson({
+      name: card.name,
+      version: card.version,
+      description: card.description,
+    });
+  });
+
+  test('mcpRegistryAuthHandler takes only a publicKey on every adapter', () => {
+    const publicKey = '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=';
+    expectTypeOf(mcpRegistryAuthHandler({ publicKey })).parameters.toEqualTypeOf<[Context]>();
+    expectTypeOf(next.mcpRegistryAuthHandler({ publicKey })).toEqualTypeOf<
+      (req: Request) => Response
+    >();
+    expectTypeOf(expressAdapter.mcpRegistryAuthHandler({ publicKey })).parameters.toEqualTypeOf<
+      [express.Request, express.Response]
+    >();
+    expectTypeOf<McpRegistryAuthHandlerOptions>().toEqualTypeOf<{ publicKey: string }>();
+    // @ts-expect-error publicKey is required
+    mcpRegistryAuthHandler({});
+    // @ts-expect-error only Ed25519 keys are served
+    mcpRegistryAuthHandler({ publicKey, algorithm: 'ecdsap384' });
   });
 });

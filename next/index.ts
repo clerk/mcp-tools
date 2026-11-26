@@ -21,9 +21,11 @@ import {
   aiCatalogResponder,
   serverCardResponder,
 } from '../discovery-response';
+import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
+export type { McpRegistryAuthHandlerOptions };
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions` of `withClerkMcpAuth`, all optional, plus
@@ -37,6 +39,9 @@ export type ProtectedResourceMetadataOptions =
 
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
+
+// The keys of `withClerkMcpAuth`'s options besides the shared `mcpAuth` ones
+const nextOptionKeys: ReadonlySet<string> = new Set(['onAuthFailure']);
 
 /**
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
@@ -62,8 +67,7 @@ export function protectedResourceMetadataHandler(
       'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route, instead of passing protectedResourceMetadataHandler itself',
     );
   }
-  // `onAuthFailure` is the one key of `withClerkMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
-  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure']));
+  assertProtectedResourceMetadataOptions(options, nextOptionKeys);
 
   return (req: Request): Response => {
     const answer = protectedResourceMetadataAnswer(options, {
@@ -149,13 +153,15 @@ export function serverCardHandler(options: ServerCardHandlerOptions): (req: Requ
  * request: to answer on several origins with their own cards, create one handler for each and pick it by origin.
  * Importing it adds no route.
  *
- * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
- * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a 405 with
- * `Cache-Control: no-store`. Export it for each method, as for `serverCardHandler`, from the `ard.json` route, and
- * re-export that route's methods from the `ai-catalog.json` route, so both paths get the same body and headers.
+ * Any origin can read the catalog, served as `application/json` at a path ending in `/.well-known/ard.json`, the media
+ * type the ARD publishing guide serves it with, and as `application/ai-catalog+json` at any other path. GET and HEAD
+ * get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for
+ * `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a
+ * 405 with `Cache-Control: no-store`. Export it for each method, as for `serverCardHandler`, from the `ard.json` route,
+ * and re-export that route's methods from the `ai-catalog.json` route, so both paths get the same body and `ETag`.
  * @see https://github.com/Agent-Card/ai-catalog
  * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+ * @see https://agenticresourcediscovery.org/how_to_publish/
  * @param options - See `AICatalogHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have. Exporting
  * `aiCatalogHandler` itself, without calling it, throws a `Clerk error:` on the first request.
@@ -191,6 +197,44 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions): (req: Reques
   return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
 }
 
+/**
+ * A Next.js route handler that serves the official MCP Registry's HTTP domain proof, the `v=MCPv1; k=ed25519; p=<key>`
+ * record `mcp-publisher login http --domain example.com` has the registry fetch from `/.well-known/mcp-registry-auth`
+ * on the domain, to grant its `com.example/*` namespace. It validates the key when it is created, so a malformed key
+ * fails at startup instead of at login, and it needs no Clerk keys or MCP SDK.
+ *
+ * GET and HEAD get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, so a removed key is
+ * not served from a cache, and never a redirect, which the registry does not follow. Any other method gets a 405
+ * allowing GET and HEAD. Serve it on the domain itself, at a public address, without a WAF challenge in front.
+ * Next.js only calls the handler for the methods the route exports and answers the others itself, so export it for
+ * each.
+ * @see https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/authentication.mdx#http-authentication
+ * @param options - See `McpRegistryAuthHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` for a key that is not a raw 32-byte Ed25519 key in padded base64.
+ * Exporting `mcpRegistryAuthHandler` itself, without calling it, throws a `Clerk error:` on the first request.
+ * @example
+ * ```ts
+ * // app/.well-known/mcp-registry-auth/route.ts
+ * const handler = mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! });
+ *
+ * export {
+ *   handler as GET,
+ *   handler as HEAD,
+ *   handler as OPTIONS,
+ *   handler as POST,
+ *   handler as PUT,
+ *   handler as PATCH,
+ *   handler as DELETE,
+ * };
+ * ```
+ */
+export function mcpRegistryAuthHandler(
+  options: McpRegistryAuthHandlerOptions,
+): (req: Request) => Response {
+  assertDiscoveryHandlerCalled('mcpRegistryAuthHandler', options);
+  return discoveryHandler(mcpRegistryAuthResponder('mcpRegistryAuthHandler', options));
+}
+
 // Exported uncalled as a method, the factory is called with the request, which would otherwise fail on a missing option
 function assertDiscoveryHandlerCalled(caller: string, options: unknown) {
   if (options instanceof Request) {
@@ -207,6 +251,7 @@ function discoveryHandler(respond: (request: DiscoveryRequest) => DiscoveryAnswe
     const answer = respond({
       method: req.method,
       url: req.url,
+      path: new URL(req.url).pathname,
       ifMatch: req.headers.get('if-match'),
       ifNoneMatch: req.headers.get('if-none-match'),
     });
@@ -291,7 +336,7 @@ export function withClerkMcpAuth(
     options,
     `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
-  assertMcpAuthOptions('withClerkMcpAuth', options, new Set(['onAuthFailure']));
+  assertMcpAuthOptions('withClerkMcpAuth', options, nextOptionKeys);
 
   const authenticate = createBearerAuth(
     'withClerkMcpAuth from @clerk/mcp-tools/next',

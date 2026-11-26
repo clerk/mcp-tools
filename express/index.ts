@@ -25,6 +25,7 @@ import {
   aiCatalogResponder,
   serverCardResponder,
 } from '../discovery-response';
+import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 declare global {
@@ -42,6 +43,7 @@ declare global {
 export * from '../server';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
+export type { McpRegistryAuthHandlerOptions };
 
 /**
  * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
@@ -306,13 +308,15 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  * request: to answer on several origins with their own cards, create one handler for each and pick it by origin. Mount
  * it at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
  *
- * Any origin can read the catalog, served as `application/ai-catalog+json`. GET and HEAD get it with a weak `ETag` and
- * `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for `0`), and a matching
- * `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight and another method a 405 with
- * `Cache-Control: no-store`. The request's URL is never read, so a request without a `Host` header still gets the
- * catalog, and both paths get the same body and headers.
+ * Any origin can read the catalog, served as `application/json` at a path ending in `/.well-known/ard.json`, the media
+ * type the ARD publishing guide serves it with, and as `application/ai-catalog+json` at any other path. GET and HEAD
+ * get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for
+ * `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a
+ * 405 with `Cache-Control: no-store`. Only the request's path is read, so a request without a `Host` header still gets
+ * the catalog, and both paths get the same body and `ETag`.
  * @see https://github.com/Agent-Card/ai-catalog
  * @see https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
+ * @see https://agenticresourcediscovery.org/how_to_publish/
  * @param options - See `AICatalogHandlerOptions`
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
  * @example
@@ -335,6 +339,30 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions) {
   return discoveryHandler(aiCatalogResponder('aiCatalogHandler', options));
 }
 
+/**
+ * An Express handler that serves the official MCP Registry's HTTP domain proof, the `v=MCPv1; k=ed25519; p=<key>`
+ * record `mcp-publisher login http --domain example.com` has the registry fetch from `/.well-known/mcp-registry-auth`
+ * on the domain, to grant its `com.example/*` namespace. It validates the key when it is created, so a malformed key
+ * fails at startup instead of at login, and it needs no Clerk keys or MCP SDK.
+ *
+ * GET and HEAD get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, so a removed key is
+ * not served from a cache, and never a redirect, which the registry does not follow. Any other method gets a 405
+ * allowing GET and HEAD. Serve it on the domain itself, at a public address, without a WAF challenge in front.
+ * @see https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/authentication.mdx#http-authentication
+ * @param options - See `McpRegistryAuthHandlerOptions`
+ * @returns The handler. It throws a `Clerk error:` for a key that is not a raw 32-byte Ed25519 key in padded base64.
+ * @example
+ * ```ts
+ * app.all(
+ *   "/.well-known/mcp-registry-auth",
+ *   mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! }),
+ * );
+ * ```
+ */
+export function mcpRegistryAuthHandler(options: McpRegistryAuthHandlerOptions) {
+  return discoveryHandler(mcpRegistryAuthResponder('mcpRegistryAuthHandler', options));
+}
+
 function discoveryHandler(
   respond: (request: DiscoveryRequest) => DiscoveryAnswer,
   dependsOnRequestOrigin = false,
@@ -343,6 +371,7 @@ function discoveryHandler(
     const { status, headers, body } = respond({
       method: req.method,
       url: getRequestUrl(req),
+      path: `${req.baseUrl}${req.path}`,
       // Node joins repeated If-Match and If-None-Match headers with commas
       ifMatch: req.get('if-match'),
       ifNoneMatch: req.get('if-none-match'),

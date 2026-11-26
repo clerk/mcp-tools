@@ -1,6 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
+import { isAppView, noteViewsChecked } from './app-view-registry';
 import { copyClerkVerification } from './clerk-auth-info';
 import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
@@ -81,9 +82,9 @@ type DiscoveryOptions =
       /**
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
-       * a tool in `tools`, a `resources/read` that `resources` opens, or a `prompts/get` that `prompts` opens.
-       * Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
-       * it reaches something protected. A request with a token is verified as usual.
+       * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
+       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
+       * when it reaches something protected. A request with a token is verified as usual.
        */
       publicAccess?: PublicAccess | undefined;
     }
@@ -104,9 +105,9 @@ type DiscoveryOptions =
       /**
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
-       * a tool in `tools`, a `resources/read` that `resources` opens, or a `prompts/get` that `prompts` opens.
-       * Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
-       * it reaches something protected. A request with a token is verified as usual.
+       * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
+       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
+       * when it reaches something protected. A request with a token is verified as usual.
        */
       publicAccess?: (PublicAccess & { methods?: undefined }) | undefined;
     }
@@ -117,8 +118,8 @@ type DiscoveryOptions =
       discoverable?: boolean | undefined;
       /**
        * Without `discoverable`, no client without a token can connect, so `publicAccess` can name calls only when
-       * `discoverable` is `true` or left out. Empty placeholders, `tools: []` and `resources` or `prompts` as `[]`
-       * or `false`, name nothing and are accepted.
+       * `discoverable` is `true` or left out. Empty placeholders, `tools: []`, `resources` or `prompts` as `[]`
+       * or `false`, and `views: false`, name nothing and are accepted.
        */
       publicAccess?:
         | {
@@ -126,6 +127,7 @@ type DiscoveryOptions =
             tools?: readonly [] | undefined;
             resources?: readonly [] | false | undefined;
             prompts?: readonly [] | false | undefined;
+            views?: false | undefined;
           }
         | undefined;
     };
@@ -231,6 +233,7 @@ const publicAccessKeys: ReadonlySet<string> = new Set<keyof PublicAccess>([
   'tools',
   'resources',
   'prompts',
+  'views',
 ]);
 
 // The methods that run something, and how `publicAccess` opens each. They are not valid in `methods`, so that
@@ -252,8 +255,8 @@ export const PUBLIC_BODY_LIMIT = 1024 * 1024;
 
 /**
  * Throws a `Clerk error:` message unless `publicAccess` is `undefined` or a valid `PublicAccess`: an object with
- * only its four keys, `methods` a list of `McpPublicMethod`s, `tools` a list of tool names, and
- * `resources` and `prompts` each a boolean or a list of resource URIs or prompt names. A mistake here would
+ * only its five keys, `methods` a list of `McpPublicMethod`s, `tools` a list of tool names, `resources` and
+ * `prompts` each a boolean or a list of resource URIs or prompt names, and `views` a boolean. A mistake here would
  * otherwise only show as requests answered with a 401.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param publicAccess - The option's value, unchecked
@@ -272,7 +275,7 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
     );
   }
 
-  const { methods, tools, resources, prompts } = publicAccess as Record<
+  const { methods, tools, resources, prompts, views } = publicAccess as Record<
     keyof PublicAccess,
     unknown
   >;
@@ -300,6 +303,9 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
       `Clerk error: ${caller} publicAccess.tools must be a list of tool names, such as ['search_docs']`,
     );
   }
+  if (views !== undefined && typeof views !== 'boolean') {
+    throw new Error(`Clerk error: ${caller} publicAccess.views must be true or false`);
+  }
   for (const [key, value, example] of [
     ['resources', resources, "resource URIs, such as ['docs://index']"],
     ['prompts', prompts, "prompt names, such as ['summarize']"],
@@ -316,7 +322,7 @@ export function assertPublicAccess(caller: string, publicAccess: unknown) {
  * Throws a `Clerk error:` message unless `discoverable` is `undefined`, `true`, or `false`, it is not set next to
  * a `publicAccess.methods` list, and `publicAccess` names calls only when a client without a token can connect:
  * when `discoverable` is not `false`, or a `methods` list includes `initialize` or `server/discover`. Empty
- * placeholders, `tools: []`, `resources: false`, and `prompts: false`, name nothing.
+ * placeholders, `tools: []`, `resources: false`, `prompts: false`, and `views: false`, name nothing.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param discoverable - The option's value, unchecked
  * @param publicAccess - The `publicAccess` option, already checked
@@ -341,7 +347,7 @@ function assertDiscoverable(
         ? 'discoverable'
         : undefined;
   if (needs === undefined) return;
-  for (const key of ['tools', 'resources', 'prompts'] as const) {
+  for (const key of ['tools', 'resources', 'prompts', 'views'] as const) {
     if (opensSome(publicAccess?.[key])) {
       throw new Error(
         `Clerk error: ${caller} publicAccess.${key} needs ${needs}, so clients can connect without a token`,
@@ -358,7 +364,7 @@ function opensSome(option: boolean | readonly string[] | undefined): boolean {
 /**
  * What a request without a token may do under `discoverable` and `publicAccess`: `undefined` when it may do
  * nothing. A `publicAccess.methods` list opens exactly the methods it names. Otherwise `discoverable`, true by
- * default, opens every `McpPublicMethod`.
+ * default, opens every `McpPublicMethod` and, unless `views` is `false`, the views `mcpAppViewResource` built.
  * @param options - The entry point's options, already checked
  * @returns The `PublicAccess` the request rules apply
  */
@@ -368,7 +374,7 @@ function effectivePublicAccess({
 }: Pick<BaseAuthOptions, 'discoverable' | 'publicAccess'>): PublicAccess | undefined {
   if (publicAccess?.methods !== undefined) return publicAccess;
   if (discoverable === false) return undefined;
-  return { ...publicAccess, methods: allPublicMethods };
+  return { ...publicAccess, views: publicAccess?.views ?? true, methods: allPublicMethods };
 }
 
 function isNameList(value: unknown): value is string[] {
@@ -379,6 +385,12 @@ function isNameList(value: unknown): value is string[] {
 function opensNamed(option: boolean | readonly string[] | undefined, value: unknown): boolean {
   if (option === true) return true;
   return typeof value === 'string' && Array.isArray(option) && option.includes(value);
+}
+
+// Whether a read of, or a subscription to, the resource at `uri` is open: `resources` opens it, or it is the exact
+// URI of a view `mcpAppViewResource` built and `views` is on
+function opensResource(publicAccess: PublicAccess, uri: unknown): boolean {
+  return opensNamed(publicAccess.resources, uri) || (publicAccess.views === true && isAppView(uri));
 }
 
 function opensMethod({ methods }: PublicAccess, method: McpPublicMethod): boolean {
@@ -410,7 +422,7 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
       return typeof name === 'string' && (publicAccess.tools ?? []).includes(name);
     }
     case 'resources/read':
-      return opensNamed(publicAccess.resources, param('uri'));
+      return opensResource(publicAccess, param('uri'));
     case 'prompts/get':
       return opensNamed(publicAccess.prompts, param('name'));
     // The client sends this right after `initialize` succeeds, so it is part of that handshake
@@ -431,7 +443,7 @@ function isPublicMessage(publicAccess: PublicAccess, message: unknown): boolean 
       const uris = (notifications as { resourceSubscriptions?: unknown }).resourceSubscriptions;
       return (
         uris === undefined ||
-        (Array.isArray(uris) && uris.every((uri) => opensNamed(publicAccess.resources, uri)))
+        (Array.isArray(uris) && uris.every((uri) => opensResource(publicAccess, uri)))
       );
     }
     default:
@@ -1077,6 +1089,7 @@ export function bearerAuthenticator({
     body,
     verifyToken,
   }: BearerRequest): Promise<BearerResult> => {
+    if (publicAccess?.views === true) noteViewsChecked();
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
     // error, or derive a challenge for `http://undefined`
     if (requestUrl === undefined) {

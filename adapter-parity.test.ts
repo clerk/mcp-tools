@@ -1361,6 +1361,7 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     ['tools', { tools: ['search_docs'] }],
     ['resources', { resources: true }],
     ['prompts', { prompts: ['summarize'] }],
+    ['views', { views: true }],
   ])(
     'rejects publicAccess.%s with a methods list that opens neither handshake at setup',
     (key, calls) => {
@@ -1393,6 +1394,7 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
     ['resources', { resources: ['docs://index'] }],
     ['prompts', { prompts: true }],
     ['prompts', { prompts: ['summarize'] }],
+    ['views', { views: true }],
   ])('rejects publicAccess.%s with discoverable: false at setup', (key, publicAccess) => {
     expect(() => mount({ verifyToken, discoverable: false, publicAccess })).toThrow(
       `Clerk error: ${caller} publicAccess.${key} needs discoverable, so clients can connect without a token`,
@@ -1402,7 +1404,7 @@ describe.each(authApps)('%s discoverable', (name, mount) => {
   test('accepts empty placeholders with discoverable: false, which open nothing', async () => {
     const options = {
       discoverable: false,
-      publicAccess: { tools: [], resources: false, prompts: false },
+      publicAccess: { tools: [], resources: false, prompts: false, views: false },
     };
     expect(() => mount({ verifyToken, ...options })).not.toThrow();
     expect((await send(options, { body: rpc('initialize') })).status).toBe(401);
@@ -1716,6 +1718,9 @@ const CATALOG_PATH = '/.well-known/ai-catalog.json';
 // `ai-catalog.json` as an equivalent entry source. https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms
 const ARD_PATH = '/.well-known/ard.json';
 const CATALOG_TYPE = 'application/ai-catalog+json';
+// The ARD publishing guide, "Step 2: Host the manifest", serves ard.json as application/json.
+// https://agenticresourcediscovery.org/how_to_publish/
+const ARD_TYPE = 'application/json';
 const card = {
   name: 'com.example/weather',
   version: '1.2.0',
@@ -1804,6 +1809,17 @@ const discoveryApps = discoveryAdapters.flatMap(([name, mount]) => [
       handler: 'aiCatalogHandler',
       path: CATALOG_PATH,
       type: CATALOG_TYPE,
+      options: { entries: catalogEntries },
+      served: { specVersion: '0.9' },
+    },
+  ] as const,
+  [
+    `${name} aiCatalogHandler at ard.json`,
+    (options: Options) => mount('aiCatalogHandler', ARD_PATH, options),
+    {
+      handler: 'aiCatalogHandler',
+      path: ARD_PATH,
+      type: ARD_TYPE,
       options: { entries: catalogEntries },
       served: { specVersion: '0.9' },
     },
@@ -2370,6 +2386,7 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     const res = await serve(mount(options), CATALOG_PATH);
 
     expect(res.status).toBe(200);
+    // Each entry's trust manifest defaults from its urn:air publisher (ARD v0.91 4.5.1)
     expect(res.body).toEqual({
       specVersion: '0.9',
       entries: [
@@ -2396,7 +2413,9 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
   });
 
-  // The same handler on both paths, as each adapter's README mounts it, answers both from the one catalog it built
+  // The same handler on both paths answers both from the one catalog it built, with the media type each path is served
+  // with: application/json at ard.json, as the ARD publishing guide shows, and the AI Catalog's own type at
+  // ai-catalog.json
   test('serves byte-identical catalogs with the same caching headers at ard.json and ai-catalog.json', async () => {
     const app = mount(options);
     const fetchRaw = async (path: string, headers: Record<string, string> = {}) => {
@@ -2414,13 +2433,9 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     expect(catalog.status).toBe(200);
     expect(ard.text).toBe(catalog.text);
     expect(linkedCardCatalogErrors(JSON.parse(ard.text))).toEqual([]);
-    for (const name of [
-      'content-type',
-      'cache-control',
-      'etag',
-      'vary',
-      ...Object.keys(discoveryCors),
-    ]) {
+    expect(ard.headers.get('content-type')).toBe(ARD_TYPE);
+    expect(catalog.headers.get('content-type')).toBe(CATALOG_TYPE);
+    for (const name of ['cache-control', 'etag', 'vary', ...Object.keys(discoveryCors)]) {
       expect(ard.headers.get(name), name).toBe(catalog.headers.get(name));
     }
 
@@ -2433,14 +2448,16 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
   });
 
   // ARD v0.91, 4.5 Trust and Verification: the trust manifest is served as given, next to an entry without one
-  test('serves an entry trustManifest as given', async () => {
+  test('serves an entry trustManifest as given, and none when it is left out', async () => {
     const trustManifest = {
       identity: 'https://example.com',
       identityType: 'https',
       attestations: [{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }],
     };
     const res = await serve(
-      mount({ entries: [{ ...catalogEntries[0]!, trustManifest }, catalogEntries[1]!] }),
+      mount({
+        entries: [{ ...catalogEntries[0]!, trustManifest }, catalogEntries[1]!],
+      }),
       CATALOG_PATH,
     );
 
@@ -2521,7 +2538,12 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
 
     expect(res.body).toEqual({
       specVersion: '0.9',
-      entries: [{ ...catalogEntries[0], type: CARD_TYPE }],
+      entries: [
+        {
+          ...catalogEntries[0],
+          type: CARD_TYPE,
+        },
+      ],
     });
   });
 
@@ -2538,9 +2560,14 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
       'aiCatalogHandler cannot set specVersion',
     ],
     [
-      'a host',
+      'a host without an identifier',
       { ...options, host: { displayName: 'Example' } },
-      'aiCatalogHandler does not take host',
+      'aiCatalogHandler host must be',
+    ],
+    [
+      'a blank representative query',
+      { entries: [{ ...catalogEntries[0], representativeQueries: [''] }] },
+      'aiCatalogHandler entries[0].representativeQueries must be',
     ],
     [
       'a resourceUrl',
@@ -2577,5 +2604,180 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     ],
   ])('throws at setup for %s', (_case, invalid, message) => {
     expect(() => mount(invalid as never)).toThrow(`Clerk error: ${message}`);
+  });
+});
+
+// ARD discovery: aiCatalogHandler picks the media type from the request's path, application/json for a path ending in
+// /.well-known/ard.json, which the ARD publishing guide shows, and the AI Catalog's own type for any other path
+describe.each(discoveryAdapters)('%s aiCatalogHandler media type', (_name, mount) => {
+  const options = { entries: catalogEntries };
+
+  test.each([
+    [ARD_PATH, ARD_TYPE],
+    ['/tenant/.well-known/ard.json', ARD_TYPE],
+    [CATALOG_PATH, CATALOG_TYPE],
+    ['/catalog.json', CATALOG_TYPE],
+    ['/.well-known/ard.json.bak', CATALOG_TYPE],
+    // Express routes both of these to a handler mounted at ard.json, and Next.js with trailingSlash: true the first
+    ['/.well-known/ard.json/', ARD_TYPE],
+    ['/.well-known/ARD.json', ARD_TYPE],
+  ])('serves %s as %s', async (path, type) => {
+    const res = await serve(mount('aiCatalogHandler', path, options), path);
+
+    expect(res.status).toBe(200);
+    expect(linkedCardCatalogErrors(res.body)).toEqual([]);
+    expectHeaders(res.headers, {
+      'content-type': type,
+      'cache-control': 'public, max-age=3600',
+      ...discoveryCors,
+    });
+  });
+});
+
+describe.each(discoveryAdapters)('%s aiCatalogHandler ARD terms', (_name, mount) => {
+  // The ARD v0.91 discovery terms and the AI Catalog Level 2 host, served only when set
+  test('serves representativeQueries and host only where they were set', async () => {
+    const representativeQueries = ['What is the weather in Paris?', 'Will it rain tomorrow?'];
+    const host = { displayName: 'Example Inc.', identifier: 'example.com' };
+    const app = mount('aiCatalogHandler', ARD_PATH, {
+      host,
+      entries: [{ ...catalogEntries[0]!, representativeQueries }, catalogEntries[1]!],
+    });
+    const res = await serve(app, ARD_PATH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      specVersion: '0.9',
+      host,
+      entries: [
+        {
+          identifier: 'urn:air:example.com:weather:mcp',
+          displayName: 'Weather',
+          type: CARD_TYPE,
+          url: 'https://public.example.com/mcp/server-card',
+          representativeQueries,
+        },
+        {
+          identifier: 'urn:air:saas.example:search:mcp',
+          displayName: 'Search',
+          type: CARD_TYPE,
+          url: 'https://cards.saas.example/search/server-card',
+        },
+      ],
+    });
+    expect(linkedCardCatalogErrors(res.body)).toEqual([]);
+  });
+});
+
+// The MCP Registry HTTP domain proof: https://github.com/modelcontextprotocol/registry/blob/9b093df6b9f196875626dac9f6060b03c732e799/docs/modelcontextprotocol-io/authentication.mdx#http-authentication
+// The registry fetches it with GET, follows no redirect, and reads the MCPv1 record from a text body.
+const REGISTRY_AUTH_PATH = '/.well-known/mcp-registry-auth';
+// The RFC 8032 section 7.1 TEST 1 public key, base64-encoded
+const REGISTRY_PUBLIC_KEY = '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=';
+
+const registryAuthApps: [Adapter, (options: unknown) => App][] = [
+  [
+    'express',
+    (options) => {
+      const app = express();
+      app.all(REGISTRY_AUTH_PATH, expressAdapter.mcpRegistryAuthHandler(options as never));
+      return app;
+    },
+  ],
+  [
+    'hono',
+    (options) => {
+      const app = new Hono();
+      app.all(REGISTRY_AUTH_PATH, honoAdapter.mcpRegistryAuthHandler(options as never));
+      return app.fetch;
+    },
+  ],
+  ['next', (options) => nextAdapter.mcpRegistryAuthHandler(options as never)],
+];
+
+/** Sends one request and reads the body as text, since the proof is not JSON. */
+async function serveText(app: App, method: string) {
+  const answer = async (res: Response) => ({
+    status: res.status,
+    headers: res.headers,
+    text: await res.text(),
+  });
+  if (!('listen' in app)) {
+    return answer(await app(new Request(`${origin}${REGISTRY_AUTH_PATH}`, { method })));
+  }
+  return withListening(app, async (local) =>
+    answer(
+      await fetch(`${local}${REGISTRY_AUTH_PATH}`, {
+        method,
+        redirect: 'manual',
+        headers: { accept: 'text/plain', 'user-agent': 'mcp-registry/1.0' },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ),
+  );
+}
+
+describe.each(registryAuthApps)('%s mcpRegistryAuthHandler', (_name, mount) => {
+  test('serves the MCPv1 proof record as text, directly, and never stored', async () => {
+    const res = await serveText(mount({ publicKey: REGISTRY_PUBLIC_KEY }), 'GET');
+
+    expect(res.status).toBe(200);
+    expect(res.text).toBe(`v=MCPv1; k=ed25519; p=${REGISTRY_PUBLIC_KEY}`);
+    expectHeaders(res.headers, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      location: null,
+      etag: null,
+    });
+  });
+
+  test('answers HEAD with the GET headers and no body', async () => {
+    const res = await serveText(mount({ publicKey: REGISTRY_PUBLIC_KEY }), 'HEAD');
+
+    expect(res.status).toBe(200);
+    expect(res.text).toBe('');
+    expectHeaders(res.headers, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-length': String(`v=MCPv1; k=ed25519; p=${REGISTRY_PUBLIC_KEY}`.length),
+    });
+  });
+
+  test.each(['OPTIONS', 'POST', 'PUT', 'DELETE', 'PATCH'])(
+    'answers %s with a JSON 405 allowing only GET and HEAD',
+    async (method) => {
+      const res = await serveText(mount({ publicKey: REGISTRY_PUBLIC_KEY }), method);
+
+      expect(res.status).toBe(405);
+      expect(JSON.parse(res.text)).toEqual({ error: 'method_not_allowed' });
+      expectHeaders(res.headers, {
+        allow: 'GET, HEAD',
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+    },
+  );
+
+  // The keys clerk/clerk's route rejects: the registry needs the raw 32-byte key in standard, padded base64
+  test.each([
+    ['an SPKI DER key', 'MCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo='],
+    ['a 31-byte key', '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHUQ=='],
+    ['an unpadded key', '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo'],
+    ['a URL-safe key', '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo='],
+    ['an empty key', ''],
+    ['no key', undefined],
+  ])('throws at creation for %s', (_label, publicKey) => {
+    expect(() => mount({ publicKey })).toThrow(
+      'Clerk error: mcpRegistryAuthHandler publicKey must be a raw 32-byte Ed25519 public key',
+    );
+  });
+
+  test('throws at creation for an unknown option or no options object', () => {
+    expect(() => mount({ publicKey: REGISTRY_PUBLIC_KEY, algorithm: 'ecdsap384' })).toThrow(
+      'Clerk error: mcpRegistryAuthHandler does not take algorithm',
+    );
+    expect(() => mount(REGISTRY_PUBLIC_KEY)).toThrow(
+      'Clerk error: mcpRegistryAuthHandler takes an options object with publicKey',
+    );
   });
 });

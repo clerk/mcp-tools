@@ -146,15 +146,15 @@ For framework-specific implementations, see:
 
 An [AI Catalog](https://github.com/Agent-Card/ai-catalog) is a public JSON document, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`, that lists a domain's AI artifacts so a client can find its MCP servers and then read their Server Cards. It is a separate specification from Server Cards, and this API follows the [v0.9 release candidate pinned at commit `19208af` (#141)](https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md), not the final v1.0 specification. The RC uses `specVersion: "0.9"`; `"1.0"` is reserved for the final specification. Its version-handling guidance says consumers SHOULD reject a catalog with a higher major version they do not support; this generator always emits `0.9`. Publishing a catalog does not mean every MCP host will find or use it.
 
-`generateAICatalog` builds a minimal (Level 1) catalog that links to Server Cards, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
+`generateAICatalog` builds a catalog that links to Server Cards, minimal (Level 1), or Discoverable (Level 2) with a `host`, and each adapter's `aiCatalogHandler` serves one (Hono, Express, and Next.js):
 
 - **Required:** `entries`, a list of `{ identifier, displayName, url }`, one for each Server Card. It may be empty, as the specification allows, for a domain that lists no servers yet.
-- **Optional:** an entry's `trustManifest`, `{ identity, identityType?, attestations? }`, the [ARD](https://agenticresourcediscovery.org/spec) v0.91 trust manifest. Omitted, the entry carries no trust data.
-- **Generated:** `specVersion: "0.9"`, the v0.9 release candidate version, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, `host` information, versions, the AI Catalog's own contributor-keyed `trustManifests`, signatures, and extensions are not supported.
+- **Optional:** an entry's `representativeQueries`, the sample requests the server answers, and its `trustManifest`, `{ identity, identityType?, attestations? }`, the [ARD](https://agenticresourcediscovery.org/spec) v0.91 trust manifest; and the catalog's `host`, `{ displayName, identifier, documentationUrl? }`. See [ARD discovery](#ard-discovery).
+- **Generated:** `specVersion: "0.9"`, the v0.9 release candidate version, and each entry's `type`, `application/mcp-server-card+json`. Setting either, or any other key, throws a `Clerk error:`. Inline documents (`data`), other artifact types, a host's `logoUrl`, versions, the AI Catalog's own contributor-keyed `trustManifests`, signatures, and extensions are not supported.
 
 An entry's `identifier` is a logical name for the server that stays the same wherever its card is hosted, such as `urn:air:example.com:weather`. The v0.9 RC recommends `urn:air:{publisher}:{name}[:{kind}]`: the publisher's domain, a stable name, and an optional single-segment kind suffix. ARD v0.91 reads the same form as `urn:air:<publisher>:[<namespace>:]<agent-name>`, taking a third segment as the agent name, so the examples here use only a publisher and a name, which both read the same way. This naming structure is a recommendation, not a required scheme; the builder preserves logical identifiers and does not validate the `urn:air` grammar. An identifier is not a retrieval URL, so an `http` or `https` URL is rejected, and each identifier may appear only once. `displayName` is the server's human-readable name, such as `Weather`. The v0.9 RC makes it optional, but [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec) (ARD) v0.91 requires it on every entry, so it is required here; it must have more than whitespace and no control characters. A client shows it instead of the card's `title`, so keep the two the same. `url` is the exact URL the card is retrieved from, and may be on another host. It must be `https`; plain `http` is accepted only on `localhost`, `127.0.0.1`, or `[::1]`, for local development. Nothing is fetched to build or serve the catalog: the URL is not derived from a route or checked against the card it points to.
 
-An entry's `trustManifest` says who stands behind the server. It follows the `TrustManifest` of the ARD v0.91 entry schema, which requires only `identity`: an absolute URI for the publisher, such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID, but not an `http`, `data`, `file`, or `javascript` URI, nor an `https` URL with credentials. ARD requires its trust domain to match the publisher in the entry's `identifier` (`example.com` in `urn:air:example.com:weather`); the builder does not check that, as it does not parse identifiers. `identityType` is an open hint for the identity's format, such as `https`, `did`, or `spiffe`. `attestations` lists claims, each `{ type, uri, digest?, mediaType? }` whose `uri` is an `https` URL or an inline `data:` URI, as the AI Catalog v0.9 RC's Attestation Object allows, such as `{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }`; list only claims you can back. The manifest is validated when the catalog is created and emitted as given. Its trust schema, provenance, and signature members are not supported, and the AI Catalog v0.9 RC ignores this ARD member, defining a separate `trustManifests` list instead.
+An entry's `trustManifest` says who stands behind the server. It follows the `TrustManifest` of the ARD v0.91 entry schema, which requires only `identity`: an absolute URI for the publisher, such as `https://example.com`, `did:web:example.com`, or a SPIFFE ID, but not an `http`, `data`, `file`, or `javascript` URI, nor an `https` URL with credentials. ARD requires its trust domain to match the publisher in the entry's `identifier` (`example.com` in `urn:air:example.com:weather`). Left out, the entry has none; a manifest you set is not checked against the identifier. `identityType` is an open hint for the identity's format, such as `https`, `did`, or `spiffe`. `attestations` lists claims, each `{ type, uri, digest?, mediaType? }` whose `uri` is an `https` URL or an inline `data:` URI, as the AI Catalog v0.9 RC's Attestation Object allows, such as `{ type: 'SOC2-Type2', uri: 'https://example.com/compliance/soc2.pdf' }`; list only claims you can back. A manifest you set is validated when the catalog is created and emitted as given. Its trust schema, provenance, and signature members are not supported, and the AI Catalog v0.9 RC ignores this ARD member, defining a separate `trustManifests` list instead.
 
 ```ts
 import { generateAICatalog } from '@clerk/mcp-tools/server';
@@ -176,15 +176,80 @@ const catalog = generateAICatalog({
 });
 ```
 
-Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler doesn't read the path, so it needs no configuration for either, and both answer with the same bytes and headers, `ETag` included.
+Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler reads the path only to pick the `Content-Type`, so it needs no configuration for either, and both answer with the same bytes and `ETag`.
 
-The handlers answer as the Server Card handlers do, with the catalog's media type, `application/ai-catalog+json`: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
+The handler answers as the Server Card handlers do, with `application/json` at a path ending in `/.well-known/ard.json` (in any case, with or without a trailing slash), the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves `ard.json` with, and with the AI Catalog's own `application/ai-catalog+json` at any other path: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
 
 For framework-specific implementations, see:
 
 - [Express.js implementation](./express/README.md#aicataloghandler)
 - [Hono implementation](./hono/README.md#aicataloghandleroptions)
 - [Next.js implementation](./next/README.md#aicataloghandleroptions)
+
+#### ARD discovery
+
+[Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 is how agents and registries find a domain's catalog: a consumer fetches `/.well-known/ard.json` on the host it is resolving and follows a `rel="ard"` link ([section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms)). To be found:
+
+- **Serve the catalog on the host that is scanned.** A scanner or consumer resolving `mcp.example.com` reads `https://mcp.example.com/.well-known/ard.json`. A catalog on the apex `example.com` does not cover an MCP endpoint on a subdomain, so mount `aiCatalogHandler` on the host that serves the endpoint, and on the apex too if that is also scanned.
+- **Serve `ard.json` as `application/json`.** `aiCatalogHandler` does at any path ending in `/.well-known/ard.json`, as the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) ("Step 2: Host the manifest") shows, and keeps the AI Catalog's `application/ai-catalog+json` for `ai-catalog.json`.
+- **Link the catalog from the homepage.** ARD consumers MUST honour a `rel="ard"` link ([section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms)). The spec shows it as an HTML `<link rel="ard" href="/.well-known/ard.json">`; the same link as an HTTP header is `Link: </.well-known/ard.json>; rel="ard"` ([RFC 8288 section 3](https://www.rfc-editor.org/rfc/rfc8288#section-3)). For a catalog elsewhere, put its path or URL between the `<` and `>`.
+- **Add `representativeQueries` to each entry.** ARD's [4.2 Entry Terms](https://agenticresourcediscovery.org/spec/#42-entry-terms) says an entry SHOULD carry 2 to 5 sample natural-language requests, which a registry indexes for search; without them ARD's conformance tester warns. From 1 to 20 are accepted, each with more than whitespace and no control characters; ARD's count is advice, so it is not enforced.
+- **Name the operator with `host`.** `{ displayName, identifier, documentationUrl? }`, the AI Catalog's Host Info, makes the catalog Level 2 (Discoverable). `identifier` is a domain name or a DID without whitespace, and `documentationUrl` an https URL without credentials. Other Host Info members, such as `logoUrl`, are not supported.
+- **Bind each entry to its publisher.** ARD's [4.5.1 Publisher Authority Binding](https://agenticresourcediscovery.org/spec/#451-publisher-authority-binding) requires the entry's `trustManifest.identity` to align with the publisher domain of its `urn:air:<publisher>:…` identifier. For `urn:air:example.com:weather`, set `trustManifest: { identity: 'https://example.com', identityType: 'https' }`. It is emitted as given, and an entry without one publishes none.
+
+```ts
+import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
+
+const catalogHandler = aiCatalogHandler({
+  host: { displayName: 'Example Inc.', identifier: 'example.com' },
+  entries: [
+    {
+      identifier: 'urn:air:example.com:weather',
+      displayName: 'Weather',
+      url: 'https://mcp.example.com/mcp/server-card',
+      representativeQueries: ['What is the weather in Paris?', 'Will it rain tomorrow in Berlin?'],
+      trustManifest: { identity: 'https://example.com', identityType: 'https' },
+    },
+  ],
+});
+
+app.all('/.well-known/ard.json', catalogHandler);
+app.all('/.well-known/ai-catalog.json', catalogHandler);
+app.get('/', (c) => {
+  c.header('Link', '</.well-known/ard.json>; rel="ard"');
+  return c.text('OK');
+});
+```
+
+#### Publish to the MCP Registry
+
+The [official MCP Registry](https://registry.modelcontextprotocol.io) lists servers by a reverse-DNS `name` whose namespace you prove you own. Publishing is an authenticated step you run yourself with [`mcp-publisher`](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/quickstart.mdx); this package builds the file you publish and serves the domain proof, and makes no request to the registry.
+
+- **Namespace.** A server named `com.example/weather` needs proof that you control `example.com`. HTTP proof grants exactly `com.example/*`; DNS proof also grants subdomain namespaces such as `com.example.mcp/*`. GitHub login grants only `io.github.<user-or-org>/*`. Use the card's `name` as the registry name, so the two never differ.
+- **HTTP or DNS proof.** Both sign with an Ed25519 key pair you generate once. DNS proof is a `v=MCPv1; k=ed25519; p=<key>` TXT record on the apex of the domain. HTTP proof is the same record served at `https://example.com/.well-known/mcp-registry-auth`, which each adapter's `mcpRegistryAuthHandler` serves: `text/plain`, `GET` and `HEAD` only, never a redirect (the registry follows none), and never cached, so a key you remove stops working. `publicKey` is the raw 32-byte public key in standard, padded base64, 44 characters: 43 base64 characters and one trailing `=`, as `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints; any other form throws a `Clerk error:` when the handler is created. The registry fetches it from Google Cloud, so keep WAF and bot challenges off that path. Only the public key goes on the server; keep the private key with whoever publishes.
+- **Log in and publish.** `mcp-publisher login http --domain example.com`, with the private key's hex in `MCP_PRIVATE_KEY` (or `--private-key-file`), then `mcp-publisher publish` in the directory with `server.json`.
+- **Versions are immutable.** A published version can't be changed or republished, so bump `version` for every publish and update the card at the same time.
+- **Subdomain endpoints.** The registry does not check that a remote URL is on the proven domain, so `com.example/weather` may list `https://mcp.example.com/mcp`; prove the apex, `example.com`.
+
+`generateRegistryServerJson` takes the same options as `serverCardHandler`, ignoring `maxAge`, and builds a `server.json` for the registry's [2025-12-11 server schema](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json), with one streamable HTTP remote for each `resourceUrl`. On top of the card's rules it enforces the registry's: https `icons` (at most 255 characters, `image/png`, `image/jpeg`, `image/jpg`, `image/svg+xml`, or `image/webp`, sizes `WxH` or `any`), an https `websiteUrl`, https remotes off `localhost`, a `github` or `gitlab` `repository`, and a version that is neither `latest` nor what the registry reads as a range, which includes a dotted version with an `x`, `X`, or `*` anywhere, such as `1.0.0-next`. The card's `_meta` is left out, since the registry drops every `_meta` key but its own. Keep the options in one module and write the file with a short script, so the card and the registry entry come from the same source:
+
+```ts
+// scripts/write-server-json.ts, run before `mcp-publisher publish`
+import { writeFileSync } from 'node:fs';
+import { generateRegistryServerJson } from '@clerk/mcp-tools/server';
+import { serverCard } from '../src/server-card-options';
+
+writeFileSync(
+  'server.json',
+  `${JSON.stringify(generateRegistryServerJson(serverCard), null, 2)}\n`,
+);
+```
+
+For framework-specific implementations, see:
+
+- [Express.js implementation](./express/README.md#mcpregistryauthhandler)
+- [Hono implementation](./hono/README.md#mcpregistryauthhandleroptions)
+- [Next.js implementation](./next/README.md#mcpregistryauthhandleroptions)
 
 #### Creating an MCP endpoint
 
@@ -232,7 +297,7 @@ server.registerTool(
 
 #### Public access: sign in only when needed
 
-A server is discoverable by default: anyone can connect and list its tools, resources, resource templates, and prompts, with their descriptions and schemas, the protected ones included, without a token. Calling them still needs sign-in, so an MCP client is asked to sign in the first time it reaches something protected. `publicAccess` names the calls that are open without a token as well, so a client can also call the tools you list without an account. Claude calls this "Sign in when needed" for a custom connector.
+A server is discoverable by default: anyone can connect and list its tools, resources, resource templates, and prompts, with their descriptions and schemas, the protected ones included, without a token. Calling them still needs sign-in, except reading an [MCP App view](#serving-mcp-app-views) built with `mcpAppViewResource`, so an MCP client is asked to sign in the first time it reaches something protected. `publicAccess` names the calls that are open without a token as well, so a client can also call the tools you list without an account. Claude calls this "Sign in when needed" for a custom connector.
 
 ```ts
 // Or from @clerk/mcp-tools/hono or @clerk/mcp-tools/next
@@ -252,12 +317,13 @@ Pass the same object to `mcpAuth` (`withClerkMcpAuth` in Next.js) and to `protec
 
 The example uses `challengeScopes`, not `requiredScopes`. `requiredScopes` makes every request with a token need those scopes, and answers a token without them with a `403`. `challengeScopes` only adds them to the challenges, the `401` and a `403` that `requiredScopes` causes, so the first sign-in asks for them without making them a condition of every request. Use `requiredScopes` for scopes no request may go without.
 
-- `discoverable`: `true`, the default, opens `initialize` with the `notifications/initialized` notification that follows it, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` without a token, so a client on any protocol revision can connect and list. It never opens a call. `false` requires a token for every MCP request, as version 0.9 did. It is only about these MCP methods: protected resource metadata and the [Server Card](#discovery-server-cards) are public either way, and it has nothing to do with OAuth token introspection (RFC 7662).
+- `discoverable`: `true`, the default, opens `initialize` with the `notifications/initialized` notification that follows it, `server/discover`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` without a token, so a client on any protocol revision can connect and list. It opens no call, besides the views `views` below opens. `false` requires a token for every MCP request, as version 0.9 did. It is only about these MCP methods: protected resource metadata and the [Server Card](#discovery-server-cards) are public either way, and it has nothing to do with OAuth token introspection (RFC 7662).
 - `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
 - `resources`: the resources a `resources/read` may ask for without a token. `true` opens every resource, and a list opens only the URIs it names. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
 - `prompts`: the prompts a `prompts/get` may ask for without a token. `true` opens every prompt, and a list opens only the prompts it names.
+- `views`: whether a `resources/read` or `subscriptions/listen` without a token may ask for an MCP App view, exactly the `ui://` URIs `mcpAppViewResource` built views for in this process, and no other resource. It defaults to `true` when `discoverable` decides access, and to `false` next to a `methods` list; `views: false` closes them. See [Serving MCP App views](#serving-mcp-app-views).
 
-A call is open only when `publicAccess` names it. `tools`, `resources`, and `prompts` need `discoverable`: with `discoverable: false` no client without a token can connect to reach them, so naming any of them is a TypeScript error and throws a `Clerk error:` at startup. Empty placeholders, `tools: []`, and `[]` or `false` for `resources` and `prompts`, name nothing and are accepted, by TypeScript and at startup.
+A call is open only when `publicAccess` names it, or it reads a view `views` opens. `tools`, `resources`, `prompts`, and `views: true` need `discoverable`: with `discoverable: false` no client without a token can connect to reach them, so naming any of them is a TypeScript error and throws a `Clerk error:` at startup. Empty placeholders, `tools: []`, `[]` or `false` for `resources` and `prompts`, and `views: false`, name nothing and are accepted, by TypeScript and at startup.
 
 - A request that carries a token is verified as usual, even for an open method, and a token that does not verify gets its `401`.
 - A `POST` without a token passes only when every JSON-RPC message in its body is open. A batch with one protected message, a body that is not sent as `application/json`, and a body over 1 MiB all get the `401`. In Express, `express.json()` reads the body before `mcpAuth`, so its `limit` (100kb by default) is what bounds how much a request without a token makes the server buffer: set `express.json({ limit })` to the size you accept from anonymous clients. A body over 1 MiB still gets the `401`. For a chunked body Express measures the parsed body serialized again, which differs from the bytes sent by whitespace and number formatting, so only `express.json()`'s `limit` bounds the original bytes. Unless `discoverable` is `false`, Express's `mcpAuth` needs `express.json()` mounted before it. Without it, a JSON request without a token gets the `401` challenge, and `mcpAuth` logs a one-time `Clerk warning:` naming `express.json()`. In Hono, a middleware before `mcpAuth` that reads `c.req.raw` itself has the same effect.
@@ -289,9 +355,9 @@ const options = {
 - The list replaces the default: only the methods it names are open, and an empty list opens none of them.
 - It replaces `discoverable`, so setting both, even `discoverable: true`, is a TypeScript error and throws a `Clerk error:` at startup. `methods: true` and `methods: false` throw too, with a hint to use `discoverable`.
 - A client connects through `initialize` before protocol revision 2026-07-28 and through `server/discover` from it, so a list that names one of them and not the other leaves some clients unable to connect. `initialize` covers the `notifications/initialized` notification that follows it.
-- `tools`, `resources`, and `prompts` need the list to include `initialize` or `server/discover`: without either, no client without a token can connect to reach the calls they name, so naming any of them throws a `Clerk error:` at startup.
+- `tools`, `resources`, `prompts`, and `views: true` need the list to include `initialize` or `server/discover`: without either, no client without a token can connect to reach the calls they name, so naming any of them throws a `Clerk error:` at startup.
 - The `GET` `405` and the `subscriptions/listen` rule follow the handshake: a `GET` without a token gets the `405` only when the list includes `initialize` or `server/discover`, and the `401` otherwise.
-- It never opens a call: `tools/call`, `resources/read`, or `prompts/get` in the list throws a `Clerk error:` at startup.
+- It never opens a call: `tools/call`, `resources/read`, or `prompts/get` in the list throws a `Clerk error:` at startup. Set `views: true` next to a list to open the views.
 
 ##### What a client without a token can reach
 
@@ -299,14 +365,14 @@ Some clients never sign in: a scanner that grades MCP servers for agent readines
 
 ora treats a server that is closed to them in one of two ways, depending on what it scans. At ora's scoring revision 17, a direct scan of the MCP URL fails with a `422` `MCP_AUTH_REQUIRED` and gives no score. A scan of the domain marks the MCP checks that need a session as not applicable and still scores the domain, as clerk.com's stored report shows.
 
-| Options                                                | A client without a token can                                                                                                                                                | It cannot                                                                                                                           |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `{ discoverable: false }`                              | Do nothing: every request gets the `401`                                                                                                                                    | Connect. A direct ora scan of the MCP URL gets no score; a domain scan scores the domain without the MCP checks that need a session |
-| Left out, the default                                  | Connect, read the server's name, version, capabilities, and instructions, and list every tool, resource, resource template, and prompt, with their descriptions and schemas | Call a tool, read a resource, or get a prompt                                                                                       |
-| `{ publicAccess: { tools: [...], resources: [...] } }` | Also call the tools and read the resources you name                                                                                                                         | Reach anything you did not name                                                                                                     |
+| Options                                                | A client without a token can                                                                                                                                                                                                         | It cannot                                                                                                                           |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `{ discoverable: false }`                              | Do nothing: every request gets the `401`                                                                                                                                                                                             | Connect. A direct ora scan of the MCP URL gets no score; a domain scan scores the domain without the MCP checks that need a session |
+| Left out, the default                                  | Connect, read the server's name, version, capabilities, and instructions, list every tool, resource, resource template, and prompt, with their descriptions and schemas, and read every MCP App view built with `mcpAppViewResource` | Call a tool, read any other resource, or get a prompt                                                                               |
+| `{ publicAccess: { tools: [...], resources: [...] } }` | Also call the tools and read the resources you name                                                                                                                                                                                  | Reach anything you did not name                                                                                                     |
 
-- The default is the setting that lets a scanner assess your tools: their names, descriptions, input and output schemas, and annotations all come from `tools/list`. It shows them to everyone else too, so set `discoverable: false` when your list of tools is a secret. It never opens a call.
-- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name. To let it read every listed resource, name each URI that `resources/list` returns. `resources: true` opens those too, but also every URI a resource template matches, so set it only when every resource and template is safe to read without auth info. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
+- The default is the setting that lets a scanner assess your tools: their names, descriptions, input and output schemas, and annotations all come from `tools/list`. It shows them to everyone else too, so set `discoverable: false` when your list of tools is a secret. The only calls it opens are the reads of the views `mcpAppViewResource` built, which `views: false` closes.
+- A scanner that checks whether the listed resources can be read, or how a tool call is answered, reaches only what `tools` and `resources` name, and the `ui://` views `views` opens. To let it read every listed resource, name each URI that `resources/list` returns. `resources: true` opens those too, but also every URI a resource template matches, so set it only when every resource and template is safe to read without auth info. Name a tool only when it is safe to run for anyone, since it runs without auth info. A call to any other tool, including a name your server does not have, still gets the `401`.
 - These settings decide what a scanner can reach, not the score it gives. How a scanner counts a `401` for something you kept protected is its own rule.
 
 ##### Showing different tools to different callers
@@ -383,6 +449,48 @@ Don't create the handler inside the route handler. MCP SDK 2.x counts the `subsc
 - A call to a tool that is not registered for the caller is answered as a call to an unknown tool: "Tool delete_project not found", a JSON-RPC error on MCP SDK 2.x and an error result on 1.x, with no challenge. A request without a token gets the `401` before that, unless the tool is in `publicAccess.tools`.
 - A client can keep the list it got before the user signed in. Nothing tells it that the caller changed: the server never sends `notifications/tools/list_changed` for a sign-in, so the client sees the new list when it next sends `tools/list`.
 - On protocol revision 2026-07-28 a list result says who may cache it. MCP SDK 2.x sends `cacheScope: "private"` unless you set `cacheHints`, which is right for a list that differs by caller: "`"private"` is appropriate for `resources/read` results that depend on the authenticated user, or for filtered list results that vary per user" ([Caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#choosing-a-cache-scope)). Don't set `tools/list` to `"public"` on such a server.
+
+#### Serving MCP App views
+
+An [MCP App](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx) (MCP Apps 2026-01-26) view is a `ui://` resource that holds an HTML template, which an MCP Apps host renders a tool's result in. `mcpAppViewResource` from `@clerk/mcp-tools/tools` builds one as arguments for `server.registerResource(...)`, on MCP SDK 1.x or 2.x, without `@modelcontextprotocol/ext-apps`:
+
+```ts
+import { mcpAppViewResource } from '@clerk/mcp-tools/tools';
+
+// Built once at module scope, so publicAccess.views knows the URI before the first request
+const userCard = mcpAppViewResource({
+  name: 'user_card',
+  uri: 'ui://my-server/user-card.html',
+  title: 'User card',
+  html: userCardHtml, // starts with <!DOCTYPE html> and declares <meta name="color-scheme" content="light dark">
+  csp: { resourceDomains: ['https://img.clerk.com'] },
+  prefersBorder: true,
+});
+
+function createServer() {
+  const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+  server.registerResource(...userCard);
+  return server;
+}
+```
+
+A tool shows its result in the view by naming its URI in `_meta.ui.resourceUri`.
+
+- A `resources/read` returns the HTML as `text/html;profile=mcp-app`, the media type MCP Apps requires, with `csp` and `prefersBorder` in the content item's `_meta.ui`, where hosts and scanners read them. The view is listed with the same media type.
+- `csp` takes the origins the view may reach as `connectDomains` (`fetch`, XHR, WebSocket), `resourceDomains` (images, scripts, stylesheets, fonts, media), `frameDomains` (nested iframes), and `baseUriDomains` (`<base>`). Each entry is an origin, such as `https://cdn.example.com` or `https://*.example.com`: `*`, a bare scheme such as `https:`, and a URL with a path throw a `Clerk error:`. A list left out or empty allows no origin, and when every list is empty the CSP is left out, which MCP Apps treats the same.
+- The URI must use the `ui://` scheme, and the other options are checked as well: a mistake throws a `Clerk error:` when the view is built.
+- A template that does not start with `<!DOCTYPE html>`, declares no `color-scheme`, or contains a Clerk secret key (`sk_live_` or `sk_test_`) logs a one-time `Clerk warning:` for its URI, without throwing. Anyone who can read the view sees its HTML, so a key in it is leaked: remove it and rotate the key.
+
+Views built with `mcpAppViewResource` are public by default, unless a `publicAccess.methods` list is set. MCP Apps lets a host prefetch and cache a view before any tool runs, often before the user has signed in, and scanners read views to check them. So `mcpAuth` and `withClerkMcpAuth` open the `resources/read` of every view `mcpAppViewResource` built, and a `subscriptions/listen` (protocol revision 2026-07-28) to them, without a token, as [`publicAccess.views`](#public-access) describes. Only those exact URIs open: a `ui://` resource registered another way, or one a resource template matches, keeps the rule other resources have, and a request with a token is verified as usual. `mcpAppViewResource` records the URI when it builds the view, so build each view at module scope, as above, rather than inside the server factory, which first runs after a request has been checked; a view first built after `mcpAuth` or `withClerkMcpAuth` checked any request in the process logs a one-time `Clerk warning:`, so a module scope view in a lazily loaded route, such as a second Next.js MCP route, can log it too. The record is for the whole process: every server in it opens the views any of them built, a URI stays open after its resource is removed, and test files that share `globalThis` (`vitest --no-isolate`, `bun test`) see the views earlier files built, so give each test's view its own URI.
+
+A view template is shared HTML: the user's data reaches it only through the result of an authenticated tool call, which the host passes to the view. If your server renders per-user data into a template instead, set `publicAccess.views: false`, and every view needs a token. To open single views again, list their URIs in `publicAccess.resources`:
+
+```ts
+const options = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  publicAccess: { views: false, resources: ['ui://my-server/public-help.html'] },
+} satisfies McpAuthOptions;
+```
 
 #### Collecting feedback from agents
 
@@ -1049,9 +1157,14 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Returns:** `ServerCard`
 
 - `generateAICatalog`
-  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs): `specVersion` `0.9` and one entry for each `{ identifier, displayName, url, trustManifest? }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
+  - **Description:** Generates an [AI Catalog](https://github.com/Agent-Card/ai-catalog) that links to MCP Server Cards, the supported subset described in [Discovery: AI Catalogs](#discovery-ai-catalogs): `specVersion` `0.9`, an optional `host`, and one entry for each `{ identifier, displayName, url, representativeQueries?, trustManifest? }`, with the generated type `application/mcp-server-card+json`. It throws a `Clerk error:` for an unknown key, a `host` without a `displayName` and `identifier` or with a `documentationUrl` that isn't https, `representativeQueries` that isn't a list of 1 to 20 non-blank texts, a `specVersion` or entry `type` of its own, an identifier that is empty, a URL, or listed twice, an empty `displayName`, a `url` that isn't an absolute https URL (http only on `localhost`, `127.0.0.1`, or `[::1]`), or a `trustManifest` without an absolute URI `identity` (`http`, `data`, `file`, and `javascript` are rejected, as are credentials in an `https` identity) or with an attestation the ARD shape doesn't allow, including a `uri` that isn't `https` or `data:`. It fetches nothing. The catalog is frozen, and later changes to the options don't reach it.
   - **Params:** `AICatalogOptions`
   - **Returns:** `AICatalog`
+
+- `generateRegistryServerJson`
+  - **Description:** Generates the `server.json` for the official MCP Registry from the Server Card options, as described in [Publish to the MCP Registry](#publish-to-the-mcp-registry): the card's `name`, `version`, `description`, `title`, `websiteUrl`, `icons`, and `repository`, the 2025-12-11 `$schema`, and one streamable HTTP remote for each `resourceUrl`. It throws a `Clerk error:` for anything the card can't have and for what the registry rejects: a non-https icon, website, or remote, a `localhost` remote, an icon media type or size the schema doesn't list, a repository off GitHub and GitLab, or the version `latest`. It fetches nothing. The document is frozen.
+  - **Params:** the `serverCardHandler` options; `maxAge` is checked, then ignored
+  - **Returns:** `RegistryServerJson`
 
 - `McpAuthError`
   - **Description:** The error `mcpAuth` and `withClerkMcpAuth` raise when the token could not be verified at all, for example when `verifyToken` throws or Clerk is unreachable, so the client keeps its token instead of getting a challenge. `reason` is `'verification_failed'`, `cause` is the verifier's error, and `status` is the `429` or `5xx` status Clerk's Backend API answered with, or `undefined`. Express and Next.js answer `{"error":"server_error"}` with that status, or `500`, and log the error with `console.error`. Hono throws it to `app.onError`, whose default handler answers and logs the same way.
@@ -1090,6 +1203,7 @@ Needs `zod` in your app's own dependencies; see [Collecting feedback from agents
 - `ERROR_CODE_META_KEY`: `'clerk.com/error_code'`, the `_meta` key that holds the code of every error result both tools return.
 - `ERROR_CAUSE_META_KEY`: `'clerk.com/error_cause'`, the `_meta` key that holds the caller's code behind an error result. `create_browser_session` sets it when its `organizationId` function throws an `OrganizationLookupError`.
 - `OrganizationLookupError`: thrown from a `createBrowserSessionTool` `organizationId` function to give the agent a specific text and a code for an `organization_lookup_failed` result. See [Signed-in browser links for agents](#signed-in-browser-links-for-agents).
+- `mcpAppViewResource(options)`: an MCP App view, as arguments for `server.registerResource(...)`. `McpAppViewResourceOptions` types its options. See [Serving MCP App views](#serving-mcp-app-views).
 
 #### Framework-Specific Utilities
 

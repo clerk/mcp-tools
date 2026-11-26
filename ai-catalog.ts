@@ -33,8 +33,16 @@ export type AICatalogEntryOptions = {
    */
   url: string;
   /**
-   * Who stands behind the server, as an Agentic Resource Discovery (ARD) v0.91 trust manifest. Omit it to publish no
-   * trust data. It is emitted as given.
+   * Sample natural-language requests the server answers, such as `What is the weather in Paris?`, from which an
+   * Agentic Resource Discovery (ARD) v0.91 registry builds its search index ("4.2 Entry Terms"). ARD recommends 2 to 5;
+   * from 1 to 20 are accepted, each with more than whitespace and no control characters. Omit it to publish none.
+   */
+  representativeQueries?: readonly string[] | undefined;
+  /**
+   * Who stands behind the server, as an Agentic Resource Discovery (ARD) v0.91 trust manifest, emitted as given. ARD's
+   * "4.5.1 Publisher Authority Binding" requires its identity to align with the publisher domain of a
+   * `urn:air:<domain>:<name>` identifier, such as `{ identity: 'https://example.com' }` for
+   * `urn:air:example.com:weather`. Omit it to publish no trust data.
    */
   trustManifest?: AICatalogTrustManifest | undefined;
   /**
@@ -95,9 +103,33 @@ export type AICatalogAttestation = {
 };
 
 /**
+ * Who operates an AI Catalog, the AI Catalog v0.9 RC's Host Info. A catalog with one is a Level 2 (Discoverable)
+ * catalog. Its `logoUrl` and other members are not supported.
+ */
+export type AICatalogHost = {
+  /**
+   * The operator's human-readable name, such as `Example Inc.`.
+   */
+  readonly displayName: string;
+  /**
+   * A verifiable identifier for the operator, such as a domain name (`example.com`) or a DID (`did:web:example.com`),
+   * without whitespace or control characters.
+   */
+  readonly identifier: string;
+  /**
+   * An https URL of the operator's documentation, without credentials.
+   */
+  readonly documentationUrl?: string | undefined;
+};
+
+/**
  * Input to `generateAICatalog`: the Server Cards it links to.
  */
 export type AICatalogOptions = {
+  /**
+   * Who operates the catalog. Omit it to publish none.
+   */
+  host?: AICatalogHost | undefined;
   /**
    * One entry for each Server Card, in the order the catalog lists them. It may be empty, as the specification allows.
    */
@@ -116,6 +148,7 @@ export type AICatalogEntry = {
   readonly displayName: string;
   readonly type: typeof SERVER_CARD_TYPE;
   readonly url: string;
+  readonly representativeQueries?: readonly string[];
   readonly trustManifest?: AICatalogTrustManifest;
 };
 
@@ -124,16 +157,17 @@ export type AICatalogEntry = {
  */
 export type AICatalog = {
   readonly specVersion: '0.9';
+  readonly host?: AICatalogHost;
   readonly entries: readonly AICatalogEntry[];
 };
 
 /**
  * Generates an AI Catalog that links to MCP Server Cards, the document a client reads at its canonical path
  * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
- * supports a subset of the AI Catalog specification: a minimal (Level 1) catalog whose entries each link one Server
- * Card by a logical identifier, a display name, and the card's URL, with an optional ARD trust manifest. Inline
- * documents, other artifact types, host information, AI Catalog `trustManifests`, signatures, and extensions are not
- * supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
+ * supports a subset of the AI Catalog specification: a catalog, Level 1 or, with a `host`, Level 2, whose entries each
+ * link one Server Card by a logical identifier, a display name, and the card's URL, with optional ARD representative
+ * queries and trust manifest. Inline documents, other artifact types, AI Catalog `trustManifests`, signatures, and
+ * extensions are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
  * @see https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md
  * @param options - See `AICatalogOptions`
  * @returns The catalog, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the catalog
@@ -155,9 +189,18 @@ export function generateAICatalog(options: AICatalogOptions): AICatalog {
   return buildAICatalog('generateAICatalog', options);
 }
 
-const catalogKeys = new Set(['entries']);
+const catalogKeys = new Set(['host', 'entries']);
 const generatedCatalogKeys = new Set(['specVersion']);
-const entryKeys = new Set(['identifier', 'displayName', 'url', 'trustManifest']);
+const entryKeys = new Set([
+  'identifier',
+  'displayName',
+  'url',
+  'representativeQueries',
+  'trustManifest',
+]);
+const hostKeys = new Set(['displayName', 'identifier', 'documentationUrl']);
+// ARD recommends 2 to 5; more than this many is not a sample
+const MAX_REPRESENTATIVE_QUERIES = 20;
 const generatedEntryKeys = new Set(['type']);
 
 /**
@@ -176,13 +219,20 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   }
   assertKnownKeys(fail, options, {
     allowed: catalogKeys,
-    generated: generatedCatalogKeys,
-    generatedMessage: () =>
-      "cannot set specVersion: the catalog's specVersion and each entry's type are generated",
+    generated: {
+      keys: generatedCatalogKeys,
+      message: () =>
+        "cannot set specVersion: the catalog's specVersion and each entry's type are generated",
+    },
     unknownMessage: (key) =>
-      `does not take ${key}. An AI Catalog here supports only entries, each linking one Server Card by identifier, displayName, and url`,
+      `does not take ${key}. An AI Catalog here supports only host and entries, each entry linking one Server Card by identifier, displayName, and url`,
   });
-  const { entries } = options;
+  const { host, entries } = options;
+  if (host !== undefined && !isHost(host)) {
+    fail(
+      "host must be { displayName, identifier, documentationUrl? }, such as { displayName: 'Example Inc.', identifier: 'example.com', documentationUrl: 'https://docs.example.com' }, with a displayName of more than whitespace, an identifier without whitespace, and an https documentationUrl without credentials. logoUrl and other members are not supported",
+    );
+  }
   // The pinned specification: "This array MAY be empty."
   if (!Array.isArray(entries) || !Array.from(entries).every(isPlainObject)) {
     return fail(
@@ -195,13 +245,15 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     const at = `entries[${index}]`;
     assertKnownKeys(fail, entry, {
       allowed: entryKeys,
-      generated: generatedEntryKeys,
-      generatedMessage: () =>
-        `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
+      generated: {
+        keys: generatedEntryKeys,
+        message: () =>
+          `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
+      },
       unknownMessage: (key) =>
-        `${at} does not take ${key}. An entry supports identifier, displayName, url, and trustManifest only: inline documents, other artifact types, versions, AI Catalog trustManifests, and extensions are not supported`,
+        `${at} does not take ${key}. An entry supports identifier, displayName, url, representativeQueries, and trustManifest only: inline documents, other artifact types, versions, AI Catalog trustManifests, and extensions are not supported`,
     });
-    const { identifier, displayName, url, trustManifest } = entry;
+    const { identifier, displayName, url, representativeQueries, trustManifest } = entry;
     if (!isIdentifier(identifier)) {
       fail(
         `${at}.identifier must be a logical identifier without spaces, such as 'urn:air:example.com:weather'. It names the server and is not the URL of its card`,
@@ -223,6 +275,11 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
         `${at}.url must be an absolute https URL, or http on localhost, 127.0.0.1, or [::1] for local development, without credentials, a fragment, or spaces`,
       );
     }
+    if (representativeQueries !== undefined && !isRepresentativeQueries(representativeQueries)) {
+      fail(
+        `${at}.representativeQueries must be a list of 1 to ${MAX_REPRESENTATIVE_QUERIES} sample requests, each with more than whitespace and no control characters, such as ['What is the weather in Paris?', 'Will it rain tomorrow?']. ARD recommends 2 to 5`,
+      );
+    }
     if (trustManifest !== undefined && !isTrustManifest(trustManifest)) {
       fail(
         `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity that isn't http, data, file, or javascript, nor an https URL with credentials, such as 'https://example.com' or 'did:web:example.com', and attestations a list of { type, uri, digest?, mediaType? } with an https URL or data: URI uri. Trust schemas, provenance, and signatures are not supported`,
@@ -233,13 +290,55 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       displayName: displayName as string,
       type: SERVER_CARD_TYPE,
       url: url as string,
+      ...(representativeQueries === undefined
+        ? {}
+        : { representativeQueries: [...(representativeQueries as string[])] }),
       ...(trustManifest === undefined
         ? {}
         : { trustManifest: JSON.parse(JSON.stringify(trustManifest)) as AICatalogTrustManifest }),
     };
   });
 
-  return deepFreeze({ specVersion: '0.9', entries: linked });
+  return deepFreeze({
+    specVersion: '0.9',
+    ...(host === undefined ? {} : { host: copyHost(host as AICatalogHost) }),
+    entries: linked,
+  });
+}
+
+// The pinned AI Catalog RC, Host Info: a displayName, with identifier required here so the operator is named, and a
+// documentationUrl over https
+function isHost(value: unknown): boolean {
+  if (!isPlainObject(value) || !Object.keys(value).every((key) => hostKeys.has(key))) return false;
+  const { displayName, identifier, documentationUrl } = value;
+  return (
+    isDisplayName(displayName) &&
+    isToken(identifier) &&
+    (documentationUrl === undefined ||
+      (isHttpUrl(documentationUrl) && new URL(documentationUrl).protocol === 'https:'))
+  );
+}
+
+// A copy of a checked host with only its set members
+function copyHost({ displayName, identifier, documentationUrl }: AICatalogHost): AICatalogHost {
+  return {
+    displayName,
+    identifier,
+    ...(documentationUrl === undefined ? {} : { documentationUrl }),
+  };
+}
+
+// ARD v0.91 EntryFields: an array of strings. Each is shown and indexed, so it is text with something in it, and the
+// list is dense: a hole would serialize as null
+function isRepresentativeQueries(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const queries = Array.from(value as unknown[]);
+  return (
+    queries.length > 0 &&
+    queries.length <= MAX_REPRESENTATIVE_QUERIES &&
+    queries.every((_, index) => index in value) &&
+    queries.every(isDisplayName)
+  );
 }
 
 // The exact raw hosts a card URL may use plain http on, without WHATWG hostname normalization.

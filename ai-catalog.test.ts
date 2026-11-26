@@ -160,7 +160,7 @@ describe('generateAICatalog contract', () => {
   });
 
   // ARD v0.91, 4.5 Trust and Verification: an entry may carry a trustManifest, which needs only an identity
-  test('carries an entry trustManifest as given, and none when it is omitted', () => {
+  test('carries an entry trustManifest as given, and none when it is left out', () => {
     expect(
       generateAICatalog({
         entries: [
@@ -427,7 +427,7 @@ describe('generateAICatalog options', () => {
       'entries must be a list of',
     ],
     ['a specVersion of its own', { entries, specVersion: '0.9' }, 'cannot set specVersion'],
-    ['a host', { entries, host: { displayName: 'Example' } }, 'does not take host'],
+    ['a host without an identifier', { entries, host: { displayName: 'Example' } }, 'host must be'],
     ['extensions', { entries, extensions: {} }, 'does not take extensions'],
     ['a signature', { entries, signature: 'x' }, 'does not take signature'],
     [
@@ -645,6 +645,171 @@ describe('generateAICatalog options', () => {
   ])('rejects a non-exact URL %s', (url) => {
     expect(() => generateAICatalog({ entries: [{ ...weather, url }] })).toThrow(
       'Clerk error: generateAICatalog entries[0].url must be',
+    );
+  });
+});
+
+// ARD v0.91, 4.2 Entry Terms: representativeQueries SHOULD carry 2-5 sample queries; the AI Catalog v0.9 RC, Host Info
+// and Level 2 (Discoverable Catalog): a host identifies the catalog's operator
+describe('generateAICatalog representativeQueries and host', () => {
+  const representativeQueries = ['What is the weather in Paris?', 'Will it rain tomorrow?'];
+  const host = {
+    displayName: 'Example Inc.',
+    identifier: 'did:web:example.com',
+    documentationUrl: 'https://docs.example.com/agents',
+  };
+
+  test('emits them where they were set, in document order, and passes the contract', () => {
+    const catalog = generateAICatalog({
+      host,
+      entries: [
+        { ...weather, representativeQueries },
+        { ...weather, identifier: 'urn:air:x' },
+      ],
+    });
+    const serialized = JSON.parse(JSON.stringify(catalog));
+
+    expect(Object.keys(serialized)).toEqual(['specVersion', 'host', 'entries']);
+    expect(serialized.host).toEqual(host);
+    expect(serialized.entries[0]).toMatchObject({
+      ...weather,
+      type: CARD_TYPE,
+      representativeQueries,
+    });
+    expect(Object.keys(serialized.entries[0]).slice(0, 5)).toEqual([
+      'identifier',
+      'displayName',
+      'type',
+      'url',
+      'representativeQueries',
+    ]);
+    expect(serialized.entries[1]).not.toHaveProperty('representativeQueries');
+    expect(aiCatalogErrors(serialized)).toEqual([]);
+    expect(linkedCardCatalogErrors(serialized)).toEqual([]);
+  });
+
+  test('emits a host without a documentationUrl, and neither member when they are omitted', () => {
+    const withHost = generateAICatalog({
+      host: { displayName: 'Example', identifier: 'example.com' },
+      entries: [],
+    });
+    expect(withHost).toEqual({
+      specVersion: '0.9',
+      host: { displayName: 'Example', identifier: 'example.com' },
+      entries: [],
+    });
+    expect(linkedCardCatalogErrors(JSON.parse(JSON.stringify(withHost)))).toEqual([]);
+    expect(generateAICatalog({ entries: [] })).toEqual({ specVersion: '0.9', entries: [] });
+  });
+
+  // ARD v0.91 4.2 and D.2 enforce no count, but an empty list carries nothing, so it is rejected rather than emitted
+  test('rejects an empty list of representativeQueries', () => {
+    expect(() =>
+      generateAICatalog({ entries: [{ ...weather, representativeQueries: [] }] }),
+    ).toThrow(
+      'Clerk error: generateAICatalog entries[0].representativeQueries must be a list of 1 to 20 sample requests',
+    );
+  });
+
+  test('copies them, so changing the options later changes nothing', () => {
+    const queries = [...representativeQueries];
+    const ownHost = { ...host };
+    const catalog = generateAICatalog({
+      host: ownHost,
+      entries: [{ ...weather, representativeQueries: queries }],
+    });
+    queries.push('changed');
+    ownHost.displayName = 'changed';
+
+    expect(catalog.entries[0]?.representativeQueries).toEqual(representativeQueries);
+    expect(catalog.host?.displayName).toBe('Example Inc.');
+    expect(Object.isFrozen(catalog.entries[0]?.representativeQueries)).toBe(true);
+    expect(Object.isFrozen(catalog.host)).toBe(true);
+  });
+
+  test.each([
+    ['not a list', 'What is the weather?'],
+    ['an empty query', ['']],
+    ['a blank query', ['   ']],
+    ['a query with a control character', ['a\x00b']],
+    ['a query that is not text', [42]],
+    ['a sparse list', Object.assign(['a'], { length: 2 })],
+    ['more than 20 queries', Array.from({ length: 21 }, (_, i) => `query ${i}`)],
+  ])('rejects representativeQueries that is %s', (_case, value) => {
+    expect(() =>
+      generateAICatalog({ entries: [{ ...weather, representativeQueries: value as never }] }),
+    ).toThrow('Clerk error: generateAICatalog entries[0].representativeQueries must be');
+  });
+
+  test.each([
+    ['not an object', 'Example'],
+    ['without a displayName', { identifier: 'example.com' }],
+    ['without an identifier', { displayName: 'Example' }],
+    ['with a blank displayName', { displayName: ' ', identifier: 'example.com' }],
+    ['with an identifier holding a space', { displayName: 'Example', identifier: 'example com' }],
+    [
+      'with an http documentationUrl',
+      {
+        displayName: 'Example',
+        identifier: 'example.com',
+        documentationUrl: 'http://docs.example.com',
+      },
+    ],
+    [
+      'with a relative documentationUrl',
+      { displayName: 'Example', identifier: 'example.com', documentationUrl: '/docs' },
+    ],
+    [
+      'with credentials in its documentationUrl',
+      {
+        displayName: 'Example',
+        identifier: 'example.com',
+        documentationUrl: 'https://user:pass@docs.example.com',
+      },
+    ],
+    ['with a logoUrl', { displayName: 'Example', identifier: 'example.com', logoUrl: 'https://x' }],
+  ])('rejects a host %s', (_case, value) => {
+    expect(() => generateAICatalog({ host: value as never, entries: [] })).toThrow(
+      'Clerk error: generateAICatalog host must be',
+    );
+  });
+
+  test('the contract rejects a host without a displayName and queries that are not text', () => {
+    expect(
+      linkedCardCatalogErrors({ specVersion: '0.9', host: { identifier: 'x' }, entries: [] }),
+    ).not.toEqual([]);
+    expect(
+      linkedCardCatalogErrors({
+        specVersion: '0.9',
+        entries: [{ ...weather, type: CARD_TYPE, representativeQueries: [1] }],
+      }),
+    ).not.toEqual([]);
+  });
+});
+
+// ARD v0.91, 4.5.1 Publisher Authority Binding asks the trust manifest to align with the identifier's publisher, but
+// the manifest is a claim the publisher makes, so it is emitted only as given
+describe('generateAICatalog trust manifest', () => {
+  const entry = (rest: object = {}) => ({
+    identifier: 'urn:air:example.com:x',
+    displayName: 'X',
+    url: 'https://example.com/mcp/server-card',
+    ...rest,
+  });
+  const only = (options: object) => generateAICatalog({ entries: [options as never] }).entries[0];
+
+  test('publishes none when it is left out, whatever the identifier', () => {
+    expect(only(entry())).not.toHaveProperty('trustManifest');
+  });
+
+  test('emits an explicit trust manifest as given', () => {
+    const trustManifest = { identity: 'https://example.com', identityType: 'https' };
+    expect(only(entry({ trustManifest }))?.trustManifest).toEqual(trustManifest);
+  });
+
+  test('rejects null, which is not a trust manifest', () => {
+    expect(() => only(entry({ trustManifest: null }))).toThrow(
+      'Clerk error: generateAICatalog entries[0].trustManifest must be',
     );
   });
 });

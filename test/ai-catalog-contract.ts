@@ -34,6 +34,13 @@ export function aiCatalogErrors(document: unknown): string[] {
   ) {
     errors.push('host has no displayName text');
   }
+  // HostInfo: identifier, documentationUrl, and logoUrl are optional text
+  if (isObject(document.host)) {
+    for (const key of ['identifier', 'documentationUrl', 'logoUrl']) {
+      if (document.host[key] !== undefined && !isText(document.host[key]))
+        errors.push(`host.${key} is not text`);
+    }
+  }
   if (document.extensions !== undefined && !isObject(document.extensions)) {
     errors.push('extensions is not a map');
   }
@@ -109,20 +116,53 @@ export function linkedCardCatalogErrors(document: unknown): string[] {
   if (errors.length > 0) return errors;
   const catalog = document as { specVersion: string; entries: Record<string, unknown>[] };
   if (catalog.specVersion !== '0.9') errors.push('specVersion is not 0.9');
-  if (Object.keys(catalog).join() !== 'specVersion,entries') {
-    errors.push(`the catalog has ${Object.keys(catalog).join()}, not just specVersion and entries`);
+  const catalogKeys = Object.keys(catalog).join();
+  if (catalogKeys !== 'specVersion,entries' && catalogKeys !== 'specVersion,host,entries') {
+    errors.push(
+      `the catalog has ${catalogKeys}, not just specVersion, an optional host, and entries`,
+    );
+  }
+  // Level 2 (Discoverable Catalog): a host identifying the operator, here always with an identifier, and a
+  // documentation URL over https when there is one
+  const host = (catalog as { host?: Record<string, unknown> }).host;
+  if (host !== undefined) {
+    const keys = Object.keys(host).join();
+    if (keys !== 'displayName,identifier' && keys !== 'displayName,identifier,documentationUrl')
+      errors.push(
+        `host has ${keys}, not just displayName, identifier, and an optional documentationUrl`,
+      );
+    if (!isText(host.displayName) || (host.displayName as string).trim() === '')
+      errors.push('host.displayName is not a non-empty name');
+    if (!isText(host.identifier) || (host.identifier as string).length === 0)
+      errors.push('host.identifier is not non-empty text');
+    if (
+      host.documentationUrl !== undefined &&
+      !(
+        isExactHttpUrl(host.documentationUrl as string) &&
+        (host.documentationUrl as string).startsWith('https://')
+      )
+    )
+      errors.push('host.documentationUrl is not an https URL');
   }
   catalog.entries.forEach((entry, index) => {
     const at = `entries[${index}]`;
     const keys = Object.keys(entry).join();
-    if (
-      keys !== 'identifier,displayName,type,url' &&
-      keys !== 'identifier,displayName,type,url,trustManifest'
-    ) {
+    if (!/^identifier,displayName,type,url(,representativeQueries)?(,trustManifest)?$/.test(keys)) {
       errors.push(
-        `${at} has ${keys}, not just identifier, displayName, type, url, and an optional trustManifest`,
+        `${at} has ${keys}, not just identifier, displayName, type, url, and optional representativeQueries and trustManifest`,
       );
     }
+    // ARD v0.91 entry schema, EntryFields: representativeQueries is an array of strings
+    if (
+      entry.representativeQueries !== undefined &&
+      !(
+        Array.isArray(entry.representativeQueries) &&
+        Array.from(entry.representativeQueries).every(
+          (query) => isText(query) && (query as string).trim() !== '',
+        )
+      )
+    )
+      errors.push(`${at}.representativeQueries is not a list of non-empty text`);
     if (entry.trustManifest !== undefined)
       errors.push(...trustManifestErrors(entry.trustManifest, at));
     if (!isText(entry.displayName) || (entry.displayName as string).trim() === '')

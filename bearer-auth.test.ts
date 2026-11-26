@@ -1011,6 +1011,9 @@ describe('assertPublicAccess', () => {
     { resources: ['docs://index'], prompts: ['summarize'] },
     { resources: [], prompts: [] },
     { methods: undefined, tools: undefined, resources: undefined, prompts: undefined },
+    { views: true },
+    { views: false, resources: ['ui://docs/viewer.html'] },
+    { views: undefined },
   ])('accepts %j', (publicAccess) => {
     expect(() => assertPublicAccess('mcpAuth', publicAccess)).not.toThrow();
   });
@@ -1021,7 +1024,7 @@ describe('assertPublicAccess', () => {
     [null, 'Clerk error: mcpAuth publicAccess must be an object'],
     [
       { method: true },
-      'Clerk error: mcpAuth publicAccess has no method option. It takes any of methods, tools, resources, prompts',
+      'Clerk error: mcpAuth publicAccess has no method option. It takes any of methods, tools, resources, prompts, views',
     ],
     [
       { methods: true },
@@ -1071,6 +1074,11 @@ describe('assertPublicAccess', () => {
       "Clerk error: mcpAuth publicAccess.prompts must be true, false, or a list of prompt names, such as ['summarize']",
     ],
     [{ prompts: [1] }, 'Clerk error: mcpAuth publicAccess.prompts must be true, false, or a list'],
+    [{ views: 'yes' }, 'Clerk error: mcpAuth publicAccess.views must be true or false'],
+    [
+      { views: ['ui://docs/viewer.html'] },
+      'Clerk error: mcpAuth publicAccess.views must be true or false',
+    ],
   ])('rejects %j', (publicAccess, message) => {
     expect(() => assertPublicAccess('mcpAuth', publicAccess)).toThrow(message);
   });

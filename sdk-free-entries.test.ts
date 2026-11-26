@@ -68,11 +68,13 @@ describe('server entry points', () => {
   // Public discovery needs no schema validator, Clerk package, or MCP SDK: the Server Card and AI Catalog modules
   // import only other package files
   test('the discovery modules import no package at all', () => {
-    const packages = reachableFiles('discovery-response.ts').flatMap((file) =>
-      importedSpecifiers(file)
-        .filter((specifier) => !specifier.startsWith('.'))
-        .map((specifier) => `${relative(file)} imports ${specifier}`),
-    );
+    const packages = ['discovery-response.ts', 'mcp-registry.ts']
+      .flatMap(reachableFiles)
+      .flatMap((file) =>
+        importedSpecifiers(file)
+          .filter((specifier) => !specifier.startsWith('.'))
+          .map((specifier) => `${relative(file)} imports ${specifier}`),
+      );
     expect(packages).toEqual([]);
   });
 
