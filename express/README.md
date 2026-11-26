@@ -231,7 +231,7 @@ app.all('/mcp', clerkInstrumentHandler(createMcpHandler(createServer), { verifyT
 
 Version 0.9.0 took the verifier alone, as `await mcpAuth(verifyToken)`. That form now throws a `Clerk error:` at startup; pass `mcpAuth({ verifyToken, ...options })` instead.
 
-Unknown option keys, such as `requiredScope` instead of `requiredScopes`, throw a `Clerk error:` at setup rather than being ignored. Setting both `clerkClient` and `verifyToken` also throws: choose Clerk verification with `clerkClient` and `resourceUrl`, or your own `verifyToken`. `properties` belongs only to `protectedResourceMetadataHandler`. `onAuthFailure` is accepted by the Next.js adapter and the fetch entry (`@clerk/mcp-tools/fetch`), and is rejected here.
+Unknown option keys, such as `requiredScope` instead of `requiredScopes`, throw a `Clerk error:` at setup rather than being ignored. Setting both `clerkClient` and `verifyToken` also throws: choose Clerk verification with `clerkClient` and `resourceUrl`, or your own `verifyToken`. `properties` belongs only to `protectedResourceMetadataHandler`. `onAuthFailure` belongs to Next.js's `clerkInstrumentHandler` and the fetch entry's `clerkInstrumentHandler` and `createClerkMcpWorker` (`@clerk/mcp-tools/fetch`). Here `clerkInstrumentHandler`, `mcpAuth`, and `protectedResourceMetadataHandler` reject it with a `Clerk error:`; read `res.locals.mcpAuthFailure` instead, as described below.
 
 It will:
 
