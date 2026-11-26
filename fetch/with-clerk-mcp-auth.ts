@@ -2,6 +2,7 @@ import type { AuthInfo } from '../mcp-types';
 import {
   type ClerkEnv,
   type MiddlewareAuthOptions,
+  type ProtectedResourceMetadataOptions,
   assertMcpAuthOptions,
   assertVerifierOrResourceUrl,
   createBearerAuth,
@@ -66,6 +67,7 @@ export type McpAuthOptions<Env = ClerkEnv, Ctx = WorkerExecutionContext> = McpAu
 
 const WELL_KNOWN = '/.well-known/oauth-protected-resource';
 
+const withClerkMcpAuthCaller = 'withClerkMcpAuth from @clerk/mcp-tools/fetch';
 const withClerkMcpAuthCallForm =
   'withClerkMcpAuth(handler, { resourceUrl }), or as withClerkMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
 
@@ -116,28 +118,47 @@ export function withClerkMcpAuth<Env = ClerkEnv, Ctx = WorkerExecutionContext>(
 ): (request: Request, env: Env, ctx: Ctx) => Promise<Response> {
   if (typeof handler !== 'function') {
     throw new Error(
-      `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch takes the handler first. Call it as ${withClerkMcpAuthCallForm}`,
+      `Clerk error: ${withClerkMcpAuthCaller} takes the handler first. Call it as ${withClerkMcpAuthCallForm}`,
     );
   }
+  return fetchMcpAuth(handler, options, withClerkMcpAuthCaller, withClerkMcpAuthCallForm);
+}
+
+/**
+ * `withClerkMcpAuth` without its handler check, with the entry point its messages name: `createClerkMcpWorker` uses
+ * it so a missing key or option names the function the Worker called.
+ * @param caller - The entry point named in the messages, such as `withClerkMcpAuth from @clerk/mcp-tools/fetch`
+ * @param callForm - How to call that entry point, for the messages that say so
+ */
+export function fetchMcpAuth<Env, Ctx>(
+  handler: McpFetchHandler<Env, Ctx>,
+  options: McpAuthOptions<Env, Ctx>,
+  caller: string,
+  callForm: string,
+): (request: Request, env: Env, ctx: Ctx) => Promise<Response> {
   assertVerifierOrResourceUrl(
     options,
-    `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
+    `Clerk error: ${caller} needs a resourceUrl to verify tokens with Clerk. Call it as ${callForm}`,
   );
-  assertMcpAuthOptions('withClerkMcpAuth', options, new Set(['onAuthFailure']));
+  assertMcpAuthOptions(caller, options, new Set(['onAuthFailure']));
 
   const authenticate = createBearerAuth(
-    'withClerkMcpAuth from @clerk/mcp-tools/fetch',
+    caller,
     options,
     // Only the Worker env: Workers have no `process.env` to fall back to, so it is never read
     ({ env }: McpFetchRequest<Env, Ctx>) =>
-      envClerkClient('withClerkMcpAuth', (env ?? {}) as ClerkEnv),
+      envClerkClient(caller, (env ?? {}) as ClerkEnv, 'variable in the Worker env'),
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY in the Worker env',
   );
 
   return async (request, env, ctx) => {
     const { pathname } = new URL(request.url);
     if (pathname === WELL_KNOWN || pathname.startsWith(`${WELL_KNOWN}/`)) {
-      return metadataResponse(options, request, env);
+      return metadataResponse(
+        options,
+        request,
+        (env as ClerkEnv | undefined)?.CLERK_PUBLISHABLE_KEY,
+      );
     }
 
     const result = await authenticate(
@@ -158,6 +179,7 @@ export function withClerkMcpAuth<Env = ClerkEnv, Ctx = WorkerExecutionContext>(
       // The notification must not delay the challenge or turn it into a server error
       if (result.failure) {
         try {
+          // `void` callback positions still accept async functions. Guard accidentally returned promises and thenables
           void Promise.resolve(options.onAuthFailure?.(result.failure, request)).catch(() => {});
         } catch {}
       }
@@ -168,7 +190,14 @@ export function withClerkMcpAuth<Env = ClerkEnv, Ctx = WorkerExecutionContext>(
 }
 
 // The protected resource metadata (RFC 9728 section 3), for the resource the requested well-known path describes
-function metadataResponse(options: McpAuthOptions<never, never>, request: Request, env: unknown) {
+function metadataResponse(
+  options: Pick<
+    ProtectedResourceMetadataOptions,
+    'resourceUrl' | 'requiredScopes' | 'challengeScopes'
+  >,
+  request: Request,
+  publishableKey: string | undefined,
+) {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: metadataCorsHeaders });
   }
@@ -181,7 +210,7 @@ function metadataResponse(options: McpAuthOptions<never, never>, request: Reques
   const { resourceUrl, requiredScopes, challengeScopes } = options;
   const answer = protectedResourceMetadataAnswer(
     { resourceUrl, requiredScopes, challengeScopes },
-    { publishableKey: ((env ?? {}) as ClerkEnv).CLERK_PUBLISHABLE_KEY, url: request.url },
+    { publishableKey, url: request.url },
   );
   return Response.json(answer.body, answer);
 }

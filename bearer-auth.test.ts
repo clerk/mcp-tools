@@ -541,22 +541,6 @@ describe('envClerkClient', () => {
     expect(createClerkClient).not.toHaveBeenCalled();
   });
 
-  test('reads process.env when no env is given', async () => {
-    const { envClerkClient, createClerkClient } = await freshEnvClient();
-    vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_4');
-    vi.stubEnv('CLERK_PUBLISHABLE_KEY', `${FAKE_PK}4`);
-    try {
-      await envClerkClient('mcpAuth');
-    } finally {
-      vi.unstubAllEnvs();
-    }
-
-    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
-      secretKey: 'sk_test_4',
-      publishableKey: `${FAKE_PK}4`,
-    });
-  });
-
   test('names the caller when @clerk/backend cannot be loaded', async () => {
     vi.resetModules();
     vi.doMock('@clerk/backend', () => {

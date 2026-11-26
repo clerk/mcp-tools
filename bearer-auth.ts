@@ -765,16 +765,18 @@ type TokenVerifier = (
  * The adapters read the values themselves: Next.js only inlines `process.env.NEXT_PUBLIC_*` where it is written out.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param keys - Each environment variable's name and value
+ * @param variable - What the message calls a key, such as `variable in the Worker env`
  * @returns The same keys, each with a value
  */
 export function requireClerkEnvKeys<K extends string>(
   caller: string,
   keys: Record<K, string | undefined>,
+  variable = 'environment variable',
 ): Record<K, string> {
   for (const [name, value] of Object.entries(keys)) {
     if (!value) {
       throw new Error(
-        `Clerk error: ${caller} needs the ${name} environment variable or a clerkClient option`,
+        `Clerk error: ${caller} needs the ${name} ${variable} or a clerkClient option`,
       );
     }
   }
@@ -804,7 +806,7 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
  * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
  * not set.
  */
-function requireClerkKeys(caller: string, env: ClerkEnv) {
+function requireClerkKeys(caller: string, env: ClerkEnv, variable: string | undefined) {
   const {
     CLERK_SECRET_KEY,
     CLERK_PUBLISHABLE_KEY,
@@ -812,7 +814,7 @@ function requireClerkKeys(caller: string, env: ClerkEnv) {
     CLERK_API_VERSION,
     CLERK_JWT_KEY,
   } = env;
-  const keys = requireClerkEnvKeys(caller, { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
+  const keys = requireClerkEnvKeys(caller, { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY }, variable);
   // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
   return {
     secretKey: keys.CLERK_SECRET_KEY,
@@ -829,16 +831,18 @@ function requireClerkKeys(caller: string, env: ClerkEnv) {
  * is loaded with `import()` inside `try`: a bundler such as esbuild fails the build on a bare `import()` of a
  * missing package, but not on one inside `try`.
  * @param caller - The entry point named in the messages, such as `mcpAuth`
- * @param env - The environment to read the keys from, such as a Worker's `env`. Only it is read when given; without
- * it, `process.env` is read.
+ * @param env - The environment to read the keys from, such as a Worker's `env`, or Hono's `env(c)`. Only it is read.
+ * @param variable - What the missing-key message calls a key, such as `variable in the Worker env`. Defaults to
+ * `environment variable`.
  * @returns The client, the same one for the same settings. It throws a `Clerk error:` naming a missing key, or
  * asking to install `@clerk/backend` when it can't be loaded.
  */
-export async function envClerkClient(caller: string, env?: ClerkEnv): Promise<ClerkOAuthClient> {
-  const keys = requireClerkKeys(
-    caller,
-    env ?? (typeof process === 'undefined' ? {} : (process.env as ClerkEnv)),
-  );
+export async function envClerkClient(
+  caller: string,
+  env: ClerkEnv,
+  variable?: string,
+): Promise<ClerkOAuthClient> {
+  const keys = requireClerkKeys(caller, env, variable);
   // `requireClerkKeys` builds the settings in one key order and leaves out the ones not set, so each set of settings
   // has one cache key
   const cacheKey = JSON.stringify(keys);

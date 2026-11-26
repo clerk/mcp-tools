@@ -302,7 +302,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
       const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl });
 
       await expect(authedHandler(mcpRequest(accessToken()), env as never, ctx)).rejects.toThrow(
-        'Clerk error: withClerkMcpAuth needs the CLERK_SECRET_KEY environment variable or a clerkClient option',
+        'Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch needs the CLERK_SECRET_KEY variable in the Worker env or a clerkClient option',
       );
     },
   );
@@ -536,6 +536,59 @@ describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
         scopes: ['profile', 'email'],
         extra: { userId: 'user_123' },
       });
+    }
+  });
+
+  test('names createClerkMcpWorker and the Worker env when a Clerk key is missing', async () => {
+    const worker = createClerkMcpWorker({ resourceUrl, server: greetingServer });
+
+    await expect(
+      worker.fetch(
+        modernRequest(accessToken(), 'server/discover'),
+        { GREETING: 'hi' } as never,
+        ctx,
+      ),
+    ).rejects.toThrow(
+      'Clerk error: createClerkMcpWorker from @clerk/mcp-tools/fetch needs the CLERK_SECRET_KEY variable in the Worker env or a clerkClient option',
+    );
+  });
+
+  test('does not depend on the SDK handing the factory the same Request object it was given', async () => {
+    // `createMcpHandler` documents `authInfo` as passed through to the factory, and `requestInfo` only as the request
+    // being served: an SDK that clones or wraps the request must still reach the right Worker env and auth info
+    vi.doMock('@modelcontextprotocol/server', async (importOriginal) => {
+      const sdk = await importOriginal<typeof import('@modelcontextprotocol/server')>();
+      return {
+        ...sdk,
+        createMcpHandler: ((factory, handlerOptions) =>
+          sdk.createMcpHandler(
+            (context) =>
+              factory({
+                ...context,
+                requestInfo:
+                  context.requestInfo &&
+                  new Request(context.requestInfo.url, { headers: context.requestInfo.headers }),
+              }),
+            handlerOptions,
+          )) satisfies typeof sdk.createMcpHandler,
+      };
+    });
+    try {
+      const server = vi.fn(greetingServer);
+      const worker = createClerkMcpWorker({ resourceUrl, server });
+
+      const res = await worker.fetch(
+        modernRequest(accessToken(), 'tools/call', { name: 'whoami', arguments: {} }),
+        workerEnv,
+        ctx,
+      );
+
+      expect(await rpcMessage(res)).toMatchObject({
+        result: { content: [{ type: 'text', text: 'user_123: hello from a binding' }] },
+      });
+      expect(server).toHaveBeenCalledOnce();
+    } finally {
+      vi.doUnmock('@modelcontextprotocol/server');
     }
   });
 

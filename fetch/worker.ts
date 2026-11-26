@@ -1,11 +1,11 @@
 import type { McpHttpHandler, McpServer } from '@modelcontextprotocol/server';
 
 import type { AuthInfo } from '../mcp-types';
-import { type ClerkEnv, assertMcpAuthOptions, assertVerifierOrResourceUrl } from '../bearer-auth';
+import type { ClerkEnv } from '../bearer-auth';
 import {
   type McpAuthOptions,
   type WorkerExecutionContext,
-  withClerkMcpAuth,
+  fetchMcpAuth,
 } from './with-clerk-mcp-auth';
 
 // MCP SDK 2.x is an optional peer: a Worker that only uses `withClerkMcpAuth` may not have it. So this module imports
@@ -37,10 +37,8 @@ export type ClerkMcpWorker<Env = ClerkEnv, Ctx = WorkerExecutionContext> = {
   fetch(request: Request, env: Env, ctx: Ctx): Promise<Response>;
 };
 
-type RequestContext<Env> = { authInfo: AuthInfo | undefined; env: Env };
-
-const caller = 'createClerkMcpWorker from @clerk/mcp-tools/fetch';
-const callForm =
+const createClerkMcpWorkerCaller = 'createClerkMcpWorker from @clerk/mcp-tools/fetch';
+const createClerkMcpWorkerCallForm =
   'createClerkMcpWorker({ resourceUrl, server }), or as createClerkMcpWorker({ verifyToken, server }) to verify tokens with your own function';
 
 /**
@@ -50,7 +48,8 @@ const callForm =
  *
  * The `server` factory is called for each MCP request with the verified `authInfo` and the Worker `env`, so tools can
  * reach the signed-in user and the Worker's bindings without module-level state. The MCP handler itself is created
- * once, on the first request, so its limits hold across requests.
+ * once for each Worker `env`, on its first request, so its limits hold across requests: Cloudflare passes the same
+ * `env` to every request of an isolate.
  * @param options - The `server` factory, and the auth options of `withClerkMcpAuth`: `resourceUrl` (or
  * `verifyToken`), `requiredScopes`, `challengeScopes`, `discoverable`, `publicAccess`, `clerkClient`, and
  * `onAuthFailure`
@@ -76,46 +75,47 @@ export function createClerkMcpWorker<Env = ClerkEnv, Ctx = WorkerExecutionContex
   options: ClerkMcpWorkerOptions<Env, Ctx>,
 ): ClerkMcpWorker<Env, Ctx> {
   if (typeof options?.server !== 'function') {
-    throw new Error(`Clerk error: ${caller} needs a server factory. Call it as ${callForm}`);
+    throw new Error(
+      `Clerk error: ${createClerkMcpWorkerCaller} needs a server factory. Call it as ${createClerkMcpWorkerCallForm}`,
+    );
   }
   const { server, ...authOptions } = options;
-  assertVerifierOrResourceUrl(
-    authOptions,
-    `Clerk error: ${caller} needs a resourceUrl to verify tokens with Clerk. Call it as ${callForm}`,
-  );
-  assertMcpAuthOptions('createClerkMcpWorker', authOptions, new Set(['onAuthFailure']));
 
-  // `createMcpHandler` calls the factory with the request it was given, so each request's auth info and Worker env are
-  // found by that request
-  const contexts = new WeakMap<Request, RequestContext<Env>>();
-  let mcpHandler: Promise<McpHttpHandler> | undefined;
-  const loadMcpHandler = () =>
-    (mcpHandler ??= createSdkHandler((request) => {
-      const context = request && contexts.get(request);
-      if (!context) {
-        throw new Error(`Clerk error: ${caller} got no Worker env for this MCP request`);
-      }
-      return server(context);
-    }).catch((error: unknown) => {
+  // One MCP handler for each Worker env, whose factory is closed over that env, so the env never travels through the
+  // SDK. The auth info does: `createMcpHandler` documents `authInfo` as passed through from `handler.fetch` to the
+  // factory's context, and the tests check that it arrives. An env that is not an object, which Cloudflare never
+  // passes, gets a handler for its request alone.
+  const handlers = new WeakMap<object, Promise<McpHttpHandler>>();
+  const loadMcpHandler = (env: Env) => {
+    const key = typeof env === 'object' && env !== null ? env : undefined;
+    const cached = key && handlers.get(key);
+    if (cached) return cached;
+    const created = createSdkHandler(({ authInfo }) =>
+      server({ authInfo: authInfo as AuthInfo | undefined, env }),
+    ).catch((error: unknown) => {
       // So a later request tries again
-      mcpHandler = undefined;
+      if (key) handlers.delete(key);
       throw error;
-    }));
+    });
+    if (key) handlers.set(key, created);
+    return created;
+  };
 
-  const authedHandler = withClerkMcpAuth<Env, Ctx>(
+  const authedHandler = fetchMcpAuth<Env, Ctx>(
     async (request, { authInfo, env }) => {
-      const handler = await loadMcpHandler();
-      contexts.set(request, { authInfo, env });
+      const handler = await loadMcpHandler(env);
       return handler.fetch(request, { ...(authInfo && { authInfo }) });
     },
     authOptions as McpAuthOptions<Env, Ctx>,
+    createClerkMcpWorkerCaller,
+    createClerkMcpWorkerCallForm,
   );
 
   return { fetch: authedHandler };
 }
 
 async function createSdkHandler(
-  factory: (request: Request | undefined) => McpServer | Promise<McpServer>,
+  factory: (context: { authInfo?: unknown }) => McpServer | Promise<McpServer>,
 ): Promise<McpHttpHandler> {
   let sdk: typeof import('@modelcontextprotocol/server');
   try {
@@ -126,5 +126,5 @@ async function createSdkHandler(
       { cause: error },
     );
   }
-  return sdk.createMcpHandler(({ requestInfo }) => factory(requestInfo));
+  return sdk.createMcpHandler(factory);
 }
