@@ -52,8 +52,6 @@ describe('generateAICatalog', () => {
           displayName: 'Weather',
           type: CARD_TYPE,
           url: 'https://example.com/mcp/server-card',
-          // ARD v0.91 4.5.1: the default trust manifest of a urn:air:example.com identifier
-          trustManifest: { identity: 'https://example.com', identityType: 'https' },
         },
       ],
     });
@@ -79,21 +77,18 @@ describe('generateAICatalog', () => {
           displayName: 'code-review',
           type: CARD_TYPE,
           url: 'https://acme.com/code-review/server-card',
-          trustManifest: { identity: 'https://acme.com', identityType: 'https' },
         },
         {
           identifier: 'urn:air:acme.com:docs-search:mcp',
           displayName: 'docs-search',
           type: CARD_TYPE,
           url: 'https://acme.com/docs-search/server-card',
-          trustManifest: { identity: 'https://acme.com', identityType: 'https' },
         },
         {
           identifier: 'urn:air:acme.com:ci-cd:mcp',
           displayName: 'ci-cd',
           type: CARD_TYPE,
           url: 'https://acme.com/ci-cd/server-card',
-          trustManifest: { identity: 'https://acme.com', identityType: 'https' },
         },
       ],
     });
@@ -165,7 +160,7 @@ describe('generateAICatalog contract', () => {
   });
 
   // ARD v0.91, 4.5 Trust and Verification: an entry may carry a trustManifest, which needs only an identity
-  test('carries an entry trustManifest as given, and none for null', () => {
+  test('carries an entry trustManifest as given, and none when it is left out', () => {
     expect(
       generateAICatalog({
         entries: [
@@ -183,7 +178,6 @@ describe('generateAICatalog contract', () => {
             identifier: 'urn:air:example.com:docs:mcp',
             displayName: 'Docs',
             url: 'https://example.com/docs/server-card',
-            trustManifest: null,
           },
         ],
       }),
@@ -417,15 +411,8 @@ describe('generateAICatalog options', () => {
       url: 'https://evil.example/x',
     });
 
-    expect(catalog.entries).toEqual([
-      {
-        ...weather,
-        type: 'application/mcp-server-card+json',
-        trustManifest: { identity: 'https://example.com', identityType: 'https' },
-      },
-    ]);
+    expect(catalog.entries).toEqual([{ ...weather, type: 'application/mcp-server-card+json' }]);
     expect(Object.isFrozen(catalog)).toBe(true);
-    expect(Object.isFrozen(catalog.entries[0]?.trustManifest)).toBe(true);
     expect(Object.isFrozen(catalog.entries)).toBe(true);
     expect(Object.isFrozen(catalog.entries[0])).toBe(true);
   });
@@ -800,68 +787,29 @@ describe('generateAICatalog representativeQueries and host', () => {
   });
 });
 
-// ARD v0.91, 4.5.1 Publisher Authority Binding: "The cryptographic trust domain asserted in trustManifest.identity
-// MUST align with the <publisher> domain embedded in the entry's discovery identifier", which Appendix C makes a fully
-// qualified domain name in urn:air:<publisher>:[<namespace>:]<agent-name>
-describe('generateAICatalog trust manifest default', () => {
-  const entry = (identifier: string, rest: object = {}) => ({
-    identifier,
+// ARD v0.91, 4.5.1 Publisher Authority Binding asks the trust manifest to align with the identifier's publisher, but
+// the manifest is a claim the publisher makes, so it is emitted only as given
+describe('generateAICatalog trust manifest', () => {
+  const entry = (rest: object = {}) => ({
+    identifier: 'urn:air:example.com:x',
     displayName: 'X',
     url: 'https://example.com/mcp/server-card',
     ...rest,
   });
   const only = (options: object) => generateAICatalog({ entries: [options as never] }).entries[0];
 
-  test.each([
-    ['urn:air:example.com:x', 'https://example.com'],
-    ['urn:air:mcp.example.com:finance:trading:trader', 'https://mcp.example.com'],
-    ['urn:air:Example.COM:x', 'https://example.com'],
-    ['URN:AIR:example.com:x', 'https://example.com'],
-  ])('defaults the trust manifest of %s to the https identity %s', (identifier, identity) => {
-    const linked = only(entry(identifier));
-
-    expect(linked?.trustManifest).toEqual({ identity, identityType: 'https' });
-    expect(linked && linkedCardCatalogErrors({ specVersion: '0.9', entries: [linked] })).toEqual(
-      [],
-    );
-  });
-
-  test('publishes none for trustManifest: null', () => {
-    expect(only(entry('urn:air:example.com:x', { trustManifest: null }))).not.toHaveProperty(
-      'trustManifest',
-    );
+  test('publishes none when it is left out, whatever the identifier', () => {
+    expect(only(entry())).not.toHaveProperty('trustManifest');
   });
 
   test('emits an explicit trust manifest as given', () => {
-    const trustManifest = { identity: 'did:web:example.com' };
-    expect(only(entry('urn:air:example.com:x', { trustManifest }))?.trustManifest).toEqual(
-      trustManifest,
+    const trustManifest = { identity: 'https://example.com', identityType: 'https' };
+    expect(only(entry({ trustManifest }))?.trustManifest).toEqual(trustManifest);
+  });
+
+  test('rejects null, which is not a trust manifest', () => {
+    expect(() => only(entry({ trustManifest: null }))).toThrow(
+      'Clerk error: generateAICatalog entries[0].trustManifest must be',
     );
-  });
-
-  test.each([
-    'did:web:example.com',
-    'weather',
-    'urn:air:example.com',
-    'urn:air:example.com:',
-    'urn:air:localhost:x',
-    'urn:air:user@evil.com:x',
-    'urn:air:exa_mple.com:x',
-    'urn:air:-example.com:x',
-    'urn:air:example..com:x',
-    'urn:air:127.0.0.1:x',
-    'urn:other:example.com:x',
-  ])('defaults no trust manifest for %s, whose publisher is not a domain name', (identifier) => {
-    expect(only(entry(identifier))).not.toHaveProperty('trustManifest');
-  });
-
-  test('defaults the manifest of each entry from its own identifier', () => {
-    const { entries } = generateAICatalog({
-      entries: [entry('urn:air:example.com:a'), entry('urn:air:saas.example:b')],
-    });
-    expect(entries.map((linked) => linked.trustManifest?.identity)).toEqual([
-      'https://example.com',
-      'https://saas.example',
-    ]);
   });
 });

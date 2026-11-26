@@ -39,12 +39,12 @@ export type AICatalogEntryOptions = {
    */
   representativeQueries?: readonly string[] | undefined;
   /**
-   * Who stands behind the server, as an Agentic Resource Discovery (ARD) v0.91 trust manifest, emitted as given. Omitted,
-   * an `identifier` of the form `urn:air:<domain>:<name>` defaults it to `{ identity: 'https://<domain>',
-   * identityType: 'https' }`, the trust domain ARD's "4.5.1 Publisher Authority Binding" requires it to align with; any
-   * other identifier gets none. `null` publishes none.
+   * Who stands behind the server, as an Agentic Resource Discovery (ARD) v0.91 trust manifest, emitted as given. ARD's
+   * "4.5.1 Publisher Authority Binding" requires its identity to align with the publisher domain of a
+   * `urn:air:<domain>:<name>` identifier, such as `{ identity: 'https://example.com' }` for
+   * `urn:air:example.com:weather`. Omit it to publish no trust data.
    */
-  trustManifest?: AICatalogTrustManifest | null | undefined;
+  trustManifest?: AICatalogTrustManifest | undefined;
   /**
    * Generated: every entry links a Server Card, `application/mcp-server-card+json`.
    */
@@ -166,9 +166,8 @@ export type AICatalog = {
  * `/.well-known/ard.json`, or its predecessor path `/.well-known/ai-catalog.json`, to find a domain's MCP servers. It
  * supports a subset of the AI Catalog specification: a catalog, Level 1 or, with a `host`, Level 2, whose entries each
  * link one Server Card by a logical identifier, a display name, and the card's URL, with optional ARD representative
- * queries and trust manifest, which defaults from a `urn:air:<domain>:…` identifier. Inline documents, other artifact
- * types, AI Catalog `trustManifests`, signatures, and extensions are not supported. It makes no request, so it never
- * fetches the cards, and needs no Clerk keys or MCP SDK.
+ * queries and trust manifest. Inline documents, other artifact types, AI Catalog `trustManifests`, signatures, and
+ * extensions are not supported. It makes no request, so it never fetches the cards, and needs no Clerk keys or MCP SDK.
  * @see https://github.com/Agent-Card/ai-catalog/blob/19208af/specification/ai-catalog.md
  * @param options - See `AICatalogOptions`
  * @returns The catalog, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the catalog
@@ -277,7 +276,7 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
         `${at}.representativeQueries must be a list of 1 to ${MAX_REPRESENTATIVE_QUERIES} sample requests, each with more than whitespace and no control characters, such as ['What is the weather in Paris?', 'Will it rain tomorrow?']. ARD recommends 2 to 5`,
       );
     }
-    if (trustManifest !== undefined && trustManifest !== null && !isTrustManifest(trustManifest)) {
+    if (trustManifest !== undefined && !isTrustManifest(trustManifest)) {
       fail(
         `${at}.trustManifest must be { identity, identityType?, attestations? } with an absolute URI identity that isn't http, data, file, or javascript, nor an https URL with credentials, such as 'https://example.com' or 'did:web:example.com', and attestations a list of { type, uri, digest?, mediaType? } with an https URL or data: URI uri. Trust schemas, provenance, and signatures are not supported`,
       );
@@ -290,10 +289,9 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
       ...(representativeQueries === undefined
         ? {}
         : { representativeQueries: [...(representativeQueries as string[])] }),
-      ...trustManifestFor(
-        identifier as string,
-        trustManifest as AICatalogTrustManifest | null | undefined,
-      ),
+      ...(trustManifest === undefined
+        ? {}
+        : { trustManifest: JSON.parse(JSON.stringify(trustManifest)) as AICatalogTrustManifest }),
     };
   });
 
@@ -302,35 +300,6 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     ...(host === undefined ? {} : { host: copyHost(host as AICatalogHost) }),
     entries: linked,
   });
-}
-
-// The trust manifest an entry emits: a copy of the one it was given, none for null, and otherwise the https identity of
-// its identifier's publisher
-function trustManifestFor(
-  identifier: string,
-  trustManifest: AICatalogTrustManifest | null | undefined,
-): { trustManifest?: AICatalogTrustManifest } {
-  if (trustManifest === null) return {};
-  if (trustManifest !== undefined) {
-    return { trustManifest: JSON.parse(JSON.stringify(trustManifest)) as AICatalogTrustManifest };
-  }
-  const publisher = urnPublisher(identifier);
-  return publisher === undefined
-    ? {}
-    : { trustManifest: { identity: `https://${publisher}`, identityType: 'https' } };
-}
-
-// A DNS name of two or more labels, each 1 to 63 letters, digits, or inner hyphens, whose last label is not all digits,
-// so an IP address, a single label such as localhost, userinfo, and a port are never taken for a publisher domain
-const DOMAIN_NAME =
-  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?=[a-z0-9-]*[a-z])[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-
-// ARD v0.91 Appendix C: urn:air:<publisher>:[<namespace>:]<agent-name>, with the publisher a fully qualified domain
-// name. The URN prefix and the domain are case-insensitive, so the domain comes back lowercase.
-function urnPublisher(identifier: string): string | undefined {
-  const match = /^urn:air:([^:]+):[^:]/i.exec(identifier);
-  const publisher = match?.[1]?.toLowerCase();
-  return publisher !== undefined && DOMAIN_NAME.test(publisher) ? publisher : undefined;
 }
 
 // The pinned AI Catalog RC, Host Info: a displayName, with identifier required here so the operator is named, and a

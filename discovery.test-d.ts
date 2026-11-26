@@ -177,18 +177,20 @@ describe('ARD discovery types', () => {
     },
   ];
 
-  test('entries take representativeQueries and a trust manifest, or null to publish none', () => {
+  test('entries take representativeQueries and an optional trust manifest', () => {
     expectTypeOf<AICatalogEntryOptions['representativeQueries']>().toEqualTypeOf<
       readonly string[] | undefined
     >();
     aiCatalogHandler({
-      entries: [{ ...entries[0]!, representativeQueries: ['Will it rain?'], trustManifest: null }],
+      entries: [{ ...entries[0]!, representativeQueries: ['Will it rain?'] }],
     });
     aiCatalogHandler({
       entries: [{ ...entries[0]!, trustManifest: { identity: 'https://example.com' } }],
     });
     // @ts-expect-error representativeQueries are text
     aiCatalogHandler({ entries: [{ ...entries[0]!, representativeQueries: [1] }] });
+    // @ts-expect-error leave trustManifest out to publish none
+    aiCatalogHandler({ entries: [{ ...entries[0]!, trustManifest: null }] });
   });
 
   test('a catalog takes a host with a displayName and identifier', () => {

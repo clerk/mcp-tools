@@ -2395,14 +2395,12 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
           displayName: 'Weather',
           type: CARD_TYPE,
           url: 'https://public.example.com/mcp/server-card',
-          trustManifest: { identity: 'https://example.com', identityType: 'https' },
         },
         {
           identifier: 'urn:air:saas.example:search:mcp',
           displayName: 'Search',
           type: CARD_TYPE,
           url: 'https://cards.saas.example/search/server-card',
-          trustManifest: { identity: 'https://saas.example', identityType: 'https' },
         },
       ],
     });
@@ -2450,7 +2448,7 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
   });
 
   // ARD v0.91, 4.5 Trust and Verification: the trust manifest is served as given, next to an entry without one
-  test('serves an entry trustManifest as given, and none for null', async () => {
+  test('serves an entry trustManifest as given, and none when it is left out', async () => {
     const trustManifest = {
       identity: 'https://example.com',
       identityType: 'https',
@@ -2458,10 +2456,7 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     };
     const res = await serve(
       mount({
-        entries: [
-          { ...catalogEntries[0]!, trustManifest },
-          { ...catalogEntries[1]!, trustManifest: null },
-        ],
+        entries: [{ ...catalogEntries[0]!, trustManifest }, catalogEntries[1]!],
       }),
       CATALOG_PATH,
     );
@@ -2547,7 +2542,6 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
         {
           ...catalogEntries[0],
           type: CARD_TYPE,
-          trustManifest: { identity: 'https://example.com', identityType: 'https' },
         },
       ],
     });
@@ -2657,14 +2651,12 @@ describe.each(discoveryAdapters)('%s aiCatalogHandler media type', (_name, mount
           type: CARD_TYPE,
           url: 'https://public.example.com/mcp/server-card',
           representativeQueries,
-          trustManifest: { identity: 'https://example.com', identityType: 'https' },
         },
         {
           identifier: 'urn:air:saas.example:search:mcp',
           displayName: 'Search',
           type: CARD_TYPE,
           url: 'https://cards.saas.example/search/server-card',
-          trustManifest: { identity: 'https://saas.example', identityType: 'https' },
         },
       ],
     });
