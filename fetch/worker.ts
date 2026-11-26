@@ -54,6 +54,10 @@ const createClerkMcpWorkerCallForm =
  * once for each Worker `env`, on its first request, so its limits hold across requests: Cloudflare passes the same
  * `env` to every request of an isolate. That sharing is why the factory gets no `ctx`: the SDK passes it only the
  * request's auth info, and a side channel keyed on the request would break when the SDK clones it.
+ *
+ * The Worker owns every path it is routed: the metadata URL of each listed `resourceUrl` gets the metadata, and every
+ * other path is the MCP endpoint. A Worker with other routes sends only those two URLs to it, or uses
+ * `withClerkMcpAuth`.
  * @param options - The `server` factory, and the auth options of `withClerkMcpAuth`: `resourceUrl` (or
  * `verifyToken`), `requiredScopes`, `challengeScopes`, `discoverable`, `publicAccess`, `clerkClient`, and
  * `onAuthFailure`
