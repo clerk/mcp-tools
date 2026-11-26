@@ -1,14 +1,13 @@
 // Drives the fetch entry the way a Cloudflare Worker calls it, `fetch(request, env, ctx)`, with hand-written requests
 // and the real `@clerk/backend` verifier. With `CLERK_JWT_KEY` in the Worker env, Clerk checks a JWT access token
 // locally, so these tests need no network.
-import { createSign, generateKeyPairSync } from 'node:crypto';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { AuthInfo } from '../mcp-types';
 import { clerkInstrumentHandler as honoClerkInstrumentHandler } from '../hono/index';
-import { FAKE_PK } from '../test/mcp-harness';
+import { FAKE_PK, clerkAccessToken, clerkJwtKey } from '../test/mcp-harness';
 import {
   type McpAuthFailure,
   createClerkMcpWorker,
@@ -18,38 +17,19 @@ import {
 
 const resourceUrl = 'https://mcp.example.com/mcp';
 const RESOURCE_METADATA_URL = 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp';
-const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 
 // The Worker env a Cloudflare Worker passes to `fetch`, with a binding beside the Clerk keys
 const workerEnv = {
   CLERK_SECRET_KEY: 'sk_test_fetch_entry',
   CLERK_PUBLISHABLE_KEY: FAKE_PK,
-  CLERK_JWT_KEY: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+  CLERK_JWT_KEY: clerkJwtKey(),
   GREETING: 'hello from a binding',
 };
 const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 
-function accessToken(claims: Record<string, unknown> = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  const signed = [
-    encode({ alg: 'RS256', typ: 'at+jwt', kid: 'ins_test' }),
-    encode({
-      iss: 'https://clerk.example.com',
-      sub: 'user_123',
-      client_id: 'client_123',
-      scope: 'profile email',
-      jti: 'oat_123',
-      aud: resourceUrl,
-      iat: now - 10,
-      nbf: now - 10,
-      exp: now + 300,
-      ...claims,
-    }),
-  ].join('.');
-  const signature = createSign('RSA-SHA256').update(signed).sign(privateKey, 'base64url');
-  return `${signed}.${signature}`;
-}
+// A Clerk access token for this resource
+const accessToken = (claims: Record<string, unknown> = {}) =>
+  clerkAccessToken({ aud: resourceUrl, ...claims });
 
 // A tool call, which `discoverable` does not open, so a request without a token gets the challenge
 const toolCall = JSON.stringify({

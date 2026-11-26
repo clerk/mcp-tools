@@ -6,6 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
 import type { Express } from 'express';
+import { type KeyPairKeyObjectResult, createSign, generateKeyPairSync } from 'node:crypto';
 import type { Server } from 'node:http';
 import { type AddressInfo, connect } from 'node:net';
 import type { vi } from 'vitest';
@@ -102,6 +103,41 @@ export function connectOAuthClient(
 
 /** A publishable key whose Frontend API is `clerk.example.com`. */
 export const FAKE_PK = 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+
+// The key pair `clerkAccessToken` signs with, made on first use so files that sign no token don't pay for it
+let clerkKeys: KeyPairKeyObjectResult | undefined;
+const clerkKeyPair = () => (clerkKeys ??= generateKeyPairSync('rsa', { modulusLength: 2048 }));
+
+/** The PEM public key `clerkAccessToken` tokens verify with, as Clerk's `jwtKey` or `CLERK_JWT_KEY`. */
+export const clerkJwtKey = () =>
+  clerkKeyPair().publicKey.export({ type: 'spki', format: 'pem' }).toString();
+
+/**
+ * A JWT access token as Clerk issues it, signed with the key `clerkJwtKey` returns, so Clerk checks it locally.
+ * `claims` add to or replace the default claims.
+ */
+export function clerkAccessToken(claims: Record<string, unknown> = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const signed = [
+    encode({ alg: 'RS256', typ: 'at+jwt', kid: 'ins_test' }),
+    encode({
+      iss: 'https://clerk.example.com',
+      sub: 'user_123',
+      client_id: 'client_123',
+      scope: 'profile email',
+      jti: 'oat_123',
+      iat: now - 10,
+      nbf: now - 10,
+      exp: now + 300,
+      ...claims,
+    }),
+  ].join('.');
+  const signature = createSign('RSA-SHA256')
+    .update(signed)
+    .sign(clerkKeyPair().privateKey, 'base64url');
+  return `${signed}.${signature}`;
+}
 
 /** An expiry an hour away, in seconds since the epoch, which a custom verifier's result must have. */
 export const expiresAt = Math.floor(Date.now() / 1000) + 3600;
