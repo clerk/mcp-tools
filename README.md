@@ -190,9 +190,11 @@ For framework-specific implementations, see:
 
 To create an MCP endpoint that handles the actual MCP protocol communication, you'll need to use framework-specific adapters, since each framework has its own way of handling request and response objects, which are critical parts of implementing the MCP protocol:
 
-- **Express.js**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/express` - see [Express.js guide](./express/README.md#mcp-request-handler)
-- **Hono**: Use the `streamableHttpHandler` from `@clerk/mcp-tools/hono` - see [Hono guide](./hono/README.md)
-- **Next.js**: Use Vercel's `mcp-handler` with `withClerkMcpAuth` from `@clerk/mcp-tools/next` - see [Next.js guide](./next/README.md#building-an-mcp-server)
+- **Express.js**: Serve the handler `createMcpHandler` from `@modelcontextprotocol/server` returns with `clerkInstrumentHandler` from `@clerk/mcp-tools/express` - see [Express.js guide](./express/README.md#quick-start)
+- **Hono**: Serve the handler `createMcpHandler` from `@modelcontextprotocol/server` returns with `clerkInstrumentHandler` from `@clerk/mcp-tools/hono` - see [Hono guide](./hono/README.md#quick-start)
+- **Next.js**: Use Vercel's `mcp-handler` with `clerkInstrumentHandler` from `@clerk/mcp-tools/next` - see [Next.js guide](./next/README.md#building-an-mcp-server)
+
+In each framework, call `clerkInstrumentServer(server)` where each MCP server is created, and the route's `clerkInstrumentHandler` can [report its MCP activity to Clerk](#reporting-mcp-activity-to-clerk). `mcpAuth`, `streamableHttpHandler`, and `withClerkMcpAuth`, which this guide still shows in places, are deprecated: `clerkInstrumentHandler` takes the same options.
 
 These adapters handle the MCP protocol details and integrate with your authentication system.
 
@@ -383,6 +385,28 @@ Don't create the handler inside the route handler. MCP SDK 2.x counts the `subsc
 - A call to a tool that is not registered for the caller is answered as a call to an unknown tool: "Tool delete_project not found", a JSON-RPC error on MCP SDK 2.x and an error result on 1.x, with no challenge. A request without a token gets the `401` before that, unless the tool is in `publicAccess.tools`.
 - A client can keep the list it got before the user signed in. Nothing tells it that the caller changed: the server never sends `notifications/tools/list_changed` for a sign-in, so the client sees the new list when it next sends `tools/list`.
 - On protocol revision 2026-07-28 a list result says who may cache it. MCP SDK 2.x sends `cacheScope: "private"` unless you set `cacheHints`, which is right for a list that differs by caller: "`"private"` is appropriate for `resources/read` results that depend on the authenticated user, or for filtered list results that vary per user" ([Caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#choosing-a-cache-scope)). Don't set `tools/list` to `"public"` on such a server.
+
+#### Reporting MCP activity to Clerk
+
+With the `reporting` option of `clerkInstrumentHandler`, Clerk records each tool call your MCP server answers, for your instance's MCP analytics and audit log: the tool, the server, whether it succeeded and its error code, how long it took and how much of that the tool's handler ran, and when, with the Clerk user, OAuth client, and access token of a token Clerk verified, and the client's IP address and `User-Agent`. Tool arguments and results are never sent. It is off by default.
+
+```ts
+const mcpAuthOptions = {
+  resourceUrl: 'https://mcp.example.com/mcp',
+  reporting: true,
+} satisfies McpAuthOptions;
+
+function createServer() {
+  const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
+  clerkInstrumentServer(server);
+  // Register your tools, resources, and prompts
+  return server;
+}
+```
+
+The route knows who made each request, and `clerkInstrumentServer` sees each tool call, so reporting needs both; a server missing either logs a one-time `Clerk warning:`. It also reports each `initialize` (or, on protocol revision 2026-07-28, `server/discover`) with the client's name and version, each list request with its item count, each resource read by the registered resource's name or URI template, never the URI asked for, and each prompt get by the prompt's name. A 2026-07-28 client that skips the optional `server/discover` is not counted as a connected client. Call `clerkInstrumentServer` before registering tools, resources, and prompts: it wraps `registerTool`, `registerResource`, and `registerPrompt`, and `tool`, `resource`, and `prompt` on MCP SDK 1.x, so that a handler that throws is reported with the error code `thrown:<ErrorClass>`, the error's class name and never its message, told apart from one that returns an `isError` result. A tool registered before the call, or whose callback is replaced with `update({ callback })`, is reported without its handler's time, and a throw from it looks like a returned error. Each report from a request with an `Mcp-Session-Id` header carries a hash of the session ID, salted with the publishable key, and never the session ID itself. `reporting` also takes an options object that turns off the IP address, `User-Agent`, or identity, picks which tools are reported, and names the server. Reports are sent to the Backend API in batches, after the response, and a failure to send them never affects an MCP request. See [Express](./express/README.md#reporting-mcp-activity), [Hono](./hono/README.md#reporting-mcp-activity), or [Next.js](./next/README.md#reporting-mcp-activity) for where each adapter reads the IP address and how it sends the reports.
+
+With `reporting` on, `clerkInstrumentHandler` also reports each request it answers with a `401` or `403` challenge or a `421`: the reason, the status, the verifier's code for a rejected token, and the JSON-RPC method and tool name, read from a copy of the body. Only a `403`, whose token Clerk verified, carries the user, OAuth client, access token, and organization IDs.
 
 #### Collecting feedback from agents
 
@@ -1023,6 +1047,11 @@ The above examples are more of a _guide_ for how to implement the tools, but for
     }>;
     ```
 
+- `clerkInstrumentServer`
+  - **Description:** Lets the `clerkInstrumentHandler` that serves an MCP server see its tool calls, to report them when its `reporting` option is on. Call it once on each server where it is created, before it connects: in the factory you give `createMcpHandler` from `@modelcontextprotocol/server`, or in the callback of `createMcpHandler` from `mcp-handler`. It replaces `connect` on that server object only, then wraps the `onmessage` and `send` of each transport it connects to, so it works the same on MCP SDK 1.x and 2.x and changes nothing a client sees. A second call on the same server does nothing. See [Reporting MCP activity to Clerk](#reporting-mcp-activity-to-clerk).
+  - **Params:** `server`, an MCP SDK `McpServer` or low-level `Server`
+  - **Returns:** the same server
+
 - `isClerkAuthInfo`
   - **Description:** Returns `true` when an `AuthInfo` object came from `toClerkAuthInfo`, which marks its result with `extra.verifiedBy: 'clerk'` and a non-empty `extra.userId`. The guard also requires private object provenance from `toClerkAuthInfo` or the adapters' metadata copy; setting the marker on a hand-built object or copying a result outside the library does not pass. Use it to tell Clerk user and client ids apart from ones produced by a custom verifier. It does not verify a token itself: `toClerkAuthInfo` must receive `requestState.toAuth()` from `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`, not an auth object verified without the audience check. It is a type guard: after the check, TypeScript knows `authInfo.extra.userId` is a string. `toClerkAuthInfo` also keeps Clerk's own auth object for the token on `extra.auth`, typed `ClerkOAuthAuth | undefined` (it is missing from auth info built by hand). It is the object Clerk returned, and `ClerkOAuthAuth` types its `id` (empty for a JWT access token without a `jti`), `subject`, `userId`, `clientId`, `scopes`, `tokenType`, `isAuthenticated`, and `getToken()`. Clerk's `has()` and `debug` are not typed. For an OAuth token, `has()` always returns `false`, so check `scopes` instead.
   - **Params:** `authInfo: AuthInfo | undefined`
@@ -1034,7 +1063,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
   - **Returns:** the function to pass as the `scopeChallenge` option, `(context: { authInfo?: AuthInfo }) => { scopes: readonly [string, ...string[]] } | undefined`
 
 - `toClerkAuthInfo`
-  - **Description:** Converts Clerk's auth object for an already verified OAuth access token into the MCP SDK's `AuthInfo`, marked with `extra.verifiedBy: 'clerk'`. It verifies nothing itself: pass `requestState.toAuth()` only from `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`. `auth({ acceptsToken: 'oauth_token' })` alone does not check the audience and is not sufficient. The audience must identify this resource server ([RFC 8707 section 2](https://www.rfc-editor.org/rfc/rfc8707.html#section-2), [RFC 9068 section 4](https://www.rfc-editor.org/rfc/rfc9068.html#section-4), and [RFC 7519 section 4.1.3](https://www.rfc-editor.org/rfc/rfc7519.html#section-4.1.3)). Prefer the built-in Clerk path, `mcpAuth({ clerkClient, resourceUrl })` or `withClerkMcpAuth(handler, { clerkClient, resourceUrl })`, which performs that check for you.
+  - **Description:** Converts Clerk's auth object for an already verified OAuth access token into the MCP SDK's `AuthInfo`, marked with `extra.verifiedBy: 'clerk'`. It verifies nothing itself: pass `requestState.toAuth()` only from `authenticateRequest(req, { acceptsToken: 'oauth_token', audience: resourceUrl })`. `auth({ acceptsToken: 'oauth_token' })` alone does not check the audience and is not sufficient. The audience must identify this resource server ([RFC 8707 section 2](https://www.rfc-editor.org/rfc/rfc8707.html#section-2), [RFC 9068 section 4](https://www.rfc-editor.org/rfc/rfc9068.html#section-4), and [RFC 7519 section 4.1.3](https://www.rfc-editor.org/rfc/rfc7519.html#section-4.1.3)). Prefer the built-in Clerk path, `clerkInstrumentHandler(handler, { clerkClient, resourceUrl })`, which performs that check for you.
   - **Params:** `auth`, Clerk's auth object; `token: string | undefined`, the access token it came from
   - **Returns:** `ClerkAuthInfo | undefined`, `undefined` when there is no token or Clerk did not authenticate it
 

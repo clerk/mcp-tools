@@ -5,9 +5,11 @@ import {
   type MiddlewareAuthOptions,
   type ProtectedResourceMetadataOptions as SharedProtectedResourceMetadataOptions,
   assertAuthorizationServerMetadataHandlerCalled,
+  assertMcpAuthOptions,
   assertMiddlewareAuthOptions,
   assertProtectedResourceMetadataOptions,
   assertStreamableHttpArgs,
+  assertVerifierOrResourceUrl,
   authorizationServerMetadataAnswer,
   createBearerAuth,
   methodNotAllowed,
@@ -24,6 +26,19 @@ import {
   aiCatalogResponder,
   serverCardResponder,
 } from '../discovery-response';
+import {
+  type AuthFailureAnswer,
+  type ReportingOption,
+  AUTH_FAILURE_BODY_LIMIT,
+  beginToolCallContext,
+  checkToolCallContext,
+  hashSessionId,
+  onResponseEnd,
+  reportAuthFailure,
+  reportingKey,
+  resolveReporting,
+  withoutReporting,
+} from '../tool-call-reporting';
 import {
   type ClerkOAuthClient,
   type McpAuthError,
@@ -51,18 +66,33 @@ export * from '../server';
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 
 /**
- * Options for the `mcpAuth` middleware. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
+ * Options for `clerkInstrumentHandler`. Without `verifyToken`, Clerk verifies each token, `resourceUrl` is required as
  * its audience, and `clerkClient` defaults to one built from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the
  * app's environment. With `verifyToken`, that function verifies each token with the Hono context, `resourceUrl` is
- * optional, and `clerkClient` is not allowed.
+ * optional, and `clerkClient` is not allowed. `reporting` turns on MCP activity reporting. The deprecated `mcpAuth`
+ * takes the same options without it.
  */
-export type McpAuthOptions = MiddlewareAuthOptions<Context>;
+export type McpAuthOptions = MiddlewareAuthOptions<Context> & ReportingOption<Context>;
+
+/**
+ * What `clerkInstrumentHandler` serves: the handler `createMcpHandler` from MCP SDK 2.x (`@modelcontextprotocol/server`)
+ * returns, or a function that serves a web-standard request with the auth info, such as one that passes both to the
+ * `handleRequest` of MCP SDK 1.x's `WebStandardStreamableHTTPServerTransport`.
+ */
+export type McpHandler =
+  | {
+      fetch: (request: Request, options?: { authInfo?: AuthInfo }) => Promise<Response>;
+    }
+  | ((
+      request: Request,
+      options: { authInfo: AuthInfo | undefined },
+    ) => Response | Promise<Response>);
 
 /**
  * Options for `protectedResourceMetadataHandler`: the `McpAuthOptions`, all optional, plus `properties`. Reuse the
  * auth options here, adding `properties` only for the metadata handler, not `mcpAuth`. The handler reads
  * `resourceUrl`, `requiredScopes`, `challengeScopes`, and `properties`, and
- * ignores the other `McpAuthOptions` keys: `clerkClient` and `verifyToken`.
+ * ignores the other `McpAuthOptions` keys: `clerkClient`, `verifyToken`, and `reporting`.
  */
 export type ProtectedResourceMetadataOptions =
   SharedProtectedResourceMetadataOptions<McpAuthOptions>;
@@ -102,7 +132,7 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
  * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
  * not set.
  */
-function requireClerkKeys(c: Context) {
+function requireClerkKeys(c: Context, caller: string) {
   const {
     CLERK_SECRET_KEY,
     CLERK_PUBLISHABLE_KEY,
@@ -110,7 +140,7 @@ function requireClerkKeys(c: Context) {
     CLERK_API_VERSION,
     CLERK_JWT_KEY,
   } = env<ClerkEnv>(c);
-  const keys = requireClerkEnvKeys('mcpAuth', { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
+  const keys = requireClerkEnvKeys(caller, { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
   // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
   return {
     secretKey: keys.CLERK_SECRET_KEY,
@@ -128,7 +158,7 @@ function requireClerkKeys(c: Context) {
  * @param keys - The settings `requireClerkKeys` read
  * @returns The client, the same one for the same settings
  */
-async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
+async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>, caller: string) {
   // `requireClerkKeys` builds the settings in one key order and leaves out the ones not set, so each set of settings
   // has one cache key
   const cacheKey = JSON.stringify(keys);
@@ -139,7 +169,7 @@ async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
   try {
     backend = await import('@clerk/backend');
   } catch (error) {
-    throw new Error('Clerk error: install @clerk/backend, or pass clerkClient to mcpAuth', {
+    throw new Error(`Clerk error: install @clerk/backend, or pass clerkClient to ${caller}`, {
       cause: error,
     });
   }
@@ -165,7 +195,7 @@ async function envClerkClient(keys: ReturnType<typeof requireClerkKeys>) {
  * ```
  */
 export function protectedResourceMetadataHandler(options: ProtectedResourceMetadataOptions = {}) {
-  assertProtectedResourceMetadataOptions(options);
+  assertProtectedResourceMetadataOptions(options, new Set([reportingKey]));
 
   return (c: Context) => {
     if (c.req.method === 'OPTIONS') return c.body(null, 200, metadataCorsHeaders);
@@ -346,16 +376,37 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  * );
  * ```
  */
-export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
+export function mcpAuth(options: MiddlewareAuthOptions<Context>): MiddlewareHandler {
+  options = withoutReporting('mcpAuth', options);
   assertMiddlewareAuthOptions(options);
+  const authenticate = honoAuthenticator('mcpAuth', options);
+
+  return async (c: Context, next: Next) => {
+    const authenticated = await authenticate(c);
+    if (authenticated instanceof Response) return authenticated;
+    await next();
+  };
+}
+
+/**
+ * Verifies the request's token as `mcpAuth` does.
+ * @param onFailure - Called with a 401, 403 or 421 as it is answered, for reporting. It must not wait for anything.
+ * @returns The answer for a request that is not let through, or the auth info of one that is, also set as the
+ * `mcpAuth` context variable: `undefined` for a request without a token that `publicAccess` let through
+ */
+function honoAuthenticator(
+  caller: string,
+  options: MiddlewareAuthOptions<Context>,
+  onFailure?: (c: Context, answer: AuthFailureAnswer) => void,
+) {
   const authenticate = createBearerAuth(
-    'mcpAuth',
+    caller,
     options,
-    (c: Context) => envClerkClient(requireClerkKeys(c)),
+    (c: Context) => envClerkClient(requireClerkKeys(c, caller), caller),
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY',
   );
 
-  return async (c: Context, next: Next) => {
+  return async (c: Context): Promise<Response | { authInfo: AuthInfo | undefined }> => {
     const result = await authenticate(c, {
       authorization: c.req.header('authorization'),
       requestUrl: c.req.url,
@@ -364,17 +415,27 @@ export function mcpAuth(options: McpAuthOptions): MiddlewareHandler {
       body: async () =>
         readJsonBody(
           await requestWithBody(c),
-          'Clerk warning: mcpAuth could not read the JSON body of a request without a token, because something before it already read c.req.raw, so discoverable and publicAccess open nothing and the request got the 401 challenge. Read the body through Hono, as c.req.json(), or read a copy, as c.req.raw.clone().json(), or set discoverable: false to require a token for every request',
+          `Clerk warning: ${caller} could not read the JSON body of a request without a token, because something before it already read c.req.raw, so discoverable and publicAccess open nothing and the request got the 401 challenge. Read the body through Hono, as c.req.json(), or read a copy, as c.req.raw.clone().json(), or set discoverable: false to require a token for every request`,
         ),
     });
     if ('serverError' in result) throw withJsonResponse(result.serverError);
     if (!result.ok) {
-      if (result.failure) c.set('mcpAuthFailure', result.failure);
+      if (result.failure) {
+        c.set('mcpAuthFailure', result.failure);
+        // Reporting must never change, fail or delay the answer
+        try {
+          onFailure?.(c, {
+            failure: result.failure,
+            status: result.status,
+            authInfo: result.authInfo,
+          });
+        } catch {}
+      }
       return c.json(result.body, { status: result.status, headers: result.headers });
     }
 
     c.set('mcpAuth', result.authInfo);
-    await next();
+    return { authInfo: result.authInfo };
   };
 }
 
@@ -440,6 +501,7 @@ function requestWithBody(c: Context): Promise<Request> {
  * @typeParam Transport - The transport the class creates, inferred from the class alone
  * @typeParam Server - The server `createServer` returns. It is a separate type parameter so that `Transport` is not
  * inferred from the SDK's general `Transport` interface, which `McpServer.connect` takes.
+ * @deprecated Use `clerkInstrumentHandler(handler, options)` with the handler `createMcpHandler` from MCP SDK 2.x returns
  */
 export function streamableHttpHandler<
   Transport extends WebStandardStreamableHttpTransport,
@@ -486,4 +548,155 @@ export function streamableHttpHandler<
       throw error;
     }
   };
+}
+
+/**
+ * A Hono handler that authenticates each MCP request as `mcpAuth` does, then serves it with `handler`. It answers a
+ * missing or rejected token with a 401 challenge, a token without `requiredScopes` with a 403 challenge, and a request
+ * to an origin no `resourceUrl` lists with a 421, recording the reason in the `mcpAuthFailure` context variable. A
+ * request it lets through reaches `handler` with its auth info, which is also the `mcpAuth` context variable.
+ *
+ * With `reporting`, it reports to Clerk the tool calls of each server passed to `clerkInstrumentServer`, and each 401,
+ * 403 or 421 it answers, with the `CLERK_SECRET_KEY` the app's environment has. On Cloudflare Workers the reports are
+ * sent with `waitUntil` once the response is over; elsewhere they are sent in batches, about a second after a call or
+ * once 100 are waiting.
+ * @param handler - The handler `createMcpHandler` from `@modelcontextprotocol/server` returns, or a function that
+ * serves a web-standard request with the auth info
+ * @param options - See `McpAuthOptions`. Without `clerkClient`, it builds one with `createClerkClient` from
+ * `@clerk/backend`, from the keys in the app's environment, as `mcpAuth` does.
+ * @returns The Hono handler. Mount it with `app.all`.
+ * @example
+ * ```ts
+ * import { Hono } from 'hono';
+ * import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
+ * import { clerkInstrumentHandler, clerkInstrumentServer } from '@clerk/mcp-tools/hono';
+ *
+ * const mcp = createMcpHandler(() => {
+ *   const server = new McpServer({ name: 'acme-mcp', version: '1.0.0' });
+ *   clerkInstrumentServer(server);
+ *   // register tools
+ *   return server;
+ * });
+ *
+ * const app = new Hono();
+ * app.all(
+ *   '/mcp',
+ *   clerkInstrumentHandler(mcp, {
+ *     resourceUrl: 'https://mcp.example.com/mcp',
+ *     requiredScopes: ['profile', 'email'],
+ *     reporting: true,
+ *   }),
+ * );
+ * export default app;
+ * ```
+ */
+export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOptions) {
+  if (
+    typeof handler !== 'function' &&
+    typeof (handler as { fetch?: unknown } | null)?.fetch !== 'function'
+  ) {
+    throw new Error(
+      'Clerk error: clerkInstrumentHandler takes the MCP handler first: the handler createMcpHandler from @modelcontextprotocol/server returns, or a function of the request and its auth info. Call it as clerkInstrumentHandler(handler, { resourceUrl })',
+    );
+  }
+  assertVerifierOrResourceUrl(
+    options,
+    `Clerk error: clerkInstrumentHandler needs a resourceUrl to verify tokens with Clerk. Call it as clerkInstrumentHandler(handler, { resourceUrl: 'https://mcp.example.com/mcp' }), or as clerkInstrumentHandler(handler, { verifyToken }) with your own verifier`,
+  );
+  const { reporting: reportingOption, ...authOptions } = options;
+  assertMcpAuthOptions('clerkInstrumentHandler', authOptions);
+  const reporting = resolveReporting<Context>('clerkInstrumentHandler', reportingOption);
+  const authenticate = honoAuthenticator(
+    'clerkInstrumentHandler',
+    authOptions,
+    reporting &&
+      ((c, answer) => {
+        const keys = env<ClerkEnv>(c);
+        // `readJsonBody` takes its copy now, before the answer, and reads it afterwards, so the request is untouched
+        // and the answer never waits for the body
+        const body = c.req.raw.bodyUsed
+          ? requestWithBody(c).then((request) =>
+              readJsonBody(request, undefined, AUTH_FAILURE_BODY_LIMIT),
+            )
+          : readJsonBody(c.req.raw, undefined, AUTH_FAILURE_BODY_LIMIT);
+        const report = reportAuthFailure({
+          caller: 'clerkInstrumentHandler',
+          reporting,
+          answer,
+          body,
+          request: c,
+          defaultIpAddress: () => honoIpAddress(c),
+          userAgent: () => c.req.header('user-agent'),
+          sessionIdHash: hashSessionId(keys.CLERK_PUBLISHABLE_KEY, c.req.header('mcp-session-id')),
+          env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
+        })
+          .then((send) => send?.())
+          .catch(() => undefined);
+        try {
+          c.executionCtx.waitUntil(report);
+        } catch {}
+      }),
+  );
+
+  return async (c: Context): Promise<Response> => {
+    const authenticated = await authenticate(c);
+    if (authenticated instanceof Response) return authenticated;
+    const { authInfo } = authenticated;
+
+    const request = await requestWithBody(c);
+    if (authInfo) attachAuth(request, authInfo);
+    const keys = env<ClerkEnv>(c);
+    const hashing =
+      reporting && hashSessionId(keys.CLERK_PUBLISHABLE_KEY, c.req.header('mcp-session-id'));
+    const context = beginToolCallContext({
+      caller: 'clerkInstrumentHandler',
+      reporting,
+      authInfo,
+      request: c,
+      defaultIpAddress: () => honoIpAddress(c),
+      userAgent: () => c.req.header('user-agent'),
+      sessionIdHash: hashing && (await hashing),
+      env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
+    });
+
+    const response =
+      typeof handler === 'function'
+        ? await handler(request, { authInfo })
+        : await handler.fetch(request, { ...(authInfo && { authInfo }) });
+    if (!context || !reporting) return response;
+
+    let ended!: () => void;
+    const end = new Promise<void>((resolve) => (ended = resolve));
+    try {
+      c.executionCtx.waitUntil(end.then(() => context.flush()));
+    } catch {}
+    return onResponseEnd(response, () => {
+      checkToolCallContext('clerkInstrumentHandler', context, reporting, {
+        method: c.req.method,
+        status: response.status,
+        mcpMethod: c.req.header('mcp-method'),
+      });
+      ended();
+    });
+  };
+}
+
+// The `auth` that `mcp-handler` and other fetch handlers read the auth info from, as `withClerkMcpAuth` sets it
+function attachAuth(request: Request, authInfo: AuthInfo) {
+  try {
+    (request as Request & { auth?: AuthInfo }).auth = authInfo;
+  } catch {}
+}
+
+/**
+ * The client's address where the runtime reports it: `cf-connecting-ip` on Cloudflare Workers, whose requests have
+ * `cf`, and the socket's address under `@hono/node-server`, which passes the Node.js request as `c.env.incoming`.
+ */
+function honoIpAddress(c: Context): string | undefined {
+  if (typeof (c.req.raw as Request & { cf?: unknown }).cf === 'object') {
+    return c.req.header('cf-connecting-ip');
+  }
+  const address = (c.env as { incoming?: { socket?: { remoteAddress?: unknown } } } | undefined)
+    ?.incoming?.socket?.remoteAddress;
+  return typeof address === 'string' ? address : undefined;
 }
