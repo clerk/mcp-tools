@@ -305,6 +305,7 @@ function withJsonResponse(error: McpAuthError): McpAuthError & { getResponse(): 
  *   streamableHttpHandler(createServer, WebStandardStreamableHTTPServerTransport),
  * );
  * ```
+ * @deprecated Use `clerkInstrumentHandler(handler, options)`, which authenticates the same way and can report tool calls
  */
 export function mcpAuth(options: MiddlewareAuthOptions<Context>): MiddlewareHandler {
   options = withoutReporting('mcpAuth', options);

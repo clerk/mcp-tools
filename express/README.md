@@ -420,7 +420,7 @@ It answers as `serverCardHandler` does, with `application/ai-catalog+json`, and 
 
 **Deprecated.** Use [`clerkInstrumentHandler`](#clerkinstrumenthandlerhandler-options) with the handler `createMcpHandler` from `@modelcontextprotocol/server` returns. `streamableHttpHandler` doesn't report tool calls.
 
-Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. A fresh server and transport are created for each request, so concurrent requests don't share state. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than an Express `404`.
+Express handler that processes MCP requests using the streamable HTTP transport from the MCP SDK. A fresh server and transport are created for each request, so concurrent requests don't share state. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)`, so a `GET` gets the `405` rather than an Express `404`. To serve MCP behind Clerk auth, use [`clerkInstrumentHandler`](#clerkinstrumenthandlerhandler-options) instead, which answers a `GET` without a token with the `401` or, with [public access](#public-access), the `405`.
 
 **Parameters:**
 
