@@ -781,6 +781,84 @@ export function requireClerkEnvKeys<K extends string>(
   return keys as Record<K, string>;
 }
 
+/**
+ * The environment variables a Clerk client is built from, as a Cloudflare Workers `env` or `process.env` holds them.
+ */
+export type ClerkEnv = {
+  CLERK_PUBLISHABLE_KEY?: string | undefined;
+  CLERK_SECRET_KEY?: string | undefined;
+  CLERK_API_URL?: string | undefined;
+  CLERK_API_VERSION?: string | undefined;
+  CLERK_JWT_KEY?: string | undefined;
+};
+
+// The clients `envClerkClient` built, keyed by every setting, the secret included (in memory only). On Cloudflare
+// Workers the settings are only known per request, on the Worker's `env`, so the client can't be built at setup.
+const envClerkClients = new Map<string, ClerkOAuthClient>();
+
+/**
+ * The settings a Clerk client is built from: the secret and publishable keys, and `CLERK_API_URL`,
+ * `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as `clerkClient` from `@clerk/express` reads them.
+ * @param caller - The entry point named in the message, such as `mcpAuth`
+ * @param env - The environment to read
+ * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
+ * not set.
+ */
+function requireClerkKeys(caller: string, env: ClerkEnv) {
+  const {
+    CLERK_SECRET_KEY,
+    CLERK_PUBLISHABLE_KEY,
+    CLERK_API_URL,
+    CLERK_API_VERSION,
+    CLERK_JWT_KEY,
+  } = env;
+  const keys = requireClerkEnvKeys(caller, { CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY });
+  // Only the ones that are set, so `createClerkClient` keeps its own defaults for the others
+  return {
+    secretKey: keys.CLERK_SECRET_KEY,
+    publishableKey: keys.CLERK_PUBLISHABLE_KEY,
+    ...(CLERK_API_URL && { apiUrl: CLERK_API_URL }),
+    ...(CLERK_API_VERSION && { apiVersion: CLERK_API_VERSION }),
+    ...(CLERK_JWT_KEY && { jwtKey: CLERK_JWT_KEY }),
+  };
+}
+
+/**
+ * The default Clerk client of an adapter that reads its keys per request, built from `env` and kept for each set of
+ * settings, loading `@clerk/backend` the first time. The package is an optional peer that only this path needs, so it
+ * is loaded with `import()` inside `try`: a bundler such as esbuild fails the build on a bare `import()` of a
+ * missing package, but not on one inside `try`.
+ * @param caller - The entry point named in the messages, such as `mcpAuth`
+ * @param env - The environment to read the keys from, such as a Worker's `env`. Only it is read when given; without
+ * it, `process.env` is read.
+ * @returns The client, the same one for the same settings. It throws a `Clerk error:` naming a missing key, or
+ * asking to install `@clerk/backend` when it can't be loaded.
+ */
+export async function envClerkClient(caller: string, env?: ClerkEnv): Promise<ClerkOAuthClient> {
+  const keys = requireClerkKeys(
+    caller,
+    env ?? (typeof process === 'undefined' ? {} : (process.env as ClerkEnv)),
+  );
+  // `requireClerkKeys` builds the settings in one key order and leaves out the ones not set, so each set of settings
+  // has one cache key
+  const cacheKey = JSON.stringify(keys);
+  const cached = envClerkClients.get(cacheKey);
+  if (cached) return cached;
+
+  let backend: typeof import('@clerk/backend');
+  try {
+    backend = await import('@clerk/backend');
+  } catch (error) {
+    throw new Error(`Clerk error: install @clerk/backend, or pass clerkClient to ${caller}`, {
+      cause: error,
+    });
+  }
+
+  const client = backend.createClerkClient(keys);
+  envClerkClients.set(cacheKey, client);
+  return client;
+}
+
 // The Frontend API URL of the publishable key a metadata handler read from the app's environment, or an error when it
 // is not set or is not a Clerk publishable key. It is checked before any request to Clerk, so a mistyped key throws to
 // the framework as a missing one does, instead of being answered as Clerk's failure.

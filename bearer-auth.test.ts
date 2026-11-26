@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   PUBLIC_BODY_LIMIT,
@@ -444,6 +444,129 @@ describe('public identity tool warning', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('envClerkClient', () => {
+  const keys = (n: number) => ({
+    CLERK_SECRET_KEY: `sk_test_${n}`,
+    CLERK_PUBLISHABLE_KEY: `${FAKE_PK}${n}`,
+  });
+
+  // A fresh module and a mocked @clerk/backend, since the clients built for each set of settings are kept for the
+  // life of the module
+  async function freshEnvClient() {
+    vi.resetModules();
+    const createClerkClient = vi.fn((settings: unknown) => ({
+      authenticateRequest: vi.fn(),
+      settings,
+    }));
+    vi.doMock('@clerk/backend', () => ({ createClerkClient }));
+    const { envClerkClient } = await import('./bearer-auth');
+    return { envClerkClient, createClerkClient };
+  }
+
+  afterEach(() => {
+    vi.doUnmock('@clerk/backend');
+  });
+
+  test('reuses one client for the same settings', async () => {
+    const { envClerkClient, createClerkClient } = await freshEnvClient();
+
+    const first = await envClerkClient('mcpAuth', keys(1));
+    const second = await envClerkClient('mcpAuth', { ...keys(1) });
+
+    expect(second).toBe(first);
+    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
+      secretKey: 'sk_test_1',
+      publishableKey: `${FAKE_PK}1`,
+    });
+  });
+
+  test('builds a different client for different settings', async () => {
+    const { envClerkClient, createClerkClient } = await freshEnvClient();
+
+    const first = await envClerkClient('mcpAuth', keys(1));
+    const otherKeys = await envClerkClient('mcpAuth', keys(2));
+    const otherApi = await envClerkClient('mcpAuth', {
+      ...keys(1),
+      CLERK_API_URL: 'https://api.clerkstage.dev',
+      CLERK_API_VERSION: 'v2',
+      CLERK_JWT_KEY: 'jwt-key-1',
+    });
+
+    expect(new Set([first, otherKeys, otherApi]).size).toBe(3);
+    expect(createClerkClient.mock.calls).toEqual([
+      [{ secretKey: 'sk_test_1', publishableKey: `${FAKE_PK}1` }],
+      [{ secretKey: 'sk_test_2', publishableKey: `${FAKE_PK}2` }],
+      [
+        {
+          secretKey: 'sk_test_1',
+          publishableKey: `${FAKE_PK}1`,
+          apiUrl: 'https://api.clerkstage.dev',
+          apiVersion: 'v2',
+          jwtKey: 'jwt-key-1',
+        },
+      ],
+    ]);
+  });
+
+  test('builds the client from the env it is given, without process.env', async () => {
+    const { envClerkClient, createClerkClient } = await freshEnvClient();
+    vi.stubEnv('CLERK_SECRET_KEY', undefined);
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', undefined);
+    try {
+      await envClerkClient('withClerkMcpAuth', keys(3));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
+      secretKey: 'sk_test_3',
+      publishableKey: `${FAKE_PK}3`,
+    });
+  });
+
+  test('reads only the env it is given, not process.env', async () => {
+    const { envClerkClient, createClerkClient } = await freshEnvClient();
+    vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_process');
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', FAKE_PK);
+    try {
+      await expect(envClerkClient('withClerkMcpAuth', {})).rejects.toThrow(
+        'Clerk error: withClerkMcpAuth needs the CLERK_SECRET_KEY environment variable or a clerkClient option',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(createClerkClient).not.toHaveBeenCalled();
+  });
+
+  test('reads process.env when no env is given', async () => {
+    const { envClerkClient, createClerkClient } = await freshEnvClient();
+    vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_4');
+    vi.stubEnv('CLERK_PUBLISHABLE_KEY', `${FAKE_PK}4`);
+    try {
+      await envClerkClient('mcpAuth');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
+      secretKey: 'sk_test_4',
+      publishableKey: `${FAKE_PK}4`,
+    });
+  });
+
+  test('names the caller when @clerk/backend cannot be loaded', async () => {
+    vi.resetModules();
+    vi.doMock('@clerk/backend', () => {
+      throw new Error('Cannot find package');
+    });
+    const { envClerkClient } = await import('./bearer-auth');
+
+    await expect(envClerkClient('withClerkMcpAuth', keys(5))).rejects.toThrow(
+      'Clerk error: install @clerk/backend, or pass clerkClient to withClerkMcpAuth',
+    );
   });
 });
 
