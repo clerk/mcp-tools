@@ -128,8 +128,8 @@ const fail: Fail = failFor(CALLER);
  * `withClerkMcpAuth` can open this view, and only views built here, without a token. Build it once at module scope,
  * not inside the server factory, so the URI is recorded before the first request arrives.
  *
- * It throws a `Clerk error:` for an option that is not valid, such as a URI outside `ui://` or a CSP entry that
- * is not an origin, and logs a one-time `Clerk warning:` for each URI whose template does not start with
+ * It throws a `Clerk error:` for an option that is not valid, such as a URI outside `ui://`, one not written as
+ * `new URL(uri).href` writes it, or a CSP entry that is not an origin, and logs a one-time `Clerk warning:` for each URI whose template does not start with
  * `<!DOCTYPE html>`, declares no `color-scheme`, or contains a Clerk secret key.
  * @param options - The view's name, URI, HTML, and optional listing metadata, CSP, and `prefersBorder`
  * @returns Arguments for `server.registerResource`
@@ -175,6 +175,16 @@ function assertOptions(options: unknown): asserts options is McpAppViewResourceO
   if (typeof uri !== 'string' || !uri.startsWith('ui://') || uri.length === 'ui://'.length) {
     fail('uri must be a ui:// URI, such as ui://my-server/view.html');
   }
+  // The MCP SDKs register a resource under its URI as given but look a read up by `new URL(uri).href`, so a view at a
+  // URI in another form could never be read, and `publicAccess.views` would open a string the SDK does not serve
+  const canonical = canonicalUri(uri);
+  if (canonical !== uri) {
+    fail(
+      canonical === undefined
+        ? `uri ${uri} is not a URL, such as ui://my-server/view.html`
+        : `uri must be written as the MCP SDKs read it, ${canonical}, not ${uri}`,
+    );
+  }
   if (typeof html !== 'string') fail("html must be the view's HTML document, as a string");
   for (const [key, value] of [
     ['title', title],
@@ -204,6 +214,16 @@ function assertOptions(options: unknown): asserts options is McpAppViewResourceO
         `csp.${key} must list origins, such as https://api.example.com or https://*.example.com, without a path. \`*\` and a bare scheme such as https: would allow every origin`,
       );
     }
+  }
+}
+
+// The URI as WHATWG URL parsing writes it, resolving dot segments and percent-encoding, or `undefined` when it does not
+// parse
+function canonicalUri(uri: string): string | undefined {
+  try {
+    return new URL(uri).href;
+  } catch {
+    return undefined;
   }
 }
 

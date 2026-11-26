@@ -167,6 +167,18 @@ describe('mcpAppViewResource options', () => {
       'Clerk error: mcpAppViewResource uri must be a ui:// URI, such as ui://my-server/view.html',
     ],
     [
+      { name: 'v', uri: 'ui://app/public/../private.html', html: HTML },
+      'Clerk error: mcpAppViewResource uri must be written as the MCP SDKs read it, ui://app/private.html, not ui://app/public/../private.html',
+    ],
+    [
+      { name: 'v', uri: 'ui://srv/a b.html', html: HTML },
+      'Clerk error: mcpAppViewResource uri must be written as the MCP SDKs read it, ui://srv/a%20b.html, not ui://srv/a b.html',
+    ],
+    [
+      { name: 'v', uri: 'ui://a b/view.html', html: HTML },
+      'Clerk error: mcpAppViewResource uri ui://a b/view.html is not a URL, such as ui://my-server/view.html',
+    ],
+    [
       { name: '', uri: 'ui://x', html: HTML },
       'Clerk error: mcpAppViewResource name must be a non-empty string',
     ],
