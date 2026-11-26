@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { AuthInfo } from '../mcp-types';
-import { mcpAuth } from '../hono/index';
+import { clerkInstrumentHandler as honoClerkInstrumentHandler } from '../hono/index';
 import { FAKE_PK } from '../test/mcp-harness';
 import {
   type McpAuthFailure,
@@ -302,6 +302,28 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/fetch', () => {
     expect(res.status).toBe(421);
   });
 
+  test('neither reports nor passes to onAuthFailure the metadata route 421 for an unlisted origin', async () => {
+    const onAuthFailure = vi.fn();
+    const reportFetch = vi.fn(async () => new Response(null, { status: 202 }));
+    const workerCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), {
+      resourceUrl: [resourceUrl],
+      onAuthFailure,
+      reporting: { fetch: reportFetch },
+    });
+
+    const res = await authedHandler(
+      new Request('https://other.example.com/.well-known/oauth-protected-resource/mcp'),
+      workerEnv,
+      workerCtx,
+    );
+
+    expect(res.status).toBe(421);
+    expect(onAuthFailure).not.toHaveBeenCalled();
+    expect(workerCtx.waitUntil).not.toHaveBeenCalled();
+    expect(reportFetch).not.toHaveBeenCalled();
+  });
+
   test('without resourceUrl, answers each metadata URL with the resource it was built from', async () => {
     const authedHandler = clerkInstrumentHandler(recordingHandler(), {
       verifyToken: () => undefined,
@@ -447,7 +469,7 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/fetch', () => {
     vi.stubEnv('CLERK_PUBLISHABLE_KEY', workerEnv.CLERK_PUBLISHABLE_KEY);
     vi.stubEnv('CLERK_JWT_KEY', workerEnv.CLERK_JWT_KEY);
     const app = new Hono();
-    app.post('/mcp', mcpAuth({ resourceUrl }), (c) => c.json({ authInfo: c.get('mcpAuth') }));
+    app.post('/mcp', honoClerkInstrumentHandler(recordingHandler(), { resourceUrl }));
 
     const honoRes = await app.request(mcpRequest(token));
 
