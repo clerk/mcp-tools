@@ -231,7 +231,7 @@ The [official MCP Registry](https://registry.modelcontextprotocol.io) lists serv
 - **Versions are immutable.** A published version can't be changed or republished, so bump `version` for every publish and update the card at the same time.
 - **Subdomain endpoints.** The registry does not check that a remote URL is on the proven domain, so `com.example/weather` may list `https://mcp.example.com/mcp`; prove the apex, `example.com`.
 
-`generateRegistryServerJson` takes the same options as `serverCardHandler` (without `maxAge`) and builds a `server.json` for the registry's [2025-12-11 server schema](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json), with one streamable HTTP remote for each `resourceUrl`. On top of the card's rules it enforces the registry's: https `icons` (at most 255 characters, `image/png`, `image/jpeg`, `image/jpg`, `image/svg+xml`, or `image/webp`, sizes `WxH` or `any`), an https `websiteUrl`, https remotes off `localhost`, a `github` or `gitlab` `repository`, and a version that is neither `latest` nor what the registry reads as a range, which includes a dotted version with an `x`, `X`, or `*` anywhere, such as `1.0.0-next`. The card's `_meta` is left out, since the registry drops every `_meta` key but its own. Keep the options in one module and write the file with a short script, so the card and the registry entry come from the same source:
+`generateRegistryServerJson` takes the same options as `serverCardHandler`, ignoring `maxAge`, and builds a `server.json` for the registry's [2025-12-11 server schema](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json), with one streamable HTTP remote for each `resourceUrl`. On top of the card's rules it enforces the registry's: https `icons` (at most 255 characters, `image/png`, `image/jpeg`, `image/jpg`, `image/svg+xml`, or `image/webp`, sizes `WxH` or `any`), an https `websiteUrl`, https remotes off `localhost`, a `github` or `gitlab` `repository`, and a version that is neither `latest` nor what the registry reads as a range, which includes a dotted version with an `x`, `X`, or `*` anywhere, such as `1.0.0-next`. The card's `_meta` is left out, since the registry drops every `_meta` key but its own. Keep the options in one module and write the file with a short script, so the card and the registry entry come from the same source:
 
 ```ts
 // scripts/write-server-json.ts, run before `mcp-publisher publish`
@@ -1163,7 +1163,7 @@ The above examples are more of a _guide_ for how to implement the tools, but for
 
 - `generateRegistryServerJson`
   - **Description:** Generates the `server.json` for the official MCP Registry from the Server Card options, as described in [Publish to the MCP Registry](#publish-to-the-mcp-registry): the card's `name`, `version`, `description`, `title`, `websiteUrl`, `icons`, and `repository`, the 2025-12-11 `$schema`, and one streamable HTTP remote for each `resourceUrl`. It throws a `Clerk error:` for anything the card can't have and for what the registry rejects: a non-https icon, website, or remote, a `localhost` remote, an icon media type or size the schema doesn't list, a repository off GitHub and GitLab, or the version `latest`. It fetches nothing. The document is frozen.
-  - **Params:** `RegistryServerJsonOptions`
+  - **Params:** the `serverCardHandler` options (`ServerCardHandlerOptions`); `maxAge` is ignored
   - **Returns:** `RegistryServerJson`
 
 - `McpAuthError`

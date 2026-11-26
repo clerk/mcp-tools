@@ -15,7 +15,6 @@ import {
 import {
   type McpRegistryAuthHandlerOptions,
   type RegistryServerJson,
-  type RegistryServerJsonOptions,
   generateRegistryServerJson,
   mcpRegistryAuthHandler,
 } from './hono';
@@ -235,9 +234,11 @@ describe('MCP Registry types', () => {
     expectTypeOf(serverJson.remotes).toEqualTypeOf<
       readonly { readonly type: 'streamable-http'; readonly url: string }[]
     >();
-    expectTypeOf<RegistryServerJsonOptions['resourceUrl']>().toEqualTypeOf<
-      string | readonly string[]
-    >();
+    expectTypeOf<
+      Parameters<typeof generateRegistryServerJson>[0]
+    >().toEqualTypeOf<ServerCardHandlerOptions>();
+    // The Server Card handler's options, maxAge included, describe the registry entry too
+    generateRegistryServerJson({ ...card, maxAge: 60 });
   });
 
   test('generateRegistryServerJson rejects generated fields and handler options', () => {

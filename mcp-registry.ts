@@ -9,12 +9,16 @@ import {
   failFor,
   isPlainObject,
 } from './discovery-options';
-import { type DiscoveryAnswer, type DiscoveryRequest, jsonErrorAnswer } from './discovery-response';
-import { type McpResourceUrl, assertResourceUrls } from './resource-url';
+import {
+  type DiscoveryAnswer,
+  type DiscoveryRequest,
+  type ServerCardHandlerOptions,
+  jsonErrorAnswer,
+} from './discovery-response';
+import { assertResourceUrls } from './resource-url';
 import {
   type ServerCard,
   type ServerCardIcon,
-  type ServerCardOptions,
   type ServerCardRepository,
   buildServerCard,
 } from './server-card';
@@ -24,20 +28,6 @@ import {
  */
 const REGISTRY_SERVER_SCHEMA =
   'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json';
-
-/**
- * Input to `generateRegistryServerJson`: the options `serverCardHandler` takes, without `maxAge`, so one object
- * describes both. `name` is the registry name too, in the reverse-DNS namespace you prove you own, such as
- * `com.example/weather` for `example.com`. Each `resourceUrl` becomes one streamable HTTP remote. `_meta` is not
- * copied: the registry keeps only its own `io.modelcontextprotocol.registry/publisher-provided` key, which a card's
- * `_meta` can't use.
- */
-export type RegistryServerJsonOptions = Omit<ServerCardOptions, 'resourceUrl'> & {
-  /**
-   * The exact https URL of the MCP endpoint, or a list of them, one for each origin, each listed as a remote
-   */
-  resourceUrl: McpResourceUrl;
-};
 
 /**
  * A `server.json` for the official MCP Registry, as `generateRegistryServerJson` generates it. It is frozen, all the
@@ -62,7 +52,10 @@ export type RegistryServerJson = {
  * repository, and a version that is neither `latest` nor what the registry reads as a range, such as `1.0.0-next`. It makes no request; publishing stays a step you
  * run yourself.
  * @see https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md
- * @param options - See `RegistryServerJsonOptions`
+ * @param options - The options `serverCardHandler` takes, so one object describes both. `name` is the registry name
+ * too, in the reverse-DNS namespace you prove you own, such as `com.example/weather` for `example.com`. Each
+ * `resourceUrl` becomes one streamable HTTP remote. `maxAge` is ignored, and `_meta` is not copied: the registry keeps
+ * only its own `io.modelcontextprotocol.registry/publisher-provided` key, which a card's `_meta` can't use.
  * @returns The `server.json`, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the
  * registry would reject.
  * @example
@@ -75,7 +68,7 @@ export type RegistryServerJson = {
  * });
  * ```
  */
-export function generateRegistryServerJson(options: RegistryServerJsonOptions): RegistryServerJson {
+export function generateRegistryServerJson(options: ServerCardHandlerOptions): RegistryServerJson {
   const caller = 'generateRegistryServerJson';
   const fail = failFor(caller);
   if (!isPlainObject(options)) {
@@ -83,7 +76,8 @@ export function generateRegistryServerJson(options: RegistryServerJsonOptions): 
       "takes the Server Card options, as generateRegistryServerJson({ name: 'com.example/weather', version: '1.0.0', description: 'Forecasts.', resourceUrl: 'https://mcp.example.com/mcp' })",
     );
   }
-  const { resourceUrl, ...card } = options;
+  // The handler's cache lifetime has no place in server.json
+  const { resourceUrl, maxAge: _maxAge, ...card } = options;
   assertResourceUrls(caller, resourceUrl);
   // A card for each URL checks the options as serverCardHandler does, so whatever the card takes the entry takes too
   const cards = [resourceUrl]

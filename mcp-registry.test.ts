@@ -105,6 +105,13 @@ describe('generateRegistryServerJson', () => {
     expectValid(serverJson);
   });
 
+  // One options object serves serverCardHandler and the registry script, so the handler's cache lifetime is ignored
+  test('takes the serverCardHandler options, ignoring maxAge', () => {
+    const serverJson = generateRegistryServerJson({ ...full, maxAge: 60 });
+    expect(serverJson).toEqual(generateRegistryServerJson(full));
+    expect(serverJson).not.toHaveProperty('maxAge');
+  });
+
   test("leaves out the card's _meta, which the registry would drop", () => {
     const serverJson = generateRegistryServerJson({
       ...required,

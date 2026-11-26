@@ -42,7 +42,6 @@ const SERVER: Surface = {
     'McpResourceUrl',
     'PublicAccess',
     'RegistryServerJson',
-    'RegistryServerJsonOptions',
     'ServerCard',
     'ServerCardIcon',
     'ServerCardOptions',
