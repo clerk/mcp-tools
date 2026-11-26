@@ -241,7 +241,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  * validates the options and generates the catalog when it is created, so it needs no Clerk keys or MCP SDK and never
  * fetches the cards it links to, and later changes to the options change nothing. The catalog is the same for every
  * request: to answer on several origins with their own cards, create one handler for each and pick it by origin. Mount
- * the one handler at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
+ * it at both paths with `app.all` so OPTIONS and other methods reach it; importing it mounts nothing.
  *
  * Any origin can read the catalog, served as `application/json` at a path ending in `/.well-known/ard.json`, the media
  * type the ARD publishing guide serves it with, and as `application/ai-catalog+json` at any other path. GET and HEAD
@@ -255,7 +255,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  * @returns The handler. It throws a `Clerk error:` naming the first option the catalog cannot have.
  * @example
  * ```ts
- * const catalog = aiCatalogHandler({
+ * const catalogHandler = aiCatalogHandler({
  *   entries: [
  *     {
  *       identifier: 'urn:air:example.com:weather',
@@ -265,8 +265,8 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  *   ],
  * });
  *
- * app.all('/.well-known/ard.json', catalog);
- * app.all('/.well-known/ai-catalog.json', catalog);
+ * app.all('/.well-known/ard.json', catalogHandler);
+ * app.all('/.well-known/ai-catalog.json', catalogHandler);
  * ```
  */
 export function aiCatalogHandler(options: AICatalogHandlerOptions) {

@@ -176,9 +176,9 @@ const catalog = generateAICatalog({
 });
 ```
 
-Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler reads the path only to pick the `Content-Type`, so it needs no configuration for either, and both answer with the same bytes and `ETag`, so one path's `ETag` revalidates the other's copy.
+Mount the one handler at both paths. [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) (ARD) v0.91 [section 5.1](https://agenticresourcediscovery.org/spec/#51-discovery-mechanisms) makes `/.well-known/ard.json` the canonical path, which a consumer MUST fetch, and `/.well-known/ai-catalog.json` its predecessor's path, which a consumer MAY also consult as an equivalent source. ARD says a publisher need not serve the predecessor path; serving both keeps clients that only know `ai-catalog.json` working. The handler reads the path only to pick the `Content-Type`, so it needs no configuration for either, and both answer with the same bytes and `ETag`.
 
-The handler answers as the Server Card handlers do, with `application/json` at a path ending in `/.well-known/ard.json`, the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves `ard.json` with, and with the AI Catalog's own `application/ai-catalog+json` at any other path: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
+The handler answers as the Server Card handlers do, with `application/json` at a path ending in `/.well-known/ard.json` (in any case, with or without a trailing slash), the media type the [ARD publishing guide](https://agenticresourcediscovery.org/how_to_publish/) serves `ard.json` with, and with the AI Catalog's own `application/ai-catalog+json` at any other path: the same methods, public CORS, weak `ETag` and conditional `GET` and `HEAD`, `maxAge` (an hour by default, `0` for `public, no-cache`), and errors sent with `Cache-Control: no-store`. The catalog is fixed and the same for every request, so it has no `resourceUrl` and never answers `421`. An app that answers on several origins, each linking its own card, creates one handler for each origin and picks it by the request's origin, scheme and port included, as `matchResourceUrl` does, answering `421` for an origin it has no handler for rather than falling back to another origin's catalog.
 
 For framework-specific implementations, see:
 
@@ -200,7 +200,7 @@ For framework-specific implementations, see:
 ```ts
 import { aiCatalogHandler } from '@clerk/mcp-tools/hono';
 
-const catalog = aiCatalogHandler({
+const catalogHandler = aiCatalogHandler({
   host: { displayName: 'Example Inc.', identifier: 'example.com' },
   entries: [
     {
@@ -213,8 +213,8 @@ const catalog = aiCatalogHandler({
   ],
 });
 
-app.all('/.well-known/ard.json', catalog);
-app.all('/.well-known/ai-catalog.json', catalog);
+app.all('/.well-known/ard.json', catalogHandler);
+app.all('/.well-known/ai-catalog.json', catalogHandler);
 app.get('/', (c) => {
   c.header('Link', '</.well-known/ard.json>; rel="ard"');
   return c.text('OK');
@@ -321,7 +321,7 @@ The example uses `challengeScopes`, not `requiredScopes`. `requiredScopes` makes
 - `tools`: the tools a `tools/call` may name without a token. Each tool is listed by name, and no value opens every tool.
 - `resources`: the resources a `resources/read` may ask for without a token. `true` opens every resource, and a list opens only the URIs it names. A URI is compared exactly as the client sends it, so a list cannot open the URIs of a resource template.
 - `prompts`: the prompts a `prompts/get` may ask for without a token. `true` opens every prompt, and a list opens only the prompts it names.
-- `views`: whether a `resources/read` or `subscriptions/listen` without a token may ask for an MCP App view, exactly the `ui://` URIs `mcpAppViewResource` built views for, and no other resource. It defaults to `true` when `discoverable` decides access, and to `false` next to a `methods` list; `views: false` closes them. See [Serving MCP App views](#serving-mcp-app-views).
+- `views`: whether a `resources/read` or `subscriptions/listen` without a token may ask for an MCP App view, exactly the `ui://` URIs `mcpAppViewResource` built views for in this process, and no other resource. It defaults to `true` when `discoverable` decides access, and to `false` next to a `methods` list; `views: false` closes them. See [Serving MCP App views](#serving-mcp-app-views).
 
 A call is open only when `publicAccess` names it, or it reads a view `views` opens. `tools`, `resources`, `prompts`, and `views: true` need `discoverable`: with `discoverable: false` no client without a token can connect to reach them, so naming any of them is a TypeScript error and throws a `Clerk error:` at startup. Empty placeholders, `tools: []`, `[]` or `false` for `resources` and `prompts`, and `views: false`, name nothing and are accepted, by TypeScript and at startup.
 
@@ -357,7 +357,7 @@ const options = {
 - A client connects through `initialize` before protocol revision 2026-07-28 and through `server/discover` from it, so a list that names one of them and not the other leaves some clients unable to connect. `initialize` covers the `notifications/initialized` notification that follows it.
 - `tools`, `resources`, `prompts`, and `views: true` need the list to include `initialize` or `server/discover`: without either, no client without a token can connect to reach the calls they name, so naming any of them throws a `Clerk error:` at startup.
 - The `GET` `405` and the `subscriptions/listen` rule follow the handshake: a `GET` without a token gets the `405` only when the list includes `initialize` or `server/discover`, and the `401` otherwise.
-- It never opens a call: `tools/call`, `resources/read`, or `prompts/get` in the list throws a `Clerk error:` at startup. A list leaves `views` off, since it names exactly what is open: set `views: true` next to it to open the views.
+- It never opens a call: `tools/call`, `resources/read`, or `prompts/get` in the list throws a `Clerk error:` at startup. Set `views: true` next to a list to open the views.
 
 ##### What a client without a token can reach
 
@@ -481,7 +481,7 @@ A tool shows its result in the view by naming its URI in `_meta.ui.resourceUri`.
 - The URI must use the `ui://` scheme, and the other options are checked as well: a mistake throws a `Clerk error:` when the view is built.
 - A template that does not start with `<!DOCTYPE html>`, declares no `color-scheme`, or contains a Clerk secret key (`sk_live_` or `sk_test_`) logs a one-time `Clerk warning:` for its URI, without throwing. Anyone who can read the view sees its HTML, so a key in it is leaked: remove it and rotate the key.
 
-Views are public by default. MCP Apps lets a host prefetch and cache a view before any tool runs, often before the user has signed in, and scanners read views to check them. So `mcpAuth` and `withClerkMcpAuth` open the `resources/read` of every view `mcpAppViewResource` built, and a `subscriptions/listen` (protocol revision 2026-07-28) to them, without a token, as [`publicAccess.views`](#public-access) describes. Only those exact URIs open: a `ui://` resource registered another way, or one a resource template matches, keeps the rule other resources have, and a request with a token is verified as usual. `mcpAppViewResource` records the URI when it builds the view, so build each view at module scope, as above, rather than inside the server factory, which first runs after a request has been checked; a view first built after that logs a one-time `Clerk warning:`. The record is for the whole process: every server in it opens the views any of them built, a URI stays open after its resource is removed, and test files that share `globalThis` (`vitest --no-isolate`, `bun test`) see the views earlier files built, so give each test's view its own URI.
+Views built with `mcpAppViewResource` are public by default, unless a `publicAccess.methods` list is set. MCP Apps lets a host prefetch and cache a view before any tool runs, often before the user has signed in, and scanners read views to check them. So `mcpAuth` and `withClerkMcpAuth` open the `resources/read` of every view `mcpAppViewResource` built, and a `subscriptions/listen` (protocol revision 2026-07-28) to them, without a token, as [`publicAccess.views`](#public-access) describes. Only those exact URIs open: a `ui://` resource registered another way, or one a resource template matches, keeps the rule other resources have, and a request with a token is verified as usual. `mcpAppViewResource` records the URI when it builds the view, so build each view at module scope, as above, rather than inside the server factory, which first runs after a request has been checked; a view first built after that logs a one-time `Clerk warning:`. The record is for the whole process: every server in it opens the views any of them built, a URI stays open after its resource is removed, and test files that share `globalThis` (`vitest --no-isolate`, `bun test`) see the views earlier files built, so give each test's view its own URI.
 
 A view template is shared HTML: the user's data reaches it only through the result of an authenticated tool call, which the host passes to the view. If your server renders per-user data into a template instead, set `publicAccess.views: false`, and every view needs a token. To open single views again, list their URIs in `publicAccess.resources`:
 

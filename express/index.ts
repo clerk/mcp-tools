@@ -311,7 +311,7 @@ export function serverCardHandler(options: ServerCardHandlerOptions) {
  * Any origin can read the catalog, served as `application/json` at a path ending in `/.well-known/ard.json`, the media
  * type the ARD publishing guide serves it with, and as `application/ai-catalog+json` at any other path. GET and HEAD
  * get it with a weak `ETag` and `Cache-Control: public, max-age=3600`, or `maxAge`'s seconds (`public, no-cache` for
- * `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight and another method a
+ * `0`), and a matching `If-None-Match` gets a 304 without a body. OPTIONS gets the CORS preflight, and another method a
  * 405 with `Cache-Control: no-store`. Only the request's path is read, so a request without a `Host` header still gets
  * the catalog, and both paths get the same body and `ETag`.
  * @see https://github.com/Agent-Card/ai-catalog
