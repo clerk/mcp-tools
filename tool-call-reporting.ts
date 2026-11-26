@@ -775,7 +775,13 @@ function isReportableClientId(clientId: string): boolean {
   if (!CLIENT_ID_URL_PATTERN.test(clientId)) return false;
   const path = clientId.slice(clientId.indexOf('/', 'https://'.length)).split('?', 1)[0]!;
   if (path === '/') return false;
-  if (path.split('/').some((segment) => segment === '.' || segment === '..')) return false;
+  if (
+    path.split('/').some((segment) => {
+      const decoded = segment.replace(/%2e/gi, '.');
+      return decoded === '.' || decoded === '..';
+    })
+  )
+    return false;
   try {
     return new URL(clientId).protocol === 'https:';
   } catch {

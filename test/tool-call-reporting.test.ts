@@ -1578,7 +1578,12 @@ describe('client IDs in reports', () => {
     ['a URL with dots inside a segment', 'https://app.example.com/a./..b/.../client.json'],
     ['a URL with dot segments in its query', 'https://app.example.com/client?next=/../x/./y'],
     ['a URL with an empty segment', 'https://app.example.com//client'],
-    ['a URL with a percent-encoded dot segment', 'https://app.example.com/%2e/client'],
+    ['a URL with encoded dots inside a segment', 'https://app.example.com/a/%2e%2ex/client'],
+    ['a URL with an encoded dot prefix', 'https://app.example.com/%2ewell-known/client'],
+    [
+      'a URL with a percent-encoded dot segment in its query',
+      'https://app.example.com/client?next=/%2e%2e/x',
+    ],
   ])('report %s as sent', async (_, sent) => {
     expect((await reportedClientId(sent)).clientId).toBe(sent);
   });
@@ -1601,6 +1606,15 @@ describe('client IDs in reports', () => {
     ['a URL with a .. segment', 'https://app.example.com/a/../client'],
     ['a URL ending with a .. segment', 'https://app.example.com/client/..'],
     ['a URL with a .. segment before a query', 'https://app.example.com/client/..?tenant=acme'],
+    ['a URL starting with an encoded . segment', 'https://app.example.com/%2e/client'],
+    ['a URL with an upper-case encoded . segment', 'https://app.example.com/a/%2E/b'],
+    ['a URL ending with an encoded . segment', 'https://app.example.com/client/%2e'],
+    ['a URL with an encoded .. segment', 'https://app.example.com/a/%2e%2e/b'],
+    ['a URL with a mixed literal and encoded .. segment', 'https://app.example.com/a/.%2E/b'],
+    [
+      'a URL with a mixed encoded and literal .. segment before a query',
+      'https://app.example.com/%2e./?tenant=acme',
+    ],
     ['a URL without a host', 'https:///client'],
     ['a URL with credentials', 'https://user:secret@app.example.com/client'],
     ['a URL with an empty userinfo', 'https://@app.example.com/client'],
