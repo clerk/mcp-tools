@@ -52,10 +52,10 @@ function reachableFiles(entry: string) {
 
 const relative = (file: string) => file.slice(root.length + 1);
 
-function sdkImports(entry: string) {
+function sdkImports(entry: string, packagePrefix = '@modelcontextprotocol/sdk') {
   return reachableFiles(entry).flatMap((file) =>
     importedSpecifiers(file)
-      .filter((specifier) => specifier.startsWith('@modelcontextprotocol/sdk'))
+      .filter((specifier) => specifier.startsWith(packagePrefix))
       .map((specifier) => `${relative(file)} imports ${specifier}`),
   );
 }
@@ -78,12 +78,7 @@ describe('server entry points', () => {
 
   // `createClerkMcpWorker` in the fetch entry is built on MCP SDK 2.x; the wrapper stays usable without any MCP SDK
   test('clerkInstrumentHandler from the fetch entry imports no MCP SDK package', () => {
-    const sdkPackages = reachableFiles('fetch/instrument-handler.ts').flatMap((file) =>
-      importedSpecifiers(file)
-        .filter((specifier) => specifier.startsWith('@modelcontextprotocol/'))
-        .map((specifier) => `${relative(file)} imports ${specifier}`),
-    );
-    expect(sdkPackages).toEqual([]);
+    expect(sdkImports('fetch/instrument-handler.ts', '@modelcontextprotocol/')).toEqual([]);
   });
 
   test('the import scan finds the SDK where it is used', () => {
@@ -143,6 +138,20 @@ vi.mock('@modelcontextprotocol/server', () => {
   throw new Error('Cannot find package @modelcontextprotocol/server');
 });
 
+// The fetch entry's request: a POST with a token `verifyToken` accepts, an empty Worker env, and a no-op ctx
+const verifyToken = async () => ({
+  token: 'token-1',
+  clientId: 'client-1',
+  scopes: [],
+  expiresAt: Math.floor(Date.now() / 1000) + 3600,
+});
+const bearerPost = () =>
+  new Request('https://mcp.example.com/mcp', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer token-1' },
+  });
+const workerCtx = { waitUntil: () => {}, passThroughOnException: () => {} };
+
 describe('the fetch entry without MCP SDK 2.x', () => {
   test('fetch/index.ts has no top-level runtime import from an MCP SDK package', () => {
     expect(runtimeImports('fetch/index.ts', '@modelcontextprotocol/')).toEqual([]);
@@ -157,28 +166,16 @@ describe('the fetch entry without MCP SDK 2.x', () => {
   test('createClerkMcpWorker asks to install @modelcontextprotocol/server when it can not be loaded', async () => {
     const { createClerkMcpWorker } = await import('./fetch/index');
     const worker = createClerkMcpWorker({
-      verifyToken: async () => ({
-        token: 'token-1',
-        clientId: 'client-1',
-        scopes: [],
-        expiresAt: Math.floor(Date.now() / 1000) + 3600,
-      }),
+      verifyToken,
       server: () => {
         throw new Error('not reached');
       },
     });
 
     try {
-      await expect(
-        worker.fetch(
-          new Request('https://mcp.example.com/mcp', {
-            method: 'POST',
-            headers: { Authorization: 'Bearer token-1' },
-          }),
-          {},
-          { waitUntil: () => {}, passThroughOnException: () => {} },
-        ),
-      ).rejects.toThrow('Clerk error: install @modelcontextprotocol/server');
+      await expect(worker.fetch(bearerPost(), {}, workerCtx)).rejects.toThrow(
+        'Clerk error: install @modelcontextprotocol/server',
+      );
       expect(sdkLoads).toContain('@modelcontextprotocol/server');
     } finally {
       sdkLoads.length = 0;
@@ -231,24 +228,10 @@ describe('the adapter entry points without Clerk packages', () => {
     const { clerkInstrumentHandler } = await import('./fetch/index');
     const authedHandler = clerkInstrumentHandler(
       (_request, { authInfo }) => Response.json({ clientId: authInfo?.clientId }),
-      {
-        verifyToken: async () => ({
-          token: 'token-1',
-          clientId: 'client-1',
-          scopes: [],
-          expiresAt: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      },
+      { verifyToken },
     );
 
-    const res = await authedHandler(
-      new Request('https://mcp.example.com/mcp', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer token-1' },
-      }),
-      {},
-      { waitUntil: () => {}, passThroughOnException: () => {} },
-    );
+    const res = await authedHandler(bearerPost(), {}, workerCtx);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ clientId: 'client-1' });
