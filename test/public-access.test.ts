@@ -567,7 +567,7 @@ describe('MCP App views on a server with publicAccess', () => {
       mcpAppViewResource({ name: late, uri: late, html: VIEW_HTML });
       expect(warn.mock.calls).toEqual([
         [
-          'Clerk warning: mcpAppViewResource built ui://docs/late.html after mcpAuth checked a request, so publicAccess.views did not open it for the requests before. Build views once at module scope, not inside the server factory.',
+          "Clerk warning: mcpAppViewResource built ui://docs/late.html after mcpAuth or withClerkMcpAuth checked a request in this process, so publicAccess.views may not have opened it for requests checked before it was built. Build views once at module scope, not inside the server factory; a module first loaded after another server's requests, such as a lazily loaded route, logs this too.",
         ],
       ]);
       const opened = await read(PUBLIC_TOOLS, late);
