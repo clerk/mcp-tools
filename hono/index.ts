@@ -32,9 +32,8 @@ import {
   type ReportingOption,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
-  checkToolCallContext,
+  flushAfterResponse,
   hashSessionId,
-  onResponseEnd,
   reportAuthFailure,
   reportingKey,
   resolveReporting,
@@ -600,19 +599,11 @@ export function clerkInstrumentHandler(handler: McpHandler, options: McpAuthOpti
         : await handler.fetch(request, { ...(authInfo && { authInfo }) });
     if (!context || !reporting) return response;
 
-    let ended!: () => void;
-    const end = new Promise<void>((resolve) => (ended = resolve));
-    try {
-      c.executionCtx.waitUntil(end.then(() => context.flush()));
-    } catch {}
-    return onResponseEnd(response, () => {
-      checkToolCallContext('clerkInstrumentHandler', context, reporting, {
-        method: c.req.method,
-        status: response.status,
-        mcpMethod: c.req.header('mcp-method'),
-      });
-      ended();
-    });
+    return flushAfterResponse(
+      response,
+      { caller: 'clerkInstrumentHandler', context, reporting, request },
+      (work) => c.executionCtx.waitUntil(work),
+    );
   };
 }
 

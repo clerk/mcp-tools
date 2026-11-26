@@ -20,9 +20,8 @@ import {
   type ReportingOption,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
-  checkToolCallContext,
+  flushAfterResponse,
   hashSessionId,
-  onResponseEnd,
   reportAuthFailure,
   resolveReporting,
 } from '../tool-call-reporting';
@@ -289,20 +288,11 @@ export function fetchInstrumentHandler<Env, Ctx>(
         : await handler.fetch(request, { ...(authInfo && { authInfo }) });
     if (!context || !reporting) return response;
 
-    let ended!: () => void;
-    const end = new Promise<void>((resolve) => (ended = resolve));
-    waitUntil(
-      ctx,
-      end.then(() => context.flush()),
+    return flushAfterResponse(
+      response,
+      { caller: reportingCaller, context, reporting, request },
+      (work) => waitUntil(ctx, work),
     );
-    return onResponseEnd(response, () => {
-      checkToolCallContext(reportingCaller, context, reporting, {
-        method: request.method,
-        status: response.status,
-        mcpMethod: request.headers.get('mcp-method'),
-      });
-      ended();
-    });
   };
 }
 

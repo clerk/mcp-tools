@@ -1106,3 +1106,34 @@ export function onResponseEnd(response: Response, onEnd: () => void): Response {
     headers: response.headers,
   });
 }
+
+/**
+ * Sends the request's reports once `response` is over, with `keepAlive`, such as `ctx.waitUntil`, holding the runtime
+ * open for them, and warns once if the request never reached an instrumented server. `keepAlive` may return a
+ * promise, which is awaited, and may throw or reject: the response is sent either way.
+ * @returns The response to send in place of `response`
+ */
+export async function flushAfterResponse(
+  response: Response,
+  {
+    caller,
+    context,
+    reporting,
+    request,
+  }: { caller: string; context: ToolCallContext; reporting: object; request: Request },
+  keepAlive: (work: Promise<void>) => unknown,
+): Promise<Response> {
+  let ended!: () => void;
+  const end = new Promise<void>((resolve) => (ended = resolve));
+  try {
+    await keepAlive(end.then(() => context.flush()));
+  } catch {}
+  return onResponseEnd(response, () => {
+    checkToolCallContext(caller, context, reporting, {
+      method: request.method,
+      status: response.status,
+      mcpMethod: request.headers.get('mcp-method'),
+    });
+    ended();
+  });
+}

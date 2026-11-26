@@ -27,9 +27,8 @@ import {
   type ReportingOption,
   AUTH_FAILURE_BODY_LIMIT,
   beginToolCallContext,
-  checkToolCallContext,
+  flushAfterResponse,
   hashSessionId,
-  onResponseEnd,
   reportAuthFailure,
   reportingKey,
   resolveReporting,
@@ -540,17 +539,11 @@ export function clerkInstrumentHandler(
         : await handler.fetch(req, { ...(authInfo && { authInfo }) });
     if (!context || !reporting) return response;
 
-    let ended!: () => void;
-    const end = new Promise<void>((resolve) => (ended = resolve));
-    await keepAlive(end.then(() => context.flush()));
-    return onResponseEnd(response, () => {
-      checkToolCallContext('clerkInstrumentHandler', context, reporting, {
-        method: req.method,
-        status: response.status,
-        mcpMethod: req.headers.get('mcp-method'),
-      });
-      ended();
-    });
+    return flushAfterResponse(
+      response,
+      { caller: 'clerkInstrumentHandler', context, reporting, request: req },
+      keepAlive,
+    );
   };
 }
 
