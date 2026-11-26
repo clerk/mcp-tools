@@ -506,7 +506,11 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/express', () => {
 
     await withListening(app, (baseUrl) => callTools(fetch, `${baseUrl}/mcp`));
 
-    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+    // `streamableHttpHandler` also warns, once per process, that it is deprecated; `sdk1-deprecation.test.ts` covers it
+    const warnings = warn.mock.calls
+      .map(([message]) => message)
+      .filter((message) => !String(message).startsWith('Clerk warning: `streamableHttpHandler`'));
+    expect(warnings).toEqual([
       expect.stringMatching(
         /^Clerk warning: clerkInstrumentServer only sees tool calls that clerkInstrumentHandler authenticated/,
       ),

@@ -40,6 +40,7 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
+import { warnStreamableHttpHandlerDeprecated } from '../streamable-http-deprecation';
 
 declare global {
   namespace Express {
@@ -535,7 +536,10 @@ function getRequestUrl(req: express.Request): string | undefined {
  * @typeParam Transport - The transport the class creates, inferred from the class alone
  * @typeParam Server - The server `createServer` returns. It is a separate type parameter so that `Transport` is not
  * inferred from the SDK's general `Transport` interface, which `McpServer.connect` takes.
- * @deprecated Use `clerkInstrumentHandler(handler, options)` with the handler `createMcpHandler` from MCP SDK 2.x returns
+ * @deprecated `streamableHttpHandler` is the MCP SDK 1.x path (`@modelcontextprotocol/sdk`): it can't serve protocol
+ * revision 2026-07-28 or `server/discover`, so clients fall back to an older revision. Build the server with MCP SDK
+ * 2.x (`@modelcontextprotocol/server`) and serve the handler `createMcpHandler` returns with
+ * `clerkInstrumentHandler(handler, options)`. `streamableHttpHandler` will be removed in `@clerk/mcp-tools` 2.0.
  */
 export function streamableHttpHandler<
   Transport extends NodeStreamableHttpTransport,
@@ -547,6 +551,7 @@ export function streamableHttpHandler<
     'StreamableHTTPServerTransport',
     'streamableHttp.js',
   );
+  warnStreamableHttpHandlerDeprecated();
 
   return async (req: express.Request, res: express.Response) => {
     if (req.method !== 'POST') {
