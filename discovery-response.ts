@@ -85,16 +85,38 @@ const errorAnswer = (
   status: 400 | 405 | 412 | 421,
   error: string,
   headers: Record<string, string> = {},
+  corsHeaders: Record<string, string> = discoveryCorsHeaders,
 ): DiscoveryAnswer => ({
   status,
   headers: {
-    ...discoveryCorsHeaders,
+    ...corsHeaders,
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store',
     ...headers,
   },
   body: JSON.stringify({ error }),
 });
+
+/**
+ * The answer a route that serves a document to GET and HEAD gives any other method: the CORS preflight for OPTIONS,
+ * and for the rest a JSON 405 with `Allow` and `Cache-Control: no-store`. The discovery handlers and the fetch entry's
+ * protected resource metadata route share it.
+ * @param method - The request's method
+ * @param corsHeaders - The route's CORS headers, the discovery documents' by default
+ * @returns The answer, or `undefined` for GET and HEAD, which get the document
+ */
+export function methodAnswer(
+  method: string,
+  corsHeaders: Record<string, string> = discoveryCorsHeaders,
+): DiscoveryAnswer | undefined {
+  if (method === 'OPTIONS') {
+    return { status: 200, headers: { ...corsHeaders, Allow: ALLOW }, body: null };
+  }
+  if (method !== 'GET' && method !== 'HEAD') {
+    return errorAnswer(405, 'method_not_allowed', { Allow: ALLOW }, corsHeaders);
+  }
+  return undefined;
+}
 
 /**
  * Validates a `serverCardHandler`'s options and generates the card for each configured URL once, so the answers are
@@ -174,12 +196,8 @@ function discoveryResponder(
   const pick = representationPicker(config.build());
 
   const answer = ({ method, url, ifMatch, ifNoneMatch }: DiscoveryRequest): DiscoveryAnswer => {
-    if (method === 'OPTIONS') {
-      return { status: 200, headers: { ...discoveryCorsHeaders, Allow: ALLOW }, body: null };
-    }
-    if (method !== 'GET' && method !== 'HEAD') {
-      return errorAnswer(405, 'method_not_allowed', { Allow: ALLOW });
-    }
+    const notServed = methodAnswer(method);
+    if (notServed) return notServed;
     const picked = pick(url);
     if ('status' in picked) return picked;
     const { body, etag } = picked;

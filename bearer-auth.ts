@@ -955,12 +955,18 @@ export const methodNotAllowed = {
 } as const;
 
 /**
+ * The well-known path of the protected resource metadata (RFC 9728 section 3), inserted before a resource's path and
+ * query.
+ */
+export const PROTECTED_RESOURCE_WELL_KNOWN = '/.well-known/oauth-protected-resource';
+
+/**
  * The RFC 9728 section 3 metadata URL for a resource: the well-known path goes between the host and the resource's
  * path and query.
  */
 export function resourceMetadataUrlFor(resourceUrl: string): string {
   const { origin, pathname, search } = new URL(resourceUrl);
-  return `${origin}/.well-known/oauth-protected-resource${pathname === '/' ? '' : pathname}${search}`;
+  return `${origin}${PROTECTED_RESOURCE_WELL_KNOWN}${pathname === '/' ? '' : pathname}${search}`;
 }
 
 // The resource a protected resource metadata URL describes, the inverse of `resourceMetadataUrlFor`: the well-known
@@ -969,7 +975,7 @@ export function resourceMetadataUrlFor(resourceUrl: string): string {
 // 9728 section 3.3 has clients discard metadata whose `resource` is not identical to the URL they derived it from.
 function resourceFromMetadataUrl(metadataUrl: string): string {
   const { origin, pathname, search } = new URL(metadataUrl);
-  return `${origin}${pathname.replace('/.well-known/oauth-protected-resource', '')}${search}`;
+  return `${origin}${pathname.replace(PROTECTED_RESOURCE_WELL_KNOWN, '')}${search}`;
 }
 
 /**

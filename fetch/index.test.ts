@@ -151,6 +151,70 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 
+  test('answers a HEAD to the metadata route with the headers a GET gets', async () => {
+    const handler = recordingHandler();
+    const authedHandler = withClerkMcpAuth(handler, { resourceUrl });
+
+    const res = await authedHandler(
+      new Request(RESOURCE_METADATA_URL, { method: 'HEAD' }),
+      workerEnv,
+      ctx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('answers another method to the metadata route with a 405 that is never stored', async () => {
+    const handler = recordingHandler();
+    const authedHandler = withClerkMcpAuth(handler, { resourceUrl });
+
+    const res = await authedHandler(
+      new Request(RESOURCE_METADATA_URL, { method: 'POST' }),
+      workerEnv,
+      ctx,
+    );
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('GET, HEAD, OPTIONS');
+    // RFC 9111 section 5.2.2.5: a 405 is heuristically cacheable without it
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(await res.json()).toEqual({ error: 'method_not_allowed' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // RFC 9728 section 3: the well-known path goes before the path and query, so a resourceUrl with a query has one
+  // metadata URL, with that query, and section 3.3 has a client that built another discard the metadata
+  test('routes a resourceUrl with a query on the path and the query', async () => {
+    const handler = recordingHandler();
+    const tenantUrl = 'https://mcp.example.com/mcp?tenant=a';
+    const authedHandler = withClerkMcpAuth(handler, {
+      resourceUrl: tenantUrl,
+      verifyToken: (token) => ({
+        token,
+        clientId: 'client_123',
+        scopes: [],
+        expiresAt: Date.now() / 1000 + 60,
+      }),
+    });
+    const authorized = (url: string) =>
+      new Request(url, { headers: { Authorization: 'Bearer t' } });
+
+    const [metadata, otherQuery, noQuery] = await Promise.all([
+      authedHandler(authorized(`${RESOURCE_METADATA_URL}?tenant=a`), workerEnv, ctx),
+      authedHandler(authorized(`${RESOURCE_METADATA_URL}?tenant=b`), workerEnv, ctx),
+      authedHandler(authorized(RESOURCE_METADATA_URL), workerEnv, ctx),
+    ]);
+
+    expect(await metadata.json()).toMatchObject({ resource: tenantUrl });
+    expect(await otherQuery.json()).toMatchObject({ authInfo: { token: 't' } });
+    expect(await noQuery.json()).toMatchObject({ authInfo: { token: 't' } });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
   // RFC 9728 section 3.3: a client discards metadata whose `resource` is not the URL it built the metadata URL from,
   // so only the metadata URL of a listed `resourceUrl` (section 3.1) is answered, and the Worker keeps the rest
   test.each([

@@ -2,6 +2,7 @@ import type { AuthInfo } from '../mcp-types';
 import {
   type ClerkEnv,
   type MiddlewareAuthOptions,
+  PROTECTED_RESOURCE_WELL_KNOWN,
   type ProtectedResourceMetadataOptions,
   assertMcpAuthOptions,
   assertVerifierOrResourceUrl,
@@ -12,7 +13,8 @@ import {
   resourceMetadataUrlFor,
   serverErrorAnswer,
 } from '../bearer-auth';
-import { matchResourceUrl } from '../resource-url';
+import { methodAnswer } from '../discovery-response';
+import { type McpResourceUrl, matchResourceUrl } from '../resource-url';
 import { type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 // This module must stay free of any MCP SDK import (`sdk-free-entries.test.ts` checks it), so a Worker that serves MCP
@@ -67,8 +69,6 @@ type McpAuthFailureOption = {
 export type McpAuthOptions<Env = ClerkEnv, Ctx = WorkerExecutionContext> = McpAuthFailureOption &
   MiddlewareAuthOptions<McpFetchRequest<Env, Ctx>>;
 
-const WELL_KNOWN = '/.well-known/oauth-protected-resource';
-
 const withClerkMcpAuthCaller = 'withClerkMcpAuth from @clerk/mcp-tools/fetch';
 const withClerkMcpAuthCallForm =
   'withClerkMcpAuth(handler, { resourceUrl }), or as withClerkMcpAuth(handler, { verifyToken }) to verify tokens with your own function';
@@ -80,10 +80,11 @@ const withClerkMcpAuthCallForm =
  * the handler can be any `fetch`-style MCP handler, such as `createMcpHandler` from `@modelcontextprotocol/server`.
  *
  * Route both the MCP endpoint and its metadata URL (RFC 9728 section 3.1: `/.well-known/oauth-protected-resource`
- * followed by the endpoint's path) to the wrapped handler. A GET or HEAD there gets the metadata, with the publishable key read from the Worker's
- * `CLERK_PUBLISHABLE_KEY`, and an OPTIONS the CORS preflight; a request to an origin no listed `resourceUrl` has gets
- * a 421. Any other path, such as the bare well-known root, goes through the auth check to the handler. Without
- * `resourceUrl`, any path below the well-known prefix gets the metadata for the resource it describes.
+ * followed by the endpoint's path and query) to the wrapped handler. A GET or HEAD there gets the metadata, with the
+ * publishable key read from the Worker's `CLERK_PUBLISHABLE_KEY`, an OPTIONS the CORS preflight, and another method a
+ * 405 with `Cache-Control: no-store`; a request to an origin no listed `resourceUrl` has gets a 421. Any other path or
+ * query, such as the bare well-known root, goes through the auth check to the handler. Without `resourceUrl`, any
+ * path below the well-known prefix gets the metadata for the resource it describes.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
  * @see https://datatracker.ietf.org/doc/html/rfc6750#section-3
  * @param handler - The MCP handler, called with the request and `{ authInfo, env, ctx }`
@@ -193,34 +194,44 @@ export function fetchMcpAuth<Env, Ctx>(
   };
 }
 
-// The path of a resource's metadata URL (RFC 9728 section 3.1)
-const metadataPath = (resourceUrl: string) => new URL(resourceMetadataUrlFor(resourceUrl)).pathname;
+// The path and query of a URL, which together pick a resource's metadata URL (RFC 9728 section 3)
+const pathAndQuery = (url: string) => {
+  const { pathname, search } = new URL(url);
+  return pathname + search;
+};
+
+// The path and query of a resource's metadata URL (RFC 9728 section 3.1)
+const metadataPath = (resourceUrl: string) => pathAndQuery(resourceMetadataUrlFor(resourceUrl));
 
 /**
  * Whether a request URL is one this entry answers with the protected resource metadata. RFC 9728 section 3.3 has a
  * client discard metadata whose `resource` is not the URL it inserted the well-known path into, so with `resourceUrl`
- * only the metadata path of the listed URL for the request's origin is answered, or for an origin no listed URL has,
- * the metadata path of any listed URL, which gets the 421. Every other path, such as the bare well-known root, is the
- * Worker's. Without `resourceUrl` the resource is derived from the requested path, so any path below the well-known
- * prefix is answered.
+ * only the metadata path and query of the listed URL for the request's origin is answered, or for an origin no listed
+ * URL has, the metadata path and query of any listed URL, which gets the 421. Every other path or query, such as the
+ * bare well-known root, is the Worker's. Without `resourceUrl` the resource is derived from the requested path, so any
+ * path below the well-known prefix is answered.
  */
-function metadataRoute(resourceUrl: string | readonly string[] | undefined) {
+function metadataRoute(resourceUrl: McpResourceUrl | undefined) {
   if (resourceUrl === undefined) {
     return (url: string) => {
       const { pathname } = new URL(url);
-      return pathname === WELL_KNOWN || pathname.startsWith(`${WELL_KNOWN}/`);
+      return (
+        pathname === PROTECTED_RESOURCE_WELL_KNOWN ||
+        pathname.startsWith(`${PROTECTED_RESOURCE_WELL_KNOWN}/`)
+      );
     };
   }
   const paths = new Set([resourceUrl].flat().map(metadataPath));
   return (url: string) => {
-    const { pathname } = new URL(url);
-    if (!paths.has(pathname)) return false;
+    const requested = pathAndQuery(url);
+    if (!paths.has(requested)) return false;
     const resource = matchResourceUrl(resourceUrl, url);
-    return resource === undefined || metadataPath(resource) === pathname;
+    return resource === undefined || metadataPath(resource) === requested;
   };
 }
 
-// The protected resource metadata (RFC 9728 section 3), for the resource the requested well-known path describes
+// The protected resource metadata (RFC 9728 section 3) for the listed `resourceUrl` of the request's origin, or
+// without `resourceUrl` for the resource the requested metadata URL describes
 function metadataResponse(
   options: Pick<
     ProtectedResourceMetadataOptions,
@@ -229,15 +240,8 @@ function metadataResponse(
   request: Request,
   publishableKey: string | undefined,
 ) {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: metadataCorsHeaders });
-  }
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    return new Response(null, {
-      status: 405,
-      headers: { ...metadataCorsHeaders, Allow: 'GET, HEAD, OPTIONS' },
-    });
-  }
+  const notServed = methodAnswer(request.method, metadataCorsHeaders);
+  if (notServed) return new Response(notServed.body, notServed);
   const { resourceUrl, requiredScopes, challengeScopes } = options;
   const answer = protectedResourceMetadataAnswer(
     { resourceUrl, requiredScopes, challengeScopes },
