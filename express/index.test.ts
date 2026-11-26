@@ -1494,4 +1494,31 @@ describe('aiCatalogHandler on a router', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe(mediaType);
   });
+
+  // app.use hands the handler its mount path with a trailing slash, and a route matches with one, or in another case
+  test.each([
+    ['app.use', '/.well-known/ard.json'],
+    ['app.all', '/.well-known/ard.json/'],
+    ['app.all', '/.well-known/ARD.json'],
+  ])(
+    'serves ard.json as application/json when mounted with %s and requested at %s',
+    async (mountWith, path) => {
+      const handler = aiCatalogHandler({
+        entries: [
+          {
+            identifier: 'urn:air:example.com:weather:mcp',
+            displayName: 'Weather',
+            url: 'https://mcp.example.com/mcp/server-card',
+          },
+        ],
+      });
+      const app = express();
+      if (mountWith === 'app.use') app.use('/.well-known/ard.json', handler);
+      else app.all('/.well-known/ard.json', handler);
+
+      const res = await withListening(app, (baseUrl) => fetch(`${baseUrl}${path}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('application/json');
+    },
+  );
 });

@@ -2618,6 +2618,9 @@ describe.each(discoveryAdapters)('%s aiCatalogHandler media type', (_name, mount
     [CATALOG_PATH, CATALOG_TYPE],
     ['/catalog.json', CATALOG_TYPE],
     ['/.well-known/ard.json.bak', CATALOG_TYPE],
+    // Express routes both of these to a handler mounted at ard.json, and Next.js with trailingSlash: true the first
+    ['/.well-known/ard.json/', ARD_TYPE],
+    ['/.well-known/ARD.json', ARD_TYPE],
   ])('serves %s as %s', async (path, type) => {
     const res = await serve(mount('aiCatalogHandler', path, options), path);
 

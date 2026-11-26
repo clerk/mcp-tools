@@ -150,10 +150,15 @@ export function serverCardResponder(caller: string, options: unknown) {
 // `application/json`. The AI Catalog's own path, `/.well-known/ai-catalog.json`, and any other keep its media type.
 const ARD_PATH = '/.well-known/ard.json';
 
+// Express routes case-insensitively and with or without a trailing slash, `app.use` hands a handler its mount path
+// with one, and Next.js serves every route with one under `trailingSlash: true`, so the comparison ignores both
+const isArdPath = (path: string) => path.replace(/\/+$/, '').toLowerCase().endsWith(ARD_PATH);
+
 /**
  * Validates an `aiCatalogHandler`'s options and generates its catalog once, so the answers are fixed: changing the
- * options afterward changes nothing. Every path gets the same body and ETag; a path ending in `/.well-known/ard.json`
- * gets it as `application/json`, and any other as `application/ai-catalog+json`.
+ * options afterward changes nothing. Every path gets the same body and ETag; a path ending in `/.well-known/ard.json`,
+ * in any case and with or without a trailing slash, gets it as `application/json`, and any other as
+ * `application/ai-catalog+json`.
  * @see https://agenticresourcediscovery.org/how_to_publish/
  * @param caller - The entry point named in error messages
  * @param options - The handler's options, unchecked
@@ -165,8 +170,7 @@ export function aiCatalogResponder(caller: string, options: unknown) {
   const { maxAge, ...catalog } = isObject ? (options as AICatalogHandlerOptions) : {};
   return discoveryResponder(caller, {
     maxAge,
-    mediaType: ({ path }) =>
-      path.endsWith(ARD_PATH) ? 'application/json' : 'application/ai-catalog+json',
+    mediaType: ({ path }) => (isArdPath(path) ? 'application/json' : 'application/ai-catalog+json'),
     // One catalog, whatever the request's URL
     build: () => ({ document: buildAICatalog(caller, isObject ? catalog : options) }),
   });
