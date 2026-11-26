@@ -15,7 +15,10 @@ import {
  * The server factory `createClerkMcpWorker` calls for each MCP request, with the request's verified `authInfo` and the
  * Worker `env` passed to `fetch`. It returns a new MCP SDK 2.x `McpServer` for that request. `authInfo` is
  * `undefined` only for a request without a token that `discoverable` or `publicAccess` let through, such as a
- * `server/discover` probe. Narrow it with `isClerkAuthInfo` before reading Clerk fields such as `extra.userId`.
+ * `server/discover` probe. Narrow it with `isClerkAuthInfo` before reading Clerk fields such as `extra.userId`. It gets
+ * no `ctx`: the MCP handler that calls it is shared by every request with the same `env`, and the SDK passes the
+ * factory only the auth info, so a Worker whose tools need `ctx.waitUntil` wraps its own handler with
+ * `withClerkMcpAuth`.
  */
 export type ClerkMcpServerFactory<Env = ClerkEnv> = (context: {
   authInfo: AuthInfo | undefined;
@@ -49,7 +52,8 @@ const createClerkMcpWorkerCallForm =
  * The `server` factory is called for each MCP request with the verified `authInfo` and the Worker `env`, so tools can
  * reach the signed-in user and the Worker's bindings without module-level state. The MCP handler itself is created
  * once for each Worker `env`, on its first request, so its limits hold across requests: Cloudflare passes the same
- * `env` to every request of an isolate.
+ * `env` to every request of an isolate. That sharing is why the factory gets no `ctx`: the SDK passes it only the
+ * request's auth info, and a side channel keyed on the request would break when the SDK clones it.
  * @param options - The `server` factory, and the auth options of `withClerkMcpAuth`: `resourceUrl` (or
  * `verifyToken`), `requiredScopes`, `challengeScopes`, `discoverable`, `publicAccess`, `clerkClient`, and
  * `onAuthFailure`

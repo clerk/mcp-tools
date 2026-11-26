@@ -803,6 +803,8 @@ const envClerkClients = new Map<string, ClerkOAuthClient>();
  * `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set, as `clerkClient` from `@clerk/express` reads them.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param env - The environment to read
+ * @param variable - What the message calls a key, such as `variable in the Worker env`; `undefined` keeps
+ * `requireClerkEnvKeys`' default, `environment variable`
  * @returns The settings, without the optional ones that are not set. It throws a `Clerk error:` naming the first key
  * not set.
  */
