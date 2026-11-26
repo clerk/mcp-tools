@@ -658,12 +658,13 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/fetch', () => {
   test('reports nothing when reporting is off', async () => {
     const sink = reportSink();
     const worker = workerApp(sdkV2Handler(), {}, { CLERK_SECRET_KEY: SECRET_KEY });
-    vi.spyOn(globalThis, 'fetch');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
     await callTools(worker.fetch);
     await worker.settled();
 
     expect(sink.fetch).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(worker.waits).toEqual([]);
   });
 
