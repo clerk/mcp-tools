@@ -9,8 +9,10 @@ import {
   envClerkClient,
   protectedResourceMetadataAnswer,
   readJsonBody,
+  resourceMetadataUrlFor,
   serverErrorAnswer,
 } from '../bearer-auth';
+import { matchResourceUrl } from '../resource-url';
 import { type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 // This module must stay free of any MCP SDK import (`sdk-free-entries.test.ts` checks it), so a Worker that serves MCP
@@ -37,8 +39,8 @@ export type McpFetchRequest<Env = ClerkEnv, Ctx = WorkerExecutionContext> = {
 
 /**
  * The handler `withClerkMcpAuth` wraps, called for each request that passed the auth check with its `authInfo`, and
- * the Worker's `env` and `ctx`. `authInfo` is `undefined` only for a request without a token that `publicAccess` let
- * through. Narrow it with `isClerkAuthInfo` before reading Clerk fields such as `extra.userId`.
+ * the Worker's `env` and `ctx`. `authInfo` is `undefined` only for a request without a token that `discoverable` or
+ * `publicAccess` let through. Narrow it with `isClerkAuthInfo` before reading Clerk fields such as `extra.userId`.
  */
 export type McpFetchHandler<Env = ClerkEnv, Ctx = WorkerExecutionContext> = (
   request: Request,
@@ -77,10 +79,11 @@ const withClerkMcpAuthCallForm =
  * audience is this endpoint; pass `verifyToken` to verify tokens with your own function. It imports no MCP SDK, so
  * the handler can be any `fetch`-style MCP handler, such as `createMcpHandler` from `@modelcontextprotocol/server`.
  *
- * Route both the MCP endpoint and `/.well-known/oauth-protected-resource` (and the paths below it) to the wrapped
- * handler. A GET or HEAD there gets the metadata, with the publishable key read from the Worker's
+ * Route both the MCP endpoint and its metadata URL (RFC 9728 section 3.1: `/.well-known/oauth-protected-resource`
+ * followed by the endpoint's path) to the wrapped handler. A GET or HEAD there gets the metadata, with the publishable key read from the Worker's
  * `CLERK_PUBLISHABLE_KEY`, and an OPTIONS the CORS preflight; a request to an origin no listed `resourceUrl` has gets
- * a 421.
+ * a 421. Any other path, such as the bare well-known root, goes through the auth check to the handler. Without
+ * `resourceUrl`, any path below the well-known prefix gets the metadata for the resource it describes.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
  * @see https://datatracker.ietf.org/doc/html/rfc6750#section-3
  * @param handler - The MCP handler, called with the request and `{ authInfo, env, ctx }`
@@ -104,7 +107,7 @@ const withClerkMcpAuthCallForm =
  * export default {
  *   fetch(request, env, ctx) {
  *     const { pathname } = new URL(request.url);
- *     if (pathname === '/mcp' || pathname.startsWith('/.well-known/oauth-protected-resource')) {
+ *     if (pathname === '/mcp' || pathname === '/.well-known/oauth-protected-resource/mcp') {
  *       return authedHandler(request, env, ctx);
  *     }
  *     return app.fetch(request, env, ctx);
@@ -151,9 +154,10 @@ export function fetchMcpAuth<Env, Ctx>(
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY in the Worker env',
   );
 
+  const isMetadataRequest = metadataRoute(options.resourceUrl);
+
   return async (request, env, ctx) => {
-    const { pathname } = new URL(request.url);
-    if (pathname === WELL_KNOWN || pathname.startsWith(`${WELL_KNOWN}/`)) {
+    if (isMetadataRequest(request.url)) {
       return metadataResponse(
         options,
         request,
@@ -186,6 +190,33 @@ export function fetchMcpAuth<Env, Ctx>(
       return Response.json(result.body, result);
     }
     return handler(request, { authInfo: result.authInfo, env, ctx });
+  };
+}
+
+// The path of a resource's metadata URL (RFC 9728 section 3.1)
+const metadataPath = (resourceUrl: string) => new URL(resourceMetadataUrlFor(resourceUrl)).pathname;
+
+/**
+ * Whether a request URL is one this entry answers with the protected resource metadata. RFC 9728 section 3.3 has a
+ * client discard metadata whose `resource` is not the URL it inserted the well-known path into, so with `resourceUrl`
+ * only the metadata path of the listed URL for the request's origin is answered, or for an origin no listed URL has,
+ * the metadata path of any listed URL, which gets the 421. Every other path, such as the bare well-known root, is the
+ * Worker's. Without `resourceUrl` the resource is derived from the requested path, so any path below the well-known
+ * prefix is answered.
+ */
+function metadataRoute(resourceUrl: string | readonly string[] | undefined) {
+  if (resourceUrl === undefined) {
+    return (url: string) => {
+      const { pathname } = new URL(url);
+      return pathname === WELL_KNOWN || pathname.startsWith(`${WELL_KNOWN}/`);
+    };
+  }
+  const paths = new Set([resourceUrl].flat().map(metadataPath));
+  return (url: string) => {
+    const { pathname } = new URL(url);
+    if (!paths.has(pathname)) return false;
+    const resource = matchResourceUrl(resourceUrl, url);
+    return resource === undefined || metadataPath(resource) === pathname;
   };
 }
 

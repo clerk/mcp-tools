@@ -151,6 +151,103 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 
+  // RFC 9728 section 3.3: a client discards metadata whose `resource` is not the URL it built the metadata URL from,
+  // so only the metadata URL of a listed `resourceUrl` (section 3.1) is answered, and the Worker keeps the rest
+  test.each([
+    ['the bare well-known root', 'https://mcp.example.com/.well-known/oauth-protected-resource'],
+    ['another resource', 'https://mcp.example.com/.well-known/oauth-protected-resource/other'],
+    ['a path below the metadata URL', `${RESOURCE_METADATA_URL}/deeper`],
+  ])('passes %s to the handler instead of answering with the metadata', async (_case, url) => {
+    const handler = recordingHandler();
+    const authedHandler = withClerkMcpAuth(handler, {
+      resourceUrl,
+      verifyToken: (token) => ({
+        token,
+        clientId: 'client_123',
+        scopes: [],
+        expiresAt: Date.now() / 1000 + 60,
+      }),
+    });
+
+    const res = await authedHandler(
+      new Request(url, { headers: { Authorization: 'Bearer t' } }),
+      workerEnv,
+      ctx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ authInfo: { token: 't' } });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  test('answers the metadata URL of each listed resourceUrl with that resource', async () => {
+    const handler = recordingHandler();
+    const authedHandler = withClerkMcpAuth(handler, {
+      resourceUrl: [resourceUrl, 'https://mcp.example.dev/api/mcp'],
+    });
+
+    const [primary, other] = await Promise.all([
+      authedHandler(new Request(RESOURCE_METADATA_URL), workerEnv, ctx),
+      authedHandler(
+        new Request('https://mcp.example.dev/.well-known/oauth-protected-resource/api/mcp'),
+        workerEnv,
+        ctx,
+      ),
+    ]);
+
+    expect(await primary.json()).toMatchObject({ resource: resourceUrl });
+    expect(await other.json()).toMatchObject({ resource: 'https://mcp.example.dev/api/mcp' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test("passes another listed resource's metadata path at this origin to the handler", async () => {
+    const handler = recordingHandler();
+    const authedHandler = withClerkMcpAuth(handler, {
+      resourceUrl: [resourceUrl, 'https://mcp.example.dev/api/mcp'],
+      verifyToken: (token) => ({
+        token,
+        clientId: 'client_123',
+        scopes: [],
+        expiresAt: Date.now() / 1000 + 60,
+      }),
+    });
+
+    const res = await authedHandler(
+      new Request('https://mcp.example.dev/.well-known/oauth-protected-resource/mcp', {
+        headers: { Authorization: 'Bearer t' },
+      }),
+      workerEnv,
+      ctx,
+    );
+
+    expect(await res.json()).toMatchObject({ authInfo: { token: 't' } });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  test('answers a metadata URL at an origin no listed resourceUrl has with a 421', async () => {
+    const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl: [resourceUrl] });
+
+    const res = await authedHandler(
+      new Request('https://other.example.com/.well-known/oauth-protected-resource/mcp'),
+      workerEnv,
+      ctx,
+    );
+
+    expect(res.status).toBe(421);
+  });
+
+  test('without resourceUrl, answers each metadata URL with the resource it was built from', async () => {
+    const authedHandler = withClerkMcpAuth(recordingHandler(), { verifyToken: () => undefined });
+
+    const res = await authedHandler(
+      new Request('https://mcp.example.com/.well-known/oauth-protected-resource/other'),
+      workerEnv,
+      ctx,
+    );
+
+    expect(await res.json()).toMatchObject({ resource: 'https://mcp.example.com/other' });
+  });
+
   test('throws naming CLERK_PUBLISHABLE_KEY when the Worker env has none for the metadata', async () => {
     vi.stubEnv('CLERK_PUBLISHABLE_KEY', FAKE_PK);
     const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl });
@@ -517,17 +614,25 @@ describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
     const otherEnv = { ...workerEnv, GREETING: 'hello from another binding' };
     const call = { name: 'whoami', arguments: {} };
 
+    // Two requests with one env share its MCP handler, so only a per-request call reaches the factory twice
     const first = await worker.fetch(modernRequest(token, 'tools/call', call), workerEnv, ctx);
-    const second = await worker.fetch(modernRequest(token, 'tools/call', call), otherEnv, ctx);
+    const second = await worker.fetch(modernRequest(token, 'tools/call', call), workerEnv, ctx);
+    const third = await worker.fetch(modernRequest(token, 'tools/call', call), otherEnv, ctx);
 
-    expect(await rpcMessage(first)).toMatchObject({
-      result: { content: [{ type: 'text', text: 'user_123: hello from a binding' }] },
-    });
-    expect(await rpcMessage(second)).toMatchObject({
+    for (const res of [first, second]) {
+      expect(await rpcMessage(res)).toMatchObject({
+        result: { content: [{ type: 'text', text: 'user_123: hello from a binding' }] },
+      });
+    }
+    expect(await rpcMessage(third)).toMatchObject({
       result: { content: [{ type: 'text', text: 'user_123: hello from another binding' }] },
     });
-    expect(server).toHaveBeenCalledTimes(2);
-    expect(server.mock.calls.map(([context]) => context.env)).toEqual([workerEnv, otherEnv]);
+    expect(server).toHaveBeenCalledTimes(3);
+    expect(server.mock.calls.map(([context]) => context.env)).toEqual([
+      workerEnv,
+      workerEnv,
+      otherEnv,
+    ]);
     for (const [context] of server.mock.calls) {
       expect(isClerkAuthInfo(context.authInfo)).toBe(true);
       expect(context.authInfo).toMatchObject({
