@@ -7,7 +7,10 @@ import addFormats from 'ajv-formats';
 // the URL its $id names, the same JSON as fetched, reformatted by oxfmt. It is draft-07,
 // and its root refers to #/definitions/ServerDetail, so the root itself validates a server.json.
 const schema = JSON.parse(
-  readFileSync(join(import.meta.dirname, 'fixtures/registry-server.schema.json'), 'utf8'),
+  readFileSync(
+    join(import.meta.dirname, 'fixtures/registry-server-2025-12-11.schema.json'),
+    'utf8',
+  ),
 );
 const ajv = new Ajv({ allErrors: true, strict: false });
 addFormats.default(ajv);
