@@ -255,8 +255,8 @@ export const PUBLIC_BODY_LIMIT = 1024 * 1024;
 
 /**
  * Throws a `Clerk error:` message unless `publicAccess` is `undefined` or a valid `PublicAccess`: an object with
- * only its five keys, `methods` a list of `McpPublicMethod`s, `tools` a list of tool names,
- * `resources` and `prompts` each a boolean or a list of resource URIs or prompt names, and `views` a boolean. A mistake here would
+ * only its five keys, `methods` a list of `McpPublicMethod`s, `tools` a list of tool names, `resources` and
+ * `prompts` each a boolean or a list of resource URIs or prompt names, and `views` a boolean. A mistake here would
  * otherwise only show as requests answered with a 401.
  * @param caller - The entry point named in the message, such as `mcpAuth`
  * @param publicAccess - The option's value, unchecked

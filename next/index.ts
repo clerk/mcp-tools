@@ -198,10 +198,10 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions): (req: Reques
 }
 
 /**
- * A Next.js route handler that serves the official MCP Registry's HTTP domain proof, the `v=MCPv1; k=ed25519; p=<key>` record
- * `mcp-publisher login http --domain example.com` has the registry fetch from `/.well-known/mcp-registry-auth` on the
- * domain, to grant its `com.example/*` namespace. It validates the key when it is created, so a malformed key fails at
- * startup instead of at login, and it needs no Clerk keys or MCP SDK.
+ * A Next.js route handler that serves the official MCP Registry's HTTP domain proof, the `v=MCPv1; k=ed25519; p=<key>`
+ * record `mcp-publisher login http --domain example.com` has the registry fetch from `/.well-known/mcp-registry-auth`
+ * on the domain, to grant its `com.example/*` namespace. It validates the key when it is created, so a malformed key
+ * fails at startup instead of at login, and it needs no Clerk keys or MCP SDK.
  *
  * GET and HEAD get the record as `text/plain; charset=utf-8` with `Cache-Control: no-store`, so a removed key is
  * not served from a cache, and never a redirect, which the registry does not follow. Any other method gets a 405

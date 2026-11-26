@@ -287,7 +287,10 @@ export function aiCatalogHandler(options: AICatalogHandlerOptions) {
  * @returns The handler. It throws a `Clerk error:` for a key that is not a raw 32-byte Ed25519 key in padded base64.
  * @example
  * ```ts
- * app.all('/.well-known/mcp-registry-auth', mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! }));
+ * app.all(
+ *   '/.well-known/mcp-registry-auth',
+ *   mcpRegistryAuthHandler({ publicKey: process.env.MCP_REGISTRY_PUBLIC_KEY! }),
+ * );
  * ```
  */
 export function mcpRegistryAuthHandler(options: McpRegistryAuthHandlerOptions) {

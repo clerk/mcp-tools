@@ -47,16 +47,17 @@ export type RegistryServerJson = {
 };
 
 /**
- * Generates the `server.json` that `mcp-publisher publish` sends to the official MCP Registry, from the same options
- * as the server's Server Card, so the registry entry and the card describe one server. It checks the card's rules and
- * the registry's own: https icons, website, and remotes, icon media types the registry lists, a GitHub or GitLab
- * repository, and a version that is neither `latest` nor what the registry reads as a range, such as `1.0.0-next`. It makes no request; publishing stays a step you
- * run yourself.
+ * Generates the `server.json` that `mcp-publisher publish` sends to the official MCP Registry, from the same options as
+ * the server's Server Card, so the registry entry and the card describe one server. It checks the card's rules and the
+ * registry's own: https icons, website, and remotes, icon media types the registry lists, a GitHub or GitLab
+ * repository, and a version that is neither `latest` nor what the registry reads as a range, such as `1.0.0-next`. It
+ * makes no request; publishing stays a step you run yourself.
  * @see https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md
  * @param options - The options `serverCardHandler` takes, so one object describes both. `name` is the registry name
  * too, in the reverse-DNS namespace you prove you own, such as `com.example/weather` for `example.com`. Each
- * `resourceUrl` becomes one streamable HTTP remote. `maxAge` is checked as `serverCardHandler` checks it, then ignored, and `_meta` is not copied: the registry keeps
- * only its own `io.modelcontextprotocol.registry/publisher-provided` key, which a card's `_meta` can't use.
+ * `resourceUrl` becomes one streamable HTTP remote. `maxAge` is checked as `serverCardHandler` checks it, then
+ * ignored, and `_meta` is not copied: the registry keeps only its own
+ * `io.modelcontextprotocol.registry/publisher-provided` key, which a card's `_meta` can't use.
  * @returns The `server.json`, frozen, serializable to JSON. It throws a `Clerk error:` naming the first option the
  * registry would reject.
  * @example
@@ -209,8 +210,9 @@ function assertRegistryRules(fail: Fail, card: ServerCard, cards: readonly Serve
  */
 export type McpRegistryAuthHandlerOptions = {
   /**
-   * The raw 32-byte Ed25519 public key in standard, padded base64, 44 characters: 43 base64 characters and one trailing `=`, as
-   * `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints. Only the public key belongs here.
+   * The raw 32-byte Ed25519 public key in standard, padded base64, 44 characters: 43 base64 characters and one trailing
+   * `=`, as `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64` prints. Only the public key belongs
+   * here.
    */
   publicKey: string;
 };
