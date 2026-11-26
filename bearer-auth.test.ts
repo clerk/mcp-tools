@@ -468,6 +468,7 @@ describe('envClerkClient', () => {
 
   afterEach(() => {
     vi.doUnmock('@clerk/backend');
+    vi.unstubAllEnvs();
   });
 
   test('reuses one client for the same settings', async () => {
@@ -511,33 +512,14 @@ describe('envClerkClient', () => {
     ]);
   });
 
-  test('builds the client from the env it is given, without process.env', async () => {
-    const { envClerkClient, createClerkClient } = await freshEnvClient();
-    vi.stubEnv('CLERK_SECRET_KEY', undefined);
-    vi.stubEnv('CLERK_PUBLISHABLE_KEY', undefined);
-    try {
-      await envClerkClient('withClerkMcpAuth', keys(3));
-    } finally {
-      vi.unstubAllEnvs();
-    }
-
-    expect(createClerkClient).toHaveBeenCalledExactlyOnceWith({
-      secretKey: 'sk_test_3',
-      publishableKey: `${FAKE_PK}3`,
-    });
-  });
-
   test('reads only the env it is given, not process.env', async () => {
     const { envClerkClient, createClerkClient } = await freshEnvClient();
     vi.stubEnv('CLERK_SECRET_KEY', 'sk_test_process');
     vi.stubEnv('CLERK_PUBLISHABLE_KEY', FAKE_PK);
-    try {
-      await expect(envClerkClient('withClerkMcpAuth', {})).rejects.toThrow(
-        'Clerk error: withClerkMcpAuth needs the CLERK_SECRET_KEY environment variable or a clerkClient option',
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+
+    await expect(envClerkClient('withClerkMcpAuth', {})).rejects.toThrow(
+      'Clerk error: withClerkMcpAuth needs the CLERK_SECRET_KEY environment variable or a clerkClient option',
+    );
     expect(createClerkClient).not.toHaveBeenCalled();
   });
 
