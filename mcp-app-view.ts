@@ -126,7 +126,9 @@ const fail: Fail = failFor(CALLER);
  * `prefersBorder` in the content item's `_meta.ui`, where hosts read them. A CSP whose every list is empty is
  * left out, which the spec treats the same. Building it records the URI, so `publicAccess.views` of `mcpAuth` and
  * `withClerkMcpAuth` can open this view, and only views built here, without a token. Build it once at module scope,
- * not inside the server factory, so the URI is recorded before the first request arrives.
+ * not inside the server factory, so the URI is recorded before the first request arrives: a view first built after
+ * an `mcpAuth` with `views` on checked a request logs a one-time `Clerk warning:`. The record is for the whole
+ * process, so every server in it opens the view, and it stays after the resource is removed.
  *
  * It throws a `Clerk error:` for an option that is not valid, such as a URI outside `ui://`, one not written as
  * `new URL(uri).href` writes it, or a CSP entry that is not an origin, and logs a one-time `Clerk warning:` for each URI whose template does not start with
@@ -138,7 +140,11 @@ export function mcpAppViewResource(options: McpAppViewResourceOptions): McpAppVi
   assertOptions(options);
   const { name, uri, html, title, description, csp, prefersBorder } = options;
   warnAboutTemplate(uri, html);
-  registerAppView(uri);
+  if (registerAppView(uri)) {
+    console.warn(
+      `Clerk warning: ${CALLER} built ${uri} after mcpAuth checked a request, so publicAccess.views did not open it for the requests before. Build views once at module scope, not inside the server factory.`,
+    );
+  }
 
   const cspMeta: Partial<Record<CspKey, string[]>> = {};
   for (const key of CSP_KEYS) {

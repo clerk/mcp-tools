@@ -556,6 +556,28 @@ describe('MCP App views on a server with publicAccess', () => {
     }
   });
 
+  // A view built inside the server factory is recorded only once the factory runs, after auth checked the request
+  test('warns once when a view is first built after a request was checked, and opens it from then on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const late = 'ui://docs/late.html';
+      expect((await read(PUBLIC_TOOLS, late)).status).toBe(401);
+
+      mcpAppViewResource({ name: late, uri: late, html: VIEW_HTML });
+      mcpAppViewResource({ name: late, uri: late, html: VIEW_HTML });
+      expect(warn.mock.calls).toEqual([
+        [
+          'Clerk warning: mcpAppViewResource built ui://docs/late.html after mcpAuth checked a request, so publicAccess.views did not open it for the requests before. Build views once at module scope, not inside the server factory.',
+        ],
+      ]);
+      const opened = await read(PUBLIC_TOOLS, late);
+      expect(opened.status).toBe(200);
+      await opened.body?.cancel();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test('a client with a token reads a view with views: false', async () => {
     const { fetchImpl } = startServer(undefined, { publicAccess: { views: false } });
     const { client, connected } = connectOAuthClient(MCP_URL, fetchImpl, 'token_full');

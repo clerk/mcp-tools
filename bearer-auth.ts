@@ -1,7 +1,7 @@
 // The bearer-token rules that the Express, Hono, and Next.js adapters share. This module is not a package entry point.
 import type { MachineTokenVerificationErrorCode } from '@clerk/backend/errors';
 import type { AuthInfo } from './mcp-types';
-import { isAppView } from './app-view-registry';
+import { isAppView, noteViewsChecked } from './app-view-registry';
 import { copyClerkVerification } from './clerk-auth-info';
 import { deriveFapiUrl } from './publishable-key';
 import { assertPropertiesOmitResource } from './resource-metadata-properties';
@@ -1089,6 +1089,7 @@ export function bearerAuthenticator({
     body,
     verifyToken,
   }: BearerRequest): Promise<BearerResult> => {
+    if (publicAccess?.views === true) noteViewsChecked();
     // A missing `Host` header, or one that does not parse, would otherwise throw below and reach the app as a server
     // error, or derive a challenge for `http://undefined`
     if (requestUrl === undefined) {

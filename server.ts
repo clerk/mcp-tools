@@ -168,7 +168,7 @@ export type PublicAccess = {
   prompts?: boolean | readonly string[] | undefined;
   /**
    * Whether a `resources/read` or `subscriptions/listen` without a token may ask for an MCP App view: exactly the
-   * `ui://` URIs `mcpAppViewResource` built views for in this process, and no other resource, `ui://` or not. It
+   * `ui://` URIs `mcpAppViewResource` built views for in this process, in any of its servers, and no other resource. It
    * defaults to `true` when `discoverable` decides access, and to `false` next to a `methods` list. MCP Apps
    * (2026-01-26) lets a host prefetch and cache a view before any tool runs, so before the user has signed in, and a
    * scanner reads it to check the view. A view template is shared HTML: user data reaches it only through the result
