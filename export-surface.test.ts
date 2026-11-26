@@ -148,6 +148,10 @@ const PINNED: Record<string, Surface> = {
   },
   './express': withServer(ADAPTER.values, ADAPTER.types),
   './hono': withServer(ADAPTER.values, ADAPTER.types),
+  './fetch': withServer(
+    ['withClerkMcpAuth'],
+    ['ClerkEnv', 'McpAuthOptions', 'McpFetchHandler', 'McpFetchRequest', 'WorkerExecutionContext'],
+  ),
   './stores/fs': { values: ['createFsStore'], types: ['FsStoreConfig'] },
   './stores/redis': { values: ['createRedisStore'], types: ['RedisStoreConfig'] },
   './stores/postgres': { values: ['createPostgresStore'], types: ['PostgresStoreConfig'] },

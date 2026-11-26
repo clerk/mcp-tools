@@ -30,6 +30,7 @@ For detailed implementation guides and examples specific to your framework, see:
 - **[Express.js Integration](./express/README.md)** - Complete guide for building MCP servers with Express.js
 - **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono and edge runtimes
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
+- **[Fetch (Cloudflare Workers) Integration](./fetch/README.md)** - Adding an authenticated MCP endpoint to an existing plain `fetch` Worker
 
 Upgrading from 0.9.x? Every entry point was renamed in 1.0.0, with no deprecated aliases. The [changelog](./CHANGELOG.md) maps each old name, such as `mcpAuthClerk`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`, `verifyClerkToken`, `@clerk/mcp-tools/feedback`, and `@clerk/mcp-tools/create-browser-session`, to its replacement.
 
@@ -42,7 +43,7 @@ Upgrading from 0.9.x? Every entry point was renamed in 1.0.0, with no deprecated
 
 ### Guide: building a server
 
-If you are building a server that you'd like to introduce MCP support for, you will want to use the `@clerk/mcp-tools/server` import path. With Express, Hono, or Next.js, import from that framework's subpath instead (`@clerk/mcp-tools/express`, `@clerk/mcp-tools/hono`, or `@clerk/mcp-tools/next`): each one exports everything in `@clerk/mcp-tools/server` too.
+If you are building a server that you'd like to introduce MCP support for, you will want to use the `@clerk/mcp-tools/server` import path. With Express, Hono, Next.js, or a plain `fetch` Worker, import from that subpath instead (`@clerk/mcp-tools/express`, `@clerk/mcp-tools/hono`, `@clerk/mcp-tools/next`, or `@clerk/mcp-tools/fetch`): each one exports everything in `@clerk/mcp-tools/server` too.
 
 #### Protected resource metadata
 
@@ -1125,3 +1126,4 @@ For framework-specific utilities and handlers, see:
 - **Express.js**: See [Express.js reference documentation](./express/README.md)
 - **Hono**: See [Hono reference documentation](./hono/README.md)
 - **Next.js**: See [Next.js reference documentation](./next/README.md)
+- **Fetch (Cloudflare Workers)**: See [fetch reference documentation](./fetch/README.md)

@@ -76,6 +76,16 @@ describe('server entry points', () => {
     expect(packages).toEqual([]);
   });
 
+  // `createClerkMcpWorker` will join the fetch entry on MCP SDK 2.x; the wrapper stays usable without any MCP SDK
+  test('withClerkMcpAuth from the fetch entry imports no MCP SDK package', () => {
+    const sdkPackages = reachableFiles('fetch/with-clerk-mcp-auth.ts').flatMap((file) =>
+      importedSpecifiers(file)
+        .filter((specifier) => specifier.startsWith('@modelcontextprotocol/'))
+        .map((specifier) => `${relative(file)} imports ${specifier}`),
+    );
+    expect(sdkPackages).toEqual([]);
+  });
+
   test('the import scan finds the SDK where it is used', () => {
     expect(sdkImports('client.ts')).toContain(
       'client.ts imports @modelcontextprotocol/sdk/client/index.js',
@@ -126,7 +136,7 @@ vi.mock('@clerk/express', () => {
 });
 
 describe('the adapter entry points without Clerk packages', () => {
-  test.each(['hono/index.ts', 'next/index.ts', 'express/index.ts'])(
+  test.each(['hono/index.ts', 'next/index.ts', 'express/index.ts', 'fetch/index.ts'])(
     '%s has no top-level runtime import from a Clerk package',
     (entry) => {
       expect(runtimeClerkImports(entry)).toEqual([]);
@@ -160,6 +170,34 @@ describe('the adapter entry points without Clerk packages', () => {
       method: 'POST',
       headers: { Authorization: 'Bearer token-1' },
     });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ clientId: 'client-1' });
+    expect(clerkLoads).toEqual([]);
+  });
+
+  test('loads, and serves a request with the fetch withClerkMcpAuth({ verifyToken }), without loading a Clerk package', async () => {
+    const { withClerkMcpAuth } = await import('./fetch/index');
+    const authedHandler = withClerkMcpAuth(
+      (_request, { authInfo }) => Response.json({ clientId: authInfo?.clientId }),
+      {
+        verifyToken: async () => ({
+          token: 'token-1',
+          clientId: 'client-1',
+          scopes: [],
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        }),
+      },
+    );
+
+    const res = await authedHandler(
+      new Request('https://mcp.example.com/mcp', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-1' },
+      }),
+      {},
+      { waitUntil: () => {}, passThroughOnException: () => {} },
+    );
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ clientId: 'client-1' });

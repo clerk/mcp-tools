@@ -23,6 +23,7 @@
   "files": [
     "dist",
     "express/README.md",
+    "fetch/README.md",
     "hono/README.md",
     "next/README.md",
     "CHANGELOG.md",
@@ -65,6 +66,11 @@
       "types": "./dist/hono/index.d.mts",
       "import": "./dist/hono/index.mjs",
       "default": "./dist/hono/index.mjs"
+    },
+    "./fetch": {
+      "types": "./dist/fetch/index.d.mts",
+      "import": "./dist/fetch/index.mjs",
+      "default": "./dist/fetch/index.mjs"
     },
     "./stores/fs": {
       "types": "./dist/stores/fs.d.mts",
