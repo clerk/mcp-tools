@@ -198,18 +198,17 @@ function honoApp(
   };
 }
 
-// A Cloudflare Worker serving `handler` with the fetch entry's `clerkInstrumentHandler`: each request has `cf` and the
-// `cf-connecting-ip` Cloudflare sets
-function workerApp(
-  handler: fetchEntry.McpHandler,
-  options: Partial<fetchEntry.McpAuthOptions> = {},
+// A Cloudflare Worker serving its requests with `serve`, keeping the work it passes to `ctx.waitUntil`. With
+// `cloudflare` on, each request has `cf` and the `cf-connecting-ip` Cloudflare sets
+function workerHarness(
+  serve: (
+    request: Request,
+    env: Record<string, unknown>,
+    ctx: fetchEntry.WorkerExecutionContext,
+  ) => Promise<Response>,
   env: Record<string, unknown> = {},
+  { cloudflare = true } = {},
 ) {
-  const authedHandler = fetchEntry.clerkInstrumentHandler(handler, {
-    resourceUrl: RESOURCE_URL,
-    clerkClient,
-    ...options,
-  } as fetchEntry.McpAuthOptions);
   const waits: Promise<unknown>[] = [];
   const ctx = {
     waitUntil: (promise: Promise<unknown>) => void waits.push(promise),
@@ -218,13 +217,29 @@ function workerApp(
   return {
     fetch: (input: string | URL, init?: RequestInit) => {
       const request = new Request(input, withUserAgent(init));
+      if (!cloudflare) return serve(request, env, ctx);
       request.headers.set('cf-connecting-ip', '203.0.113.9');
-      return authedHandler(Object.assign(request, { cf: { colo: 'YYZ' } }), env, ctx);
+      return serve(Object.assign(request, { cf: { colo: 'YYZ' } }), env, ctx);
     },
     waits,
     settled: () => Promise.all(waits),
   };
 }
+
+// A Cloudflare Worker serving `handler` with the fetch entry's `clerkInstrumentHandler`
+const workerApp = (
+  handler: fetchEntry.McpHandler,
+  options: Partial<fetchEntry.McpAuthOptions> = {},
+  env: Record<string, unknown> = {},
+) =>
+  workerHarness(
+    fetchEntry.clerkInstrumentHandler(handler, {
+      resourceUrl: RESOURCE_URL,
+      clerkClient,
+      ...options,
+    } as fetchEntry.McpAuthOptions),
+    env,
+  );
 
 const expectedCalls = (overrides: Record<string, unknown> = {}) => [
   {
@@ -703,16 +718,9 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/fetch', () => {
 });
 
 describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
-  const ctx = () => {
-    const waits: Promise<unknown>[] = [];
-    return {
-      waits,
-      ctx: {
-        waitUntil: (promise: Promise<unknown>) => void waits.push(promise),
-        passThroughOnException: () => {},
-      },
-    };
-  };
+  // These Worker requests have no `cf`, so their reports have no IP address
+  const serveWorker = (worker: ReturnType<typeof fetchEntry.createClerkMcpWorker>) =>
+    workerHarness(worker.fetch, { CLERK_SECRET_KEY: SECRET_KEY }, { cloudflare: false });
   const createServer = () => {
     const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
     registerTools(server);
@@ -721,19 +729,17 @@ describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
 
   test('passes each server to clerkInstrumentServer and reports its tool calls with reporting on', async () => {
     const sink = reportSink();
-    const env = { CLERK_SECRET_KEY: SECRET_KEY };
-    const { waits, ctx: executionCtx } = ctx();
-    const worker = fetchEntry.createClerkMcpWorker({
-      resourceUrl: RESOURCE_URL,
-      clerkClient,
-      reporting: { fetch: sink.fetch },
-      server: createServer,
-    });
-
-    await callTools((input, init) =>
-      worker.fetch(new Request(input, withUserAgent(init)), env, executionCtx),
+    const worker = serveWorker(
+      fetchEntry.createClerkMcpWorker({
+        resourceUrl: RESOURCE_URL,
+        clerkClient,
+        reporting: { fetch: sink.fetch },
+        server: createServer,
+      }),
     );
-    await Promise.all(waits);
+
+    await callTools(worker.fetch);
+    await worker.settled();
 
     // The tools were registered before the Worker instrumented the server, so they report no handler time
     expect(sink.calls()).toEqual(
@@ -743,27 +749,22 @@ describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
 
   test('reports the handler time of tools a factory registers after calling clerkInstrumentServer itself', async () => {
     const sink = reportSink();
-    const { waits, ctx: executionCtx } = ctx();
-    const worker = fetchEntry.createClerkMcpWorker({
-      resourceUrl: RESOURCE_URL,
-      clerkClient,
-      reporting: { fetch: sink.fetch },
-      server: () => {
-        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
-        clerkInstrumentServer(server);
-        registerTools(server);
-        return server;
-      },
-    });
-
-    await callTools((input, init) =>
-      worker.fetch(
-        new Request(input, withUserAgent(init)),
-        { CLERK_SECRET_KEY: SECRET_KEY },
-        executionCtx,
-      ),
+    const worker = serveWorker(
+      fetchEntry.createClerkMcpWorker({
+        resourceUrl: RESOURCE_URL,
+        clerkClient,
+        reporting: { fetch: sink.fetch },
+        server: () => {
+          const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+          clerkInstrumentServer(server);
+          registerTools(server);
+          return server;
+        },
+      }),
     );
-    await Promise.all(waits);
+
+    await callTools(worker.fetch);
+    await worker.settled();
 
     expect(sink.calls()).toEqual(expectedCalls());
   });
@@ -771,24 +772,19 @@ describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
   test('reports nothing, and leaves the server alone, with reporting off', async () => {
     const sink = reportSink();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { waits, ctx: executionCtx } = ctx();
-    const worker = fetchEntry.createClerkMcpWorker({
-      resourceUrl: RESOURCE_URL,
-      clerkClient,
-      server: createServer,
-    });
-
-    await callTools((input, init) =>
-      worker.fetch(
-        new Request(input, withUserAgent(init)),
-        { CLERK_SECRET_KEY: SECRET_KEY },
-        executionCtx,
-      ),
+    const worker = serveWorker(
+      fetchEntry.createClerkMcpWorker({
+        resourceUrl: RESOURCE_URL,
+        clerkClient,
+        server: createServer,
+      }),
     );
-    await Promise.all(waits);
+
+    await callTools(worker.fetch);
+    await worker.settled();
 
     expect(sink.fetch).not.toHaveBeenCalled();
-    expect(waits).toEqual([]);
+    expect(worker.waits).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
 
