@@ -16,13 +16,15 @@ import { ERROR_CODE_META_KEY } from './mcp-tool';
  * What `reporting` sends to Clerk for each MCP event, and where. `reporting: true` is the same as `{}`: every field
  * below at its default. A tool call's report has the tool's name, the MCP server's name, whether the call succeeded,
  * the error code of a failed call, how long it took, and when it was made. Tool arguments and results are never sent.
- * @typeParam Req - The framework's request: the Express request, the Hono context, or the Next.js `Request`
+ * @typeParam Req - The framework's request: the Express request, the Hono context, the Next.js `Request`, or the
+ * fetch entry's `{ request, env, ctx }`
  */
 export type ReportingOptions<Req = never> = {
   /**
    * Whether to send the IP address of the MCP client. `true`, the default, reads it where the adapter can trust it:
    * `req.ip` in Express, which follows the app's `trust proxy` setting; `cf-connecting-ip` on Cloudflare Workers and
-   * the socket's address on Node.js in Hono; and `x-real-ip` on Vercel in Next.js. Anywhere else no address is sent,
+   * the socket's address on Node.js in Hono; `x-real-ip` on Vercel in Next.js; and `cf-connecting-ip` on Cloudflare
+   * Workers in the fetch entry. Anywhere else no address is sent,
    * unless you pass a function that returns one from a source you trust, such as a header your proxy sets.
    */
   ipAddress?: boolean | ((request: Req) => string | null | undefined) | undefined;
@@ -46,12 +48,12 @@ export type ReportingOptions<Req = never> = {
   serverName?: string | undefined;
   /**
    * The secret key of the Clerk instance the reports belong to. Defaults to the `CLERK_SECRET_KEY` environment
-   * variable.
+   * variable, which the fetch entry reads from the Worker `env`.
    */
   secretKey?: string | undefined;
   /**
-   * The origin of the Clerk Backend API. Defaults to the `CLERK_API_URL` environment variable, then
-   * `https://api.clerk.com`.
+   * The origin of the Clerk Backend API. Defaults to the `CLERK_API_URL` environment variable, read from the Worker
+   * `env` in the fetch entry, then `https://api.clerk.com`.
    */
   apiUrl?: string | undefined;
   /**

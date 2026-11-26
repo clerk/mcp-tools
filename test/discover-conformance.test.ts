@@ -56,50 +56,37 @@ function createServerV1() {
 type App = express.Express | ((request: Request) => Response | Promise<Response>);
 
 const apps: Record<string, { sdk: 1 | 2; mount: () => App }> = {
-  'hono, MCP SDK 2.x createMcpHandler': {
+  'hono clerkInstrumentHandler, MCP SDK 2.x createMcpHandler': {
     sdk: 2,
     mount: () => {
-      const handler = createMcpHandler(createServerV2);
       const app = new Hono();
-      app.all('/mcp', honoAdapter.mcpAuth(authOptions), (c) => {
-        const authInfo: AuthInfo | undefined = c.get('mcpAuth');
-        return handler.fetch(c.req.raw, { ...(authInfo && { authInfo }) });
-      });
+      app.all(
+        '/mcp',
+        honoAdapter.clerkInstrumentHandler(createMcpHandler(createServerV2), authOptions),
+      );
       return app.fetch;
     },
   },
-  'express, MCP SDK 2.x createMcpHandler': {
+  'express clerkInstrumentHandler, MCP SDK 2.x createMcpHandler': {
     sdk: 2,
     mount: () => {
-      const handler = createMcpHandler(createServerV2);
       const app = express();
       app.use(express.json());
-      app.all('/mcp', expressAdapter.mcpAuth(authOptions), async (req, res) => {
-        const authInfo = (req as express.Request & { auth?: AuthInfo }).auth;
-        const response = await handler.fetch(toRequest(req), {
-          parsedBody: req.body,
-          ...(authInfo && { authInfo }),
-        });
-        res.status(response.status).set(Object.fromEntries(response.headers));
-        res.end(Buffer.from(await response.arrayBuffer()));
-      });
+      app.all(
+        '/mcp',
+        expressAdapter.clerkInstrumentHandler(createMcpHandler(createServerV2), authOptions),
+      );
       return app;
     },
   },
-  'next, MCP SDK 2.x createMcpHandler': {
+  'next clerkInstrumentHandler, MCP SDK 2.x createMcpHandler': {
     sdk: 2,
-    mount: () => {
-      const handler = createMcpHandler(createServerV2);
-      return nextAdapter.withClerkMcpAuth((req) => {
-        const authInfo = (req as Request & { auth?: AuthInfo }).auth;
-        return handler.fetch(req, { ...(authInfo && { authInfo }) });
-      }, authOptions);
-    },
+    mount: () => nextAdapter.clerkInstrumentHandler(createMcpHandler(createServerV2), authOptions),
   },
-  'next, mcp-handler createMcpHandler': {
+  'next clerkInstrumentHandler, mcp-handler createMcpHandler': {
     sdk: 2,
     mount: () =>
-      nextAdapter.withClerkMcpAuth(
+      nextAdapter.clerkInstrumentHandler(
         createNextMcpHandler((server) => {
           server.registerTool('ping_tool', { description: 'Answers' }, async () => ({
             content: [{ type: 'text' as const, text: 'pong' }],
@@ -108,12 +95,11 @@ const apps: Record<string, { sdk: 1 | 2; mount: () => App }> = {
         authOptions,
       ),
   },
-  'fetch withClerkMcpAuth, MCP SDK 2.x createMcpHandler': {
+  'fetch clerkInstrumentHandler, MCP SDK 2.x createMcpHandler': {
     sdk: 2,
     mount: () => {
-      const handler = createMcpHandler(createServerV2);
-      const authedHandler = fetchAdapter.withClerkMcpAuth(
-        (request, { authInfo }) => handler.fetch(request, { ...(authInfo && { authInfo }) }),
+      const authedHandler = fetchAdapter.clerkInstrumentHandler(
+        createMcpHandler(createServerV2),
         authOptions,
       );
       return (request: Request) => authedHandler(request, {}, workerCtx);
@@ -152,19 +138,6 @@ const apps: Record<string, { sdk: 1 | 2; mount: () => App }> = {
     },
   },
 };
-
-// An Express request as a web-standard Request, with the headers it arrived with. The body was already parsed, so
-// it goes to the handler as `parsedBody`.
-function toRequest(req: express.Request): Request {
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(req.headers)) {
-    for (const item of [value ?? []].flat()) headers.append(name, item);
-  }
-  return new Request(`${req.protocol}://${req.host}${req.originalUrl}`, {
-    method: req.method,
-    headers,
-  });
-}
 
 // A POST of one JSON-RPC request as a client on `protocolVersion` sends it. From 2026-07-28 every request carries the
 // `_meta` envelope, and before it, `initialize` carries the same facts in its params.

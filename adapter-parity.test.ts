@@ -56,7 +56,7 @@ type Adapter = 'express' | 'hono' | 'next';
 const adapterModules = { express: expressAdapter, hono: honoAdapter, next: nextAdapter };
 const adapterNames = Object.keys(adapterModules) as Adapter[];
 
-/** Each auth entry point: the adapters' and the fetch entry's `withClerkMcpAuth` and `createClerkMcpWorker`. */
+/** Each auth entry point: the adapters', and the fetch entry's `clerkInstrumentHandler` and `createClerkMcpWorker`. */
 type AuthEntry = Adapter | 'fetch' | 'fetch worker';
 
 // The name each auth entry point's messages use
@@ -64,7 +64,7 @@ const authCaller: Record<AuthEntry, string> = {
   express: 'mcpAuth',
   hono: 'mcpAuth',
   next: 'withClerkMcpAuth',
-  fetch: 'withClerkMcpAuth from @clerk/mcp-tools/fetch',
+  fetch: 'clerkInstrumentHandler from @clerk/mcp-tools/fetch',
   'fetch worker': 'createClerkMcpWorker from @clerk/mcp-tools/fetch',
 };
 
@@ -80,7 +80,7 @@ function fetchAuth(
 ): (request: Request) => Promise<Response> {
   const serveRequest =
     kind === 'fetch'
-      ? fetchEntry.withClerkMcpAuth(
+      ? fetchEntry.clerkInstrumentHandler(
           (request, { authInfo }) => handler(request, authInfo),
           options as fetchEntry.McpAuthOptions,
         )
@@ -1541,9 +1541,9 @@ const freshAuthEntryPoints: [AuthEntry, () => Promise<(options: object) => unkno
   [
     'fetch',
     async () => {
-      const { withClerkMcpAuth } = await import('./fetch');
+      const { clerkInstrumentHandler } = await import('./fetch');
       return (options) =>
-        withClerkMcpAuth(async () => new Response(), options as fetchEntry.McpAuthOptions);
+        clerkInstrumentHandler(async () => new Response(), options as fetchEntry.McpAuthOptions);
     },
   ],
   [

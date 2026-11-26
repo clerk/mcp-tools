@@ -149,15 +149,15 @@ const PINNED: Record<string, Surface> = {
   './express': withServer(ADAPTER.values, ADAPTER.types),
   './hono': withServer(ADAPTER.values, ADAPTER.types),
   './fetch': withServer(
-    ['createClerkMcpWorker', 'withClerkMcpAuth'],
+    ['clerkInstrumentHandler', 'createClerkMcpWorker'],
     [
       'ClerkEnv',
       'ClerkMcpServerFactory',
       'ClerkMcpWorker',
       'ClerkMcpWorkerOptions',
       'McpAuthOptions',
-      'McpFetchHandler',
       'McpFetchRequest',
+      'McpHandler',
       'WorkerExecutionContext',
     ],
   ),

@@ -1,11 +1,11 @@
 export type { ClerkEnv } from '../bearer-auth';
 export {
   type McpAuthOptions,
-  type McpFetchHandler,
   type McpFetchRequest,
+  type McpHandler,
   type WorkerExecutionContext,
-  withClerkMcpAuth,
-} from './with-clerk-mcp-auth';
+  clerkInstrumentHandler,
+} from './instrument-handler';
 export {
   type ClerkMcpWorker,
   type ClerkMcpWorkerOptions,

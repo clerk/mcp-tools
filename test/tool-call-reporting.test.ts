@@ -12,6 +12,7 @@ import { createMcpHandler as createVercelMcpHandler } from 'mcp-handler';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod/v4';
 import * as expressAdapter from '../express';
+import * as fetchEntry from '../fetch';
 import * as honoAdapter from '../hono';
 import { ERROR_CODE_META_KEY } from '../mcp-tool';
 import * as nextAdapter from '../next';
@@ -193,6 +194,34 @@ function honoApp(
   return {
     fetch: (input: string | URL, init?: RequestInit) =>
       Promise.resolve(app.fetch(new Request(input, withUserAgent(init)), bindings, executionCtx)),
+    settled: () => Promise.all(waits),
+  };
+}
+
+// A Cloudflare Worker serving `handler` with the fetch entry's `clerkInstrumentHandler`: each request has `cf` and the
+// `cf-connecting-ip` Cloudflare sets
+function workerApp(
+  handler: fetchEntry.McpHandler,
+  options: Partial<fetchEntry.McpAuthOptions> = {},
+  env: Record<string, unknown> = {},
+) {
+  const authedHandler = fetchEntry.clerkInstrumentHandler(handler, {
+    resourceUrl: RESOURCE_URL,
+    clerkClient,
+    ...options,
+  } as fetchEntry.McpAuthOptions);
+  const waits: Promise<unknown>[] = [];
+  const ctx = {
+    waitUntil: (promise: Promise<unknown>) => void waits.push(promise),
+    passThroughOnException: () => {},
+  };
+  return {
+    fetch: (input: string | URL, init?: RequestInit) => {
+      const request = new Request(input, withUserAgent(init));
+      request.headers.set('cf-connecting-ip', '203.0.113.9');
+      return authedHandler(Object.assign(request, { cf: { colo: 'YYZ' } }), env, ctx);
+    },
+    waits,
     settled: () => Promise.all(waits),
   };
 }
@@ -589,6 +618,189 @@ describe('clerkInstrumentHandler from @clerk/mcp-tools/next', () => {
         reporting: true,
       } as nextAdapter.McpAuthOptions),
     ).toThrow('Clerk error: withClerkMcpAuth cannot report tool calls');
+  });
+});
+
+describe('clerkInstrumentHandler from @clerk/mcp-tools/fetch', () => {
+  test('reports each tool call with the Worker env secret key, sent with ctx.waitUntil once the response is over', async () => {
+    const sink = reportSink();
+    const worker = workerApp(
+      sdkV2Handler(),
+      { reporting: { fetch: sink.fetch } },
+      { CLERK_SECRET_KEY: SECRET_KEY },
+    );
+
+    await callTools(worker.fetch);
+
+    expect(worker.waits.length).toBeGreaterThan(0);
+    await worker.settled();
+    expect(sink.calls()).toEqual(expectedCalls({ ip_address: '203.0.113.9' }));
+    expect(sink.requests[0]).toEqual({
+      url: 'https://api.clerk.com/v1/mcp_events',
+      authorization: `Bearer ${SECRET_KEY}`,
+    });
+    expectGoldenShape(sink.bodies);
+  });
+
+  test('never reads the secret key from process.env', async () => {
+    vi.stubEnv('CLERK_SECRET_KEY', SECRET_KEY);
+    // The missing key warns once per process, so the warning may have come from an earlier test
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sink = reportSink();
+    const worker = workerApp(sdkV2Handler(), { reporting: { fetch: sink.fetch } });
+
+    await callTools(worker.fetch);
+    await worker.settled();
+
+    expect(sink.fetch).not.toHaveBeenCalled();
+  });
+
+  test('reports nothing when reporting is off', async () => {
+    const sink = reportSink();
+    const worker = workerApp(sdkV2Handler(), {}, { CLERK_SECRET_KEY: SECRET_KEY });
+    vi.spyOn(globalThis, 'fetch');
+
+    await callTools(worker.fetch);
+    await worker.settled();
+
+    expect(sink.fetch).not.toHaveBeenCalled();
+    expect(worker.waits).toEqual([]);
+  });
+
+  test('calls a function handler with the auth info and the Worker env and ctx', async () => {
+    const env = { CLERK_SECRET_KEY: SECRET_KEY, BUCKET: 'bindings' };
+    const ctx = { waitUntil: () => {}, passThroughOnException: () => {} };
+    const seen: unknown[] = [];
+    const authedHandler = fetchEntry.clerkInstrumentHandler<typeof env>(
+      (_request, context) => {
+        seen.push(context);
+        return new Response('reached');
+      },
+      { resourceUrl: RESOURCE_URL, clerkClient },
+    );
+
+    const response = await authedHandler(
+      new Request(RESOURCE_URL, { method: 'POST', headers: { authorization: 'Bearer token' } }),
+      env,
+      ctx,
+    );
+
+    expect(await response.text()).toBe('reached');
+    expect(seen).toEqual([
+      { authInfo: expect.objectContaining({ clientId: CLIENT_ID }), env, ctx },
+    ]);
+  });
+
+  test('checks reporting when it is created', () => {
+    expect(() =>
+      fetchEntry.clerkInstrumentHandler(sdkV2Handler(), {
+        resourceUrl: RESOURCE_URL,
+        reporting: { ipAdress: true } as never,
+      }),
+    ).toThrow('Clerk error: clerkInstrumentHandler reporting has no ipAdress option');
+  });
+});
+
+describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
+  const ctx = () => {
+    const waits: Promise<unknown>[] = [];
+    return {
+      waits,
+      ctx: {
+        waitUntil: (promise: Promise<unknown>) => void waits.push(promise),
+        passThroughOnException: () => {},
+      },
+    };
+  };
+  const createServer = () => {
+    const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+    registerTools(server);
+    return server;
+  };
+
+  test('passes each server to clerkInstrumentServer and reports its tool calls with reporting on', async () => {
+    const sink = reportSink();
+    const env = { CLERK_SECRET_KEY: SECRET_KEY };
+    const { waits, ctx: executionCtx } = ctx();
+    const worker = fetchEntry.createClerkMcpWorker({
+      resourceUrl: RESOURCE_URL,
+      clerkClient,
+      reporting: { fetch: sink.fetch },
+      server: createServer,
+    });
+
+    await callTools((input, init) =>
+      worker.fetch(new Request(input, withUserAgent(init)), env, executionCtx),
+    );
+    await Promise.all(waits);
+
+    // The tools were registered before the Worker instrumented the server, so they report no handler time
+    expect(sink.calls()).toEqual(
+      expectedCalls().map(({ handler_ms: _handlerMs, ...call }) => call),
+    );
+  });
+
+  test('reports the handler time of tools a factory registers after calling clerkInstrumentServer itself', async () => {
+    const sink = reportSink();
+    const { waits, ctx: executionCtx } = ctx();
+    const worker = fetchEntry.createClerkMcpWorker({
+      resourceUrl: RESOURCE_URL,
+      clerkClient,
+      reporting: { fetch: sink.fetch },
+      server: () => {
+        const server = new McpServerV2({ name: 'acme-mcp', version: '1.0.0' });
+        clerkInstrumentServer(server);
+        registerTools(server);
+        return server;
+      },
+    });
+
+    await callTools((input, init) =>
+      worker.fetch(
+        new Request(input, withUserAgent(init)),
+        { CLERK_SECRET_KEY: SECRET_KEY },
+        executionCtx,
+      ),
+    );
+    await Promise.all(waits);
+
+    expect(sink.calls()).toEqual(expectedCalls());
+  });
+
+  test('reports nothing, and leaves the server alone, with reporting off', async () => {
+    const sink = reportSink();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { waits, ctx: executionCtx } = ctx();
+    const worker = fetchEntry.createClerkMcpWorker({
+      resourceUrl: RESOURCE_URL,
+      clerkClient,
+      server: createServer,
+    });
+
+    await callTools((input, init) =>
+      worker.fetch(
+        new Request(input, withUserAgent(init)),
+        { CLERK_SECRET_KEY: SECRET_KEY },
+        executionCtx,
+      ),
+    );
+    await Promise.all(waits);
+
+    expect(sink.fetch).not.toHaveBeenCalled();
+    expect(waits).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('checks reporting when it is created', () => {
+    expect(() =>
+      fetchEntry.createClerkMcpWorker({
+        resourceUrl: RESOURCE_URL,
+        reporting: 'yes' as never,
+        server: createServer,
+      }),
+    ).toThrow(
+      'Clerk error: createClerkMcpWorker reporting must be true, false, or an options object',
+    );
   });
 });
 
@@ -1893,7 +2105,7 @@ const rejectingClerkClient = {
         },
 };
 
-type AuthFailureAdapter = 'hono' | 'express' | 'next';
+type AuthFailureAdapter = 'hono' | 'express' | 'next' | 'fetch';
 
 /**
  * Serves `sdkV2Handler()` through the adapter's `clerkInstrumentHandler`, and sends one request to it.
@@ -1922,6 +2134,15 @@ async function sendToAdapter(
     const app = honoApp(sdkV2Handler(), handlerOptions as Partial<honoAdapter.McpAuthOptions>);
     const answer = await read(await app.fetch(url, init));
     await app.settled();
+    return answer;
+  }
+  if (adapter === 'fetch') {
+    // The keys a test sets with `vi.stubEnv` arrive on the Worker env, where a Worker has them
+    const worker = workerApp(sdkV2Handler(), handlerOptions as Partial<fetchEntry.McpAuthOptions>, {
+      CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
+    });
+    const answer = await read(await worker.fetch(url, init));
+    await worker.settled();
     return answer;
   }
   if (adapter === 'next') {
@@ -1975,9 +2196,10 @@ const ADDRESSES: Record<AuthFailureAdapter, Record<string, string>> = {
   hono: { ip_address: '203.0.113.7' },
   express: { ip_address: '127.0.0.1' },
   next: {},
+  fetch: { ip_address: '203.0.113.9' },
 };
 
-describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
+describe.each<AuthFailureAdapter>(['hono', 'express', 'next', 'fetch'])(
   'auth failure reports from clerkInstrumentHandler on %s',
   (adapter) => {
     const reported = (sink: ReturnType<typeof reportSink>, count = 1) =>
@@ -2048,7 +2270,9 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
           })),
         );
         expectGoldenShape(sink.bodies, {
-          exact: adapter === 'hono' && (status === 403 || event.reason === 'invalid_token'),
+          exact:
+            (adapter === 'hono' || adapter === 'fetch') &&
+            (status === 403 || event.reason === 'invalid_token'),
         });
         const sent = JSON.stringify(sink.bodies);
         expect(sent).not.toContain(REJECTED_TOKEN);
@@ -2332,7 +2556,7 @@ describe('auth failure reports under a burst of refused requests', () => {
   });
 });
 
-describe.each<'hono' | 'next'>(['hono', 'next'])(
+describe.each<'hono' | 'next' | 'fetch'>(['hono', 'next', 'fetch'])(
   'auth failure reports from clerkInstrumentHandler on %s',
   (adapter) => {
     test('answer before the body is read, and read it afterwards for the report', async () => {
@@ -2352,11 +2576,13 @@ describe.each<'hono' | 'next'>(['hono', 'next'])(
       const send =
         adapter === 'hono'
           ? honoApp(sdkV2Handler(), options as Partial<honoAdapter.McpAuthOptions>).fetch
-          : (input: string, requestInit: RequestInit) =>
-              nextAdapter.clerkInstrumentHandler(
-                sdkV2Handler(),
-                options as nextAdapter.McpAuthOptions,
-              )(new Request(input, withUserAgent(requestInit)));
+          : adapter === 'fetch'
+            ? workerApp(sdkV2Handler(), options as Partial<fetchEntry.McpAuthOptions>).fetch
+            : (input: string, requestInit: RequestInit) =>
+                nextAdapter.clerkInstrumentHandler(
+                  sdkV2Handler(),
+                  options as nextAdapter.McpAuthOptions,
+                )(new Request(input, withUserAgent(requestInit)));
 
       // The body hasn't arrived yet, and the challenge doesn't wait for it
       const response = await send(RESOURCE_URL, init);
@@ -2382,6 +2608,7 @@ const PUBLISHABLE_KEY_NAMES: Record<AuthFailureAdapter, string> = {
   hono: 'CLERK_PUBLISHABLE_KEY',
   express: 'CLERK_PUBLISHABLE_KEY',
   next: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+  fetch: 'CLERK_PUBLISHABLE_KEY',
 };
 
 function withSessionId(init: RequestInit, sessionId: string | undefined): RequestInit {
@@ -2392,7 +2619,7 @@ function withSessionId(init: RequestInit, sessionId: string | undefined): Reques
   };
 }
 
-describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
+describe.each<AuthFailureAdapter>(['hono', 'express', 'next', 'fetch'])(
   'session ID hashes from clerkInstrumentHandler on %s',
   (adapter) => {
     const reported = (sink: ReturnType<typeof reportSink>, count = 1) =>
@@ -2422,7 +2649,7 @@ describe.each<AuthFailureAdapter>(['hono', 'express', 'next'])(
         expect.objectContaining({ type: 'tool_call', session_id_hash: SESSION_ID_HASH }),
         expect.objectContaining({ type: 'auth_failure', session_id_hash: SESSION_ID_HASH }),
       ]);
-      expectGoldenShape(sink.bodies, { exact: adapter === 'hono' });
+      expectGoldenShape(sink.bodies, { exact: adapter === 'hono' || adapter === 'fetch' });
       expect(JSON.stringify(sink.bodies)).not.toContain(SESSION_ID);
     });
 

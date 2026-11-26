@@ -77,8 +77,8 @@ describe('server entry points', () => {
   });
 
   // `createClerkMcpWorker` in the fetch entry is built on MCP SDK 2.x; the wrapper stays usable without any MCP SDK
-  test('withClerkMcpAuth from the fetch entry imports no MCP SDK package', () => {
-    const sdkPackages = reachableFiles('fetch/with-clerk-mcp-auth.ts').flatMap((file) =>
+  test('clerkInstrumentHandler from the fetch entry imports no MCP SDK package', () => {
+    const sdkPackages = reachableFiles('fetch/instrument-handler.ts').flatMap((file) =>
       importedSpecifiers(file)
         .filter((specifier) => specifier.startsWith('@modelcontextprotocol/'))
         .map((specifier) => `${relative(file)} imports ${specifier}`),
@@ -136,7 +136,7 @@ vi.mock('@clerk/express', () => {
 });
 
 // MCP SDK 2.x is an optional peer too: `createClerkMcpWorker` loads it with `import()` inside `try`, so a Worker that
-// only uses the fetch entry's `withClerkMcpAuth` need not install it
+// only uses the fetch entry's `clerkInstrumentHandler` need not install it
 const sdkLoads = vi.hoisted(() => [] as string[]);
 vi.mock('@modelcontextprotocol/server', () => {
   sdkLoads.push('@modelcontextprotocol/server');
@@ -227,9 +227,9 @@ describe('the adapter entry points without Clerk packages', () => {
     expect(clerkLoads).toEqual([]);
   });
 
-  test('loads, and serves a request with the fetch withClerkMcpAuth({ verifyToken }), without loading a Clerk package', async () => {
-    const { withClerkMcpAuth } = await import('./fetch/index');
-    const authedHandler = withClerkMcpAuth(
+  test('loads, and serves a request with the fetch clerkInstrumentHandler(handler, { verifyToken }), without loading a Clerk package', async () => {
+    const { clerkInstrumentHandler } = await import('./fetch/index');
+    const authedHandler = clerkInstrumentHandler(
       (_request, { authInfo }) => Response.json({ clientId: authInfo?.clientId }),
       {
         verifyToken: async () => ({

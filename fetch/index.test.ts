@@ -13,7 +13,7 @@ import {
   type McpAuthFailure,
   createClerkMcpWorker,
   isClerkAuthInfo,
-  withClerkMcpAuth,
+  clerkInstrumentHandler,
 } from './index';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
@@ -89,10 +89,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
+describe('clerkInstrumentHandler from @clerk/mcp-tools/fetch', () => {
   test('answers a request without a token with a 401 challenge naming the resource metadata URL', async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, { resourceUrl });
+    const authedHandler = clerkInstrumentHandler(handler, { resourceUrl });
 
     const res = await authedHandler(mcpRequest(), workerEnv, ctx);
 
@@ -105,7 +105,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   });
 
   test('lists requiredScopes in the challenge scope', async () => {
-    const authedHandler = withClerkMcpAuth(recordingHandler(), {
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), {
       resourceUrl,
       requiredScopes: ['profile', 'email'],
     });
@@ -119,7 +119,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('serves the protected resource metadata the challenge points to, from the Worker env', async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl,
       requiredScopes: ['profile'],
     });
@@ -139,7 +139,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   });
 
   test('answers a CORS preflight to the metadata route', async () => {
-    const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl });
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), { resourceUrl });
 
     const res = await authedHandler(
       new Request(RESOURCE_METADATA_URL, { method: 'OPTIONS' }),
@@ -153,7 +153,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('answers a HEAD to the metadata route with the headers a GET gets', async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, { resourceUrl });
+    const authedHandler = clerkInstrumentHandler(handler, { resourceUrl });
 
     const res = await authedHandler(
       new Request(RESOURCE_METADATA_URL, { method: 'HEAD' }),
@@ -169,7 +169,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('answers another method to the metadata route with a 405 that is never stored', async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, { resourceUrl });
+    const authedHandler = clerkInstrumentHandler(handler, { resourceUrl });
 
     const res = await authedHandler(
       new Request(RESOURCE_METADATA_URL, { method: 'POST' }),
@@ -191,7 +191,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   test('routes a resourceUrl with a query on the path and the query', async () => {
     const handler = recordingHandler();
     const tenantUrl = 'https://mcp.example.com/mcp?tenant=a';
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl: tenantUrl,
       verifyToken: (token) => ({
         token,
@@ -223,7 +223,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
     ['a path below the metadata URL', `${RESOURCE_METADATA_URL}/deeper`],
   ])('passes %s to the handler instead of answering with the metadata', async (_case, url) => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl,
       verifyToken: (token) => ({
         token,
@@ -246,7 +246,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('answers the metadata URL of each listed resourceUrl with that resource', async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl: [resourceUrl, 'https://mcp.example.dev/api/mcp'],
     });
 
@@ -266,7 +266,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test("passes another listed resource's metadata path at this origin to the handler", async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl: [resourceUrl, 'https://mcp.example.dev/api/mcp'],
       verifyToken: (token) => ({
         token,
@@ -289,7 +289,9 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   });
 
   test('answers a metadata URL at an origin no listed resourceUrl has with a 421', async () => {
-    const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl: [resourceUrl] });
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), {
+      resourceUrl: [resourceUrl],
+    });
 
     const res = await authedHandler(
       new Request('https://other.example.com/.well-known/oauth-protected-resource/mcp'),
@@ -301,7 +303,9 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   });
 
   test('without resourceUrl, answers each metadata URL with the resource it was built from', async () => {
-    const authedHandler = withClerkMcpAuth(recordingHandler(), { verifyToken: () => undefined });
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), {
+      verifyToken: () => undefined,
+    });
 
     const res = await authedHandler(
       new Request('https://mcp.example.com/.well-known/oauth-protected-resource/other'),
@@ -314,7 +318,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('throws naming CLERK_PUBLISHABLE_KEY when the Worker env has none for the metadata', async () => {
     vi.stubEnv('CLERK_PUBLISHABLE_KEY', FAKE_PK);
-    const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl });
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), { resourceUrl });
 
     await expect(
       authedHandler(new Request(RESOURCE_METADATA_URL), { CLERK_SECRET_KEY: 'sk_test' }, ctx),
@@ -324,7 +328,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   test('rejects a token issued for another resource with an invalid_token challenge', async () => {
     const handler = recordingHandler();
     const failures: McpAuthFailure[] = [];
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl,
       onAuthFailure: (failure) => {
         failures.push(failure);
@@ -348,7 +352,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('calls the handler with the verified Clerk auth info, the Worker env, and the execution context', async () => {
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, { resourceUrl });
+    const authedHandler = clerkInstrumentHandler(handler, { resourceUrl });
     const token = accessToken();
     const request = mcpRequest(token);
 
@@ -386,7 +390,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
       );
       return server;
     });
-    const authedHandler = withClerkMcpAuth(
+    const authedHandler = clerkInstrumentHandler(
       (request, { authInfo }) => mcpHandler.fetch(request, { ...(authInfo && { authInfo }) }),
       { resourceUrl },
     );
@@ -434,7 +438,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   test('gives the handler the same auth info the Hono adapter gives its route', async () => {
     const token = accessToken();
     const handler = recordingHandler();
-    const fetchRes = await withClerkMcpAuth(handler, { resourceUrl })(
+    const fetchRes = await clerkInstrumentHandler(handler, { resourceUrl })(
       mcpRequest(token),
       workerEnv,
       ctx,
@@ -460,10 +464,10 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
     async (_name, env) => {
       vi.stubEnv('CLERK_SECRET_KEY', workerEnv.CLERK_SECRET_KEY);
       vi.stubEnv('CLERK_PUBLISHABLE_KEY', workerEnv.CLERK_PUBLISHABLE_KEY);
-      const authedHandler = withClerkMcpAuth(recordingHandler(), { resourceUrl });
+      const authedHandler = clerkInstrumentHandler(recordingHandler(), { resourceUrl });
 
       await expect(authedHandler(mcpRequest(accessToken()), env as never, ctx)).rejects.toThrow(
-        'Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch needs the CLERK_SECRET_KEY variable in the Worker env or a clerkClient option',
+        'Clerk error: clerkInstrumentHandler from @clerk/mcp-tools/fetch needs the CLERK_SECRET_KEY variable in the Worker env or a clerkClient option',
       );
     },
   );
@@ -483,7 +487,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
       }),
     }));
     const handler = recordingHandler();
-    const authedHandler = withClerkMcpAuth(handler, {
+    const authedHandler = clerkInstrumentHandler(handler, {
       resourceUrl,
       clerkClient: { authenticateRequest } as never,
     });
@@ -509,7 +513,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
     const handler = recordingHandler();
     const request = mcpRequest('token-1');
 
-    const res = await withClerkMcpAuth(handler, { verifyToken })(request, workerEnv, ctx);
+    const res = await clerkInstrumentHandler(handler, { verifyToken })(request, workerEnv, ctx);
 
     expect(res.status).toBe(200);
     expect(verifyToken).toHaveBeenCalledWith('token-1', { request, env: workerEnv, ctx });
@@ -522,7 +526,7 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
 
   test('answers a verifier that throws with a JSON 500', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const authedHandler = withClerkMcpAuth(recordingHandler(), {
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), {
       verifyToken: async () => {
         throw new Error('database down');
       },
@@ -535,11 +539,11 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
   });
 
   test('throws at setup without a handler, or without a resourceUrl or verifyToken', () => {
-    expect(() => withClerkMcpAuth(undefined as never, { resourceUrl })).toThrow(
-      'Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch takes the handler first',
+    expect(() => clerkInstrumentHandler(undefined as never, { resourceUrl })).toThrow(
+      'Clerk error: clerkInstrumentHandler from @clerk/mcp-tools/fetch takes the MCP handler first',
     );
-    expect(() => withClerkMcpAuth(recordingHandler(), {} as never)).toThrow(
-      'Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch needs a resourceUrl',
+    expect(() => clerkInstrumentHandler(recordingHandler(), {} as never)).toThrow(
+      'Clerk error: clerkInstrumentHandler from @clerk/mcp-tools/fetch needs a resourceUrl',
     );
   });
 });
@@ -599,11 +603,11 @@ function greetingServer({
 }
 
 describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
-  test('answers a request without a token with the same 401 challenge as withClerkMcpAuth', async () => {
+  test('answers a request without a token with the same 401 challenge as clerkInstrumentHandler', async () => {
     const options = { resourceUrl, requiredScopes: ['profile', 'email'] };
     const server = vi.fn(greetingServer);
     const worker = createClerkMcpWorker({ ...options, server });
-    const authedHandler = withClerkMcpAuth(recordingHandler(), options);
+    const authedHandler = clerkInstrumentHandler(recordingHandler(), options);
 
     const [res, wrapperRes] = await Promise.all([
       worker.fetch(mcpRequest(), workerEnv, ctx),
