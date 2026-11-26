@@ -1,4 +1,4 @@
-// Rules the Express, Hono, and Next.js adapters must apply the same way, run against all three.
+// Rules the Express, Hono, and Next.js adapters and the fetch entry must apply the same way, run against each.
 import express from 'express';
 import { Hono, type MiddlewareHandler } from 'hono';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -8,6 +8,21 @@ const defaultClient = vi.hoisted(() => ({ authenticateRequest: vi.fn() }));
 vi.mock('@clerk/express', () => ({ clerkClient: defaultClient }));
 vi.mock('@clerk/backend', () => ({ createClerkClient: () => defaultClient }));
 vi.mock('@clerk/nextjs/server', () => ({ clerkClient: async () => defaultClient }));
+// The MCP SDK handler behind `createClerkMcpWorker` answers with what it saw, as the other entries' routes do. The
+// fetch entry's own tests serve a real MCP server.
+vi.mock('@modelcontextprotocol/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@modelcontextprotocol/server')>()),
+  createMcpHandler: (factory: (context: { authInfo?: unknown }) => unknown) => ({
+    fetch: async (request: Request, { authInfo }: { authInfo?: AuthInfo } = {}) => {
+      await factory({ authInfo });
+      return Response.json({
+        reached: true,
+        auth: authInfo ?? null,
+        body: await request.json().catch(() => null),
+      } satisfies Reached);
+    },
+  }),
+}));
 
 import { FAKE_PK, clerkAuthenticated, expiresAt, sendRaw, withListening } from './test/mcp-harness';
 import { linkedCardCatalogErrors } from './test/ai-catalog-contract';
@@ -17,6 +32,7 @@ import { type McpAuthFailure, McpTokenVerificationError, toClerkAuthInfo } from 
 import { resourceMetadataUrlFor } from './bearer-auth';
 import { CREATE_BROWSER_SESSION_TOOL_NAME } from './create-browser-session';
 import * as expressAdapter from './express';
+import * as fetchEntry from './fetch';
 import * as honoAdapter from './hono';
 import * as nextAdapter from './next';
 
@@ -39,6 +55,42 @@ afterEach(() => {
 type Adapter = 'express' | 'hono' | 'next';
 const adapterModules = { express: expressAdapter, hono: honoAdapter, next: nextAdapter };
 const adapterNames = Object.keys(adapterModules) as Adapter[];
+
+/** Each auth entry point: the adapters' and the fetch entry's `withClerkMcpAuth` and `createClerkMcpWorker`. */
+type AuthEntry = Adapter | 'fetch' | 'fetch worker';
+
+// The name each auth entry point's messages use
+const authCaller: Record<AuthEntry, string> = {
+  express: 'mcpAuth',
+  hono: 'mcpAuth',
+  next: 'withClerkMcpAuth',
+  fetch: 'withClerkMcpAuth from @clerk/mcp-tools/fetch',
+  'fetch worker': 'createClerkMcpWorker from @clerk/mcp-tools/fetch',
+};
+
+// The Worker env the fetch entry reads its Clerk keys from, and an execution context
+const workerEnv = { CLERK_SECRET_KEY: 'sk_test_parity', CLERK_PUBLISHABLE_KEY: FAKE_PK };
+const workerCtx = { waitUntil: () => {}, passThroughOnException: () => {} };
+
+/** The fetch entry's auth entry point around `handler`, as a fetch handler of the request alone. */
+function fetchAuth(
+  kind: 'fetch' | 'fetch worker',
+  options: object,
+  handler: (request: Request, authInfo: AuthInfo | undefined) => Response | Promise<Response>,
+): (request: Request) => Promise<Response> {
+  const serveRequest =
+    kind === 'fetch'
+      ? fetchEntry.withClerkMcpAuth(
+          (request, { authInfo }) => handler(request, authInfo),
+          options as fetchEntry.McpAuthOptions,
+        )
+      : // The mocked SDK handler answers with what it saw, so `handler` is not called
+        fetchEntry.createClerkMcpWorker({
+          ...(options as fetchEntry.McpAuthOptions),
+          server: () => ({}) as never,
+        }).fetch;
+  return (request) => serveRequest(request, workerEnv, workerCtx);
+}
 
 /** An Express app, or the fetch handler of a Hono app or Next.js route. */
 type App = express.Express | ((request: Request) => Response | Promise<Response>);
@@ -119,7 +171,7 @@ function expressHandler(
 type Reached = { reached: true; auth: AuthInfo | null; body: unknown };
 
 /** Each adapter's auth entry point, on a route at /mcp that answers with what it saw. */
-const authApps: [Adapter, (options: Options) => App][] = [
+const authApps: [AuthEntry, (options: Options) => App][] = [
   [
     'express',
     (options) => {
@@ -173,10 +225,21 @@ const authApps: [Adapter, (options: Options) => App][] = [
         at(options, origin) as nextAdapter.McpAuthOptions,
       ),
   ],
+  ...(['fetch', 'fetch worker'] as const).map((kind): [AuthEntry, (options: Options) => App] => [
+    kind,
+    (options) =>
+      fetchAuth(kind, at(options, origin), async (req, authInfo) =>
+        Response.json({
+          reached: true,
+          auth: authInfo ?? null,
+          body: await req.json().catch(() => null),
+        } satisfies Reached),
+      ),
+  ]),
 ];
 
 describe.each(authApps)('%s auth option validation', (name, mount) => {
-  const caller = name === 'next' ? 'withClerkMcpAuth' : 'mcpAuth';
+  const caller = authCaller[name];
 
   test.each(['requiredScope', 'unknownOption', 'properties'])(
     'rejects the unknown option %s at setup',
@@ -208,9 +271,9 @@ describe.each(authApps)('%s auth option validation', (name, mount) => {
     ).not.toThrow();
   });
 
-  test('accepts onAuthFailure only in Next.js', () => {
+  test('accepts onAuthFailure only in Next.js and the fetch entry', () => {
     const setup = () => mount({ resourceUrl: origin, onAuthFailure: vi.fn() });
-    if (name === 'next') {
+    if (name !== 'express' && name !== 'hono') {
       expect(setup).not.toThrow();
       return;
     }
@@ -360,7 +423,7 @@ const authorizationServerApps: [Adapter, () => App][] = [
  * Serves a request with `handler` as the route, and returns the error the app reported.
  */
 async function reportedError(
-  adapter: Adapter,
+  adapter: AuthEntry,
   handler: unknown,
   path = AUTH_SERVER_PATH,
   init: Init = {},
@@ -639,7 +702,7 @@ type FailureAppOptions = { verifyToken: (token: string) => AuthInfo | undefined 
 
 /** Each adapter's auth entry point on /mcp, calling `record` with the failure it reports for a request it answers. */
 const failureApps: Record<
-  Adapter,
+  AuthEntry,
   (options: FailureAppOptions, record: (failure: unknown) => void) => App
 > = {
   express: (options, record) => {
@@ -672,10 +735,18 @@ const failureApps: Record<
       ...options,
       onAuthFailure: record,
     }),
+  fetch: (options, record) =>
+    fetchAuth('fetch', { ...options, onAuthFailure: record }, () =>
+      Response.json({ reached: true }),
+    ),
+  'fetch worker': (options, record) =>
+    fetchAuth('fetch worker', { ...options, onAuthFailure: record }, () =>
+      Response.json({ reached: true }),
+    ),
 };
 
 /** POSTs `Bearer t` to the adapter's auth entry point with `verifyToken`, with the failure it reported. */
-async function verifiedBy(adapter: Adapter, verifyToken: FailureAppOptions['verifyToken']) {
+async function verifiedBy(adapter: AuthEntry, verifyToken: FailureAppOptions['verifyToken']) {
   let failure: McpAuthFailure | undefined;
   const app = failureApps[adapter]({ verifyToken }, (reported) => {
     failure = reported as McpAuthFailure | undefined;
@@ -948,10 +1019,13 @@ const unverifiable: [string, string, number][] = [
 ];
 
 // The client each adapter uses without a `clerkClient` option, as its setup error names it
-const defaultClientName: Record<Adapter, string> = {
+const defaultClientName: Record<AuthEntry, string> = {
   express: "clerkClient from '@clerk/express'",
   hono: 'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY',
   next: "clerkClient from '@clerk/nextjs/server'",
+  fetch: 'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY in the Worker env',
+  'fetch worker':
+    'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY in the Worker env',
 };
 
 describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
@@ -1130,7 +1204,9 @@ describe.each(authApps)('%s auth entry point with Clerk', (name, mount) => {
               )
             : name === 'express'
               ? expressAdapter.mcpAuth(options as expressAdapter.McpAuthOptions)
-              : honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions);
+              : name === 'hono'
+                ? honoAdapter.mcpAuth(options as honoAdapter.McpAuthOptions)
+                : fetchAuth(name, options, () => Response.json({ reached: true }));
 
         for (const init of [
           { method: 'POST' },
@@ -1239,7 +1315,7 @@ describe.each(authApps)('%s publicAccess', (_name, mount) => {
 
 // `discoverable`: whether a client without a token can connect and list, which is the default
 describe.each(authApps)('%s discoverable', (name, mount) => {
-  const caller = name === 'next' ? 'withClerkMcpAuth' : 'mcpAuth';
+  const caller = authCaller[name];
   const send = (options: object, init: Init) => post(mount, { verifyToken, ...options }, init);
   // What the default opens: the handshake of either protocol revision, `ping`, and every list
   const discoveryMessages = [
@@ -1439,7 +1515,7 @@ describe.each(protectedResourceApps)(
 );
 
 // The public identity tool warning is module-level, so each entry point is loaded fresh for its own.
-const freshAuthEntryPoints: [Adapter, () => Promise<(options: object) => unknown>][] = [
+const freshAuthEntryPoints: [AuthEntry, () => Promise<(options: object) => unknown>][] = [
   [
     'express',
     async () => {
@@ -1460,6 +1536,25 @@ const freshAuthEntryPoints: [Adapter, () => Promise<(options: object) => unknown
       const { withClerkMcpAuth } = await import('./next');
       return (options) =>
         withClerkMcpAuth(async () => new Response(), options as nextAdapter.McpAuthOptions);
+    },
+  ],
+  [
+    'fetch',
+    async () => {
+      const { withClerkMcpAuth } = await import('./fetch');
+      return (options) =>
+        withClerkMcpAuth(async () => new Response(), options as fetchEntry.McpAuthOptions);
+    },
+  ],
+  [
+    'fetch worker',
+    async () => {
+      const { createClerkMcpWorker } = await import('./fetch');
+      return (options) =>
+        createClerkMcpWorker({
+          ...(options as fetchEntry.McpAuthOptions),
+          server: () => ({}) as never,
+        });
     },
   ],
 ];
