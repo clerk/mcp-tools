@@ -3,14 +3,16 @@ import type { McpHttpHandler, McpServer } from '@modelcontextprotocol/server';
 import type { AuthInfo } from '../mcp-types';
 import type { ClerkEnv } from '../bearer-auth';
 import { clerkInstrumentServer } from '../instrument-server';
+import { isReportingOn } from '../tool-call-reporting';
 import {
   type McpAuthOptions,
   type WorkerExecutionContext,
   fetchInstrumentHandler,
 } from './instrument-handler';
 
-// MCP SDK 2.x is an optional peer: a Worker that only uses `clerkInstrumentHandler` may not have it. So this module imports
-// only its types, and loads it with `import()` inside `try` on the first request, as the adapters load Clerk packages.
+// MCP SDK 2.x is an optional peer: a Worker that only uses `clerkInstrumentHandler` may not have it. So this module
+// imports only its types, and loads it with `import()` inside `try` on the first request, as the adapters load Clerk
+// packages.
 
 /**
  * The server factory `createClerkMcpWorker` calls for each MCP request, with the request's verified `authInfo` and the
@@ -48,8 +50,9 @@ const createClerkMcpWorkerCallForm =
 
 /**
  * Builds a Worker that serves an authenticated MCP server with MCP SDK 2.x: `createMcpHandler` from
- * `@modelcontextprotocol/server`, behind `clerkInstrumentHandler`. It serves every MCP SDK 2.x protocol revision, including
- * 2026-07-28 and its `server/discover`, and the RFC 9728 protected resource metadata the 401 challenge points to.
+ * `@modelcontextprotocol/server`, behind `clerkInstrumentHandler`. It serves every MCP SDK 2.x protocol revision,
+ * including 2026-07-28 and its `server/discover`, and the RFC 9728 protected resource metadata the 401 challenge
+ * points to.
  *
  * The `server` factory is called for each MCP request with the verified `authInfo` and the Worker `env`, so tools can
  * reach the signed-in user and the Worker's bindings without module-level state. The MCP handler itself is created
@@ -66,8 +69,8 @@ const createClerkMcpWorkerCallForm =
  * @param options - The `server` factory, and the options of `clerkInstrumentHandler`: `resourceUrl` (or
  * `verifyToken`), `requiredScopes`, `challengeScopes`, `discoverable`, `publicAccess`, `clerkClient`,
  * `onAuthFailure`, and `reporting`
- * @returns A Worker export, `{ fetch(request, env, ctx) }`. It answers as `clerkInstrumentHandler` does, and serves MCP for
- * each request that passed the auth check. A request throws a `Clerk error:` asking to install
+ * @returns A Worker export, `{ fetch(request, env, ctx) }`. It answers as `clerkInstrumentHandler` does, and serves MCP
+ * for each request that passed the auth check. A request throws a `Clerk error:` asking to install
  * `@modelcontextprotocol/server` when it can't be loaded.
  * @example
  * ```ts
@@ -95,7 +98,7 @@ export function createClerkMcpWorker<Env = ClerkEnv, Ctx = WorkerExecutionContex
   }
   const { server, ...authOptions } = options;
   // `fetchInstrumentHandler` below rejects a `reporting` that is not valid before any server is created
-  const instrument = authOptions.reporting !== undefined && authOptions.reporting !== false;
+  const instrument = isReportingOn(authOptions.reporting);
 
   // One MCP handler for each Worker env, whose factory is closed over that env, so the env never travels through the
   // SDK. The auth info does: `createMcpHandler` documents `authInfo` as passed through from `handler.fetch` to the
@@ -123,6 +126,7 @@ export function createClerkMcpWorker<Env = ClerkEnv, Ctx = WorkerExecutionContex
       const handler = await loadMcpHandler(env);
       return handler.fetch(request, { ...(authInfo && { authInfo }) });
     },
+    // Taking `server` out of the options union leaves one object type that no longer matches it, so it is cast back
     authOptions as McpAuthOptions<Env, Ctx>,
     {
       caller: createClerkMcpWorkerCaller,

@@ -68,8 +68,9 @@ export type McpHandler<Env = ClerkEnv, Ctx = WorkerExecutionContext> =
 
 type McpAuthFailureOption = {
   /**
-   * Synchronously notifies why a request is about to be answered with a 401 or 403 challenge or a 421, for example
-   * for logging. Return values are ignored. Pass asynchronous work to `ctx.waitUntil` to keep it alive after the
+   * Synchronously notifies why the auth check is about to answer a request with a 401 or 403 challenge or a 421, for
+   * example for logging. The metadata route's 421, for an origin no listed `resourceUrl` has, is not passed to it.
+   * Return values are ignored. Pass asynchronous work to `ctx.waitUntil` to keep it alive after the
    * response; a promise returned here is not awaited.
    */
   onAuthFailure?: ((failure: McpAuthFailure, request: Request) => void) | undefined;
@@ -107,8 +108,9 @@ const clerkInstrumentHandlerCallForm =
  * path below the well-known prefix gets the metadata for the resource it describes.
  *
  * With `reporting`, it reports to Clerk the tool calls of each server passed to `clerkInstrumentServer`, and each 401,
- * 403 or 421 it answers, with `reporting.secretKey` or else the `CLERK_SECRET_KEY` of the Worker `env`. The reports
- * are sent with `ctx.waitUntil` once the response is over.
+ * 403 or 421 from the auth check, with `reporting.secretKey` or else the `CLERK_SECRET_KEY` of the Worker `env`. The
+ * reports are sent with `ctx.waitUntil` once the response is over. The metadata route's 421 for an unlisted origin is
+ * neither reported nor passed to `onAuthFailure`.
  * @see https://datatracker.ietf.org/doc/html/rfc9728#section-3
  * @see https://datatracker.ietf.org/doc/html/rfc6750#section-3
  * @param handler - The handler `createMcpHandler` from `@modelcontextprotocol/server` returns, or a function called
@@ -196,7 +198,7 @@ export function fetchInstrumentHandler<Env, Ctx>(
     authOptions,
     // Only the Worker env: Workers have no `process.env` to fall back to, so it is never read
     ({ env }: McpFetchRequest<Env, Ctx>) =>
-      envClerkClient(caller, (env ?? {}) as ClerkEnv, 'variable in the Worker env'),
+      envClerkClient(caller, workerKeys(env), 'variable in the Worker env'),
     'a client built from CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY in the Worker env',
   );
 
@@ -207,7 +209,7 @@ export function fetchInstrumentHandler<Env, Ctx>(
       : handler.fetch(request, { ...(authInfo && { authInfo }) });
 
   return async (request, env, ctx) => {
-    const keys = (env ?? {}) as ClerkEnv;
+    const keys = workerKeys(env);
     if (isMetadataRequest(request.url)) {
       return metadataResponse(authOptions, request, keys.CLERK_PUBLISHABLE_KEY);
     }
@@ -254,10 +256,8 @@ export function fetchInstrumentHandler<Env, Ctx>(
       reporting,
       authInfo,
       request: fetchRequest,
-      defaultIpAddress: () => workerIpAddress(request),
-      userAgent: () => request.headers.get('user-agent'),
+      ...reportFields(request, keys),
       sessionIdHash: hashing && (await hashing),
-      env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
     });
 
     const response = await serve(request, authInfo, env, ctx);
@@ -297,15 +297,23 @@ function reportFetchAuthFailure<Env, Ctx>(
     // the answer never waits for the body
     body: readJsonBody(request, undefined, AUTH_FAILURE_BODY_LIMIT),
     request: fetchRequest,
-    defaultIpAddress: () => workerIpAddress(request),
-    userAgent: () => request.headers.get('user-agent'),
+    ...reportFields(request, keys),
     sessionIdHash: hashSessionId(keys.CLERK_PUBLISHABLE_KEY, request.headers.get('mcp-session-id')),
-    env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
   })
     .then((send) => send?.())
     .catch(() => undefined);
   waitUntil(ctx, report);
 }
+
+// The Clerk keys of a Worker env, which may be missing outside Workers
+const workerKeys = (env: unknown) => (env ?? {}) as ClerkEnv;
+
+// The request fields every report of a Worker request shares
+const reportFields = (request: Request, keys: ClerkEnv) => ({
+  defaultIpAddress: () => workerIpAddress(request),
+  userAgent: () => request.headers.get('user-agent'),
+  env: { secretKey: keys.CLERK_SECRET_KEY, apiUrl: keys.CLERK_API_URL },
+});
 
 // Keeps the Worker running until `work` settles. A `ctx` without `waitUntil`, as outside Workers, leaves the reports
 // to the reporter's own timer.

@@ -24,8 +24,8 @@ export type ReportingOptions<Req = never> = {
    * Whether to send the IP address of the MCP client. `true`, the default, reads it where the adapter can trust it:
    * `req.ip` in Express, which follows the app's `trust proxy` setting; `cf-connecting-ip` on Cloudflare Workers and
    * the socket's address on Node.js in Hono; `x-real-ip` on Vercel in Next.js; and `cf-connecting-ip` on Cloudflare
-   * Workers in the fetch entry. Anywhere else no address is sent,
-   * unless you pass a function that returns one from a source you trust, such as a header your proxy sets.
+   * Workers in the fetch entry. Anywhere else no address is sent, unless you pass a function that returns one from a
+   * source you trust, such as a header your proxy sets.
    */
   ipAddress?: boolean | ((request: Req) => string | null | undefined) | undefined;
   /**
@@ -152,6 +152,12 @@ const STATUS_HINTS: Partial<Record<number, string>> = {
 const FLUSH_DELAY_MS = 1000;
 const SDK = { name: '@clerk/mcp-tools', version };
 
+// Whether a `reporting` option turns reporting on: anything but `undefined` and `false`. `resolveReporting` checks
+// the rest.
+export function isReportingOn(value: unknown): boolean {
+  return value !== undefined && value !== false;
+}
+
 /**
  * Checks `reporting` when the handler is created.
  * @returns The settings with defaults filled in, or `undefined` when reporting is off. It throws a `Clerk error:`
@@ -161,7 +167,7 @@ export function resolveReporting<Req>(
   caller: string,
   value: unknown,
 ): ToolCallReporting<Req> | undefined {
-  if (value === undefined || value === false) return undefined;
+  if (!isReportingOn(value)) return undefined;
   if (value === true) value = {};
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`Clerk error: ${caller} reporting must be true, false, or an options object`);
