@@ -1574,6 +1574,11 @@ describe('client IDs in reports', () => {
     ['a URL with a query', 'https://app.example.com/client?tenant=acme'],
     ['a URL with an IPv6 host', 'https://[2001:db8::1]/client'],
     ['a URL of 512 characters', `https://app.example.com/${'a'.repeat(488)}`],
+    ['a URL with a .well-known path', 'https://app.example.com/.well-known/oauth-client.json'],
+    ['a URL with dots inside a segment', 'https://app.example.com/a./..b/.../client.json'],
+    ['a URL with dot segments in its query', 'https://app.example.com/client?next=/../x/./y'],
+    ['a URL with an empty segment', 'https://app.example.com//client'],
+    ['a URL with a percent-encoded dot segment', 'https://app.example.com/%2e/client'],
   ])('report %s as sent', async (_, sent) => {
     expect((await reportedClientId(sent)).clientId).toBe(sent);
   });
@@ -1586,6 +1591,16 @@ describe('client IDs in reports', () => {
     ['a URL without slashes after the scheme', 'https:app.example.com/client'],
     ['a URL with backslashes', 'https:\\\\app.example.com\\client'],
     ['a URL without a path', 'https://app.example.com'],
+    ['a URL whose path is /', 'https://app.example.com/'],
+    ['a URL with a port whose path is /', 'https://app.example.com:443/'],
+    ['a URL with a query whose path is /', 'https://app.example.com/?tenant=acme'],
+    ['a URL starting with a . segment', 'https://app.example.com/./client'],
+    ['a URL with a . segment', 'https://app.example.com/a/./client'],
+    ['a URL ending with a . segment', 'https://app.example.com/client/.'],
+    ['a URL starting with a .. segment', 'https://app.example.com/../client'],
+    ['a URL with a .. segment', 'https://app.example.com/a/../client'],
+    ['a URL ending with a .. segment', 'https://app.example.com/client/..'],
+    ['a URL with a .. segment before a query', 'https://app.example.com/client/..?tenant=acme'],
     ['a URL without a host', 'https:///client'],
     ['a URL with credentials', 'https://user:secret@app.example.com/client'],
     ['a URL with an empty userinfo', 'https://@app.example.com/client'],

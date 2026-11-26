@@ -117,7 +117,9 @@ const MAX_ITEM_COUNT = 1_000_000;
 const MAX_ERROR_CODE_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_.:~-]{1,128}$/;
 // A Client Identifier URL (draft-ietf-oauth-client-id-metadata-document-03, section 3): printable ASCII, an https
-// URL with a host and a path, without userinfo or a fragment. It is compared as a plain string, so it is sent as is.
+// URL with a host and a path other than `/`, without userinfo, a fragment, or a `.` or `..` path segment. It is
+// compared as a plain string, so it is sent as is, and its path is checked as sent, since `new URL` resolves dot
+// segments.
 const CLIENT_ID_URL_PATTERN = /^(?=[!-~]{1,512}$)https:\/\/[^/?#@\\]+\/[^#\\]*$/;
 const USER_ID_PATTERN = /^user_\w{27}$/;
 const ORG_ID_PATTERN = /^org_\w{27}$/;
@@ -771,6 +773,9 @@ export function hashSessionId(
 function isReportableClientId(clientId: string): boolean {
   if (ID_PATTERN.test(clientId)) return true;
   if (!CLIENT_ID_URL_PATTERN.test(clientId)) return false;
+  const path = clientId.slice(clientId.indexOf('/', 'https://'.length)).split('?', 1)[0]!;
+  if (path === '/') return false;
+  if (path.split('/').some((segment) => segment === '.' || segment === '..')) return false;
   try {
     return new URL(clientId).protocol === 'https:';
   } catch {
