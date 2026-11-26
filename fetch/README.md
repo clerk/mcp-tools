@@ -1,6 +1,6 @@
 # MCP Tools - Fetch (Cloudflare Workers) Integration
 
-Utilities for adding an authenticated MCP endpoint to a plain `fetch` Worker, such as a Cloudflare Worker that exports `{ fetch(request, env, ctx) }`, without adopting a framework.
+Utilities for serving an authenticated MCP endpoint from a plain `fetch` Worker, such as a Cloudflare Worker that exports `{ fetch(request, env, ctx) }`, without adopting a framework. `createClerkMcpWorker` builds the whole Worker; `withClerkMcpAuth` adds MCP to an existing one.
 
 ## Installation
 
@@ -10,9 +10,9 @@ npm install @clerk/mcp-tools @clerk/backend @modelcontextprotocol/server
 
 These are optional peer dependencies, so the package manager doesn't install them for you or warn when one is missing. The package is ESM-only: it has no CommonJS build, so import it from an ES module.
 
-`withClerkMcpAuth` imports no MCP SDK: it wraps any `fetch`-style MCP handler, such as the one `createMcpHandler` from `@modelcontextprotocol/server` (MCP SDK 2.x) returns. Install the SDK your handler is built with.
+`createClerkMcpWorker` serves MCP with `createMcpHandler` from `@modelcontextprotocol/server` (MCP SDK 2.x), which it loads on the first request. `withClerkMcpAuth` imports no MCP SDK: it wraps any `fetch`-style MCP handler, such as the one `createMcpHandler` returns. Install the SDK your handler is built with.
 
-`withClerkMcpAuth` builds its Clerk client with `createClerkClient` from `@clerk/backend`, from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the Worker `env` passed to `fetch`, and `CLERK_API_URL`, `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set. It never reads `process.env`. It loads the package only when it builds that client, so a Worker that passes `clerkClient` or `verifyToken` doesn't need it. Set the keys as Worker secrets:
+Both build their Clerk client with `createClerkClient` from `@clerk/backend`, from `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` in the Worker `env` passed to `fetch`, and `CLERK_API_URL`, `CLERK_API_VERSION`, and `CLERK_JWT_KEY` when they are set. It never reads `process.env`. It loads the package only when it builds that client, so a Worker that passes `clerkClient` or `verifyToken` doesn't need it. Set the keys as Worker secrets:
 
 ```bash
 npx wrangler secret put CLERK_SECRET_KEY
@@ -20,6 +20,44 @@ npx wrangler secret put CLERK_PUBLISHABLE_KEY
 ```
 
 ## Quick Start
+
+### Serving MCP from a Worker
+
+`createClerkMcpWorker` returns the Worker export. It calls your `server` factory for each MCP request with the verified `authInfo` and the Worker `env`, so tools can reach the signed-in user and your bindings without module-level state, and serves the protected resource metadata the `401` challenge points to.
+
+```ts
+import { McpServer } from '@modelcontextprotocol/server';
+import { type ClerkEnv, createClerkMcpWorker, isClerkAuthInfo } from '@clerk/mcp-tools/fetch';
+
+interface Env extends ClerkEnv {
+  DB: D1Database;
+}
+
+export default createClerkMcpWorker<Env>({
+  resourceUrl: 'https://mcp.example.com/mcp',
+  requiredScopes: ['profile', 'email'],
+  server: ({ authInfo, env }) => {
+    const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+    server.registerTool(
+      'count_notes',
+      { description: 'Counts the notes of the Clerk user that authorized this request' },
+      async () => {
+        // Narrows `authInfo` to the auth info built from a Clerk token
+        if (!isClerkAuthInfo(authInfo)) {
+          return { isError: true, content: [{ type: 'text', text: 'Not signed in with Clerk.' }] };
+        }
+        const row = await env.DB.prepare('SELECT count(*) AS n FROM notes WHERE user_id = ?')
+          .bind(authInfo.extra.userId)
+          .first<{ n: number }>();
+        return { content: [{ type: 'text', text: String(row?.n ?? 0) }] };
+      },
+    );
+    return server;
+  },
+});
+```
+
+Route the MCP endpoint and `/.well-known/oauth-protected-resource` to this Worker. It serves every protocol revision MCP SDK 2.x does, including 2026-07-28 and its `server/discover`.
 
 ### Adding MCP to an existing Worker
 
@@ -90,6 +128,15 @@ const authedHandler = withClerkMcpAuth<Env>(
 ```
 
 ## Reference
+
+### `createClerkMcpWorker(options)`
+
+Builds a Worker export, `{ fetch(request, env, ctx) }`, that serves an MCP SDK 2.x server with `createMcpHandler` from `@modelcontextprotocol/server`, behind `withClerkMcpAuth`. The MCP handler is created once, on the first request, so its limits hold across requests.
+
+- `server`: `({ authInfo, env }) => McpServer | Promise<McpServer>`, called for each MCP request that passed the auth check, with its verified auth info (`undefined` only for a request without a token that `discoverable` or `publicAccess` let through, such as a `server/discover` probe) and the Worker `env` passed to `fetch`. Return a new `McpServer` each time.
+- The other options are those of [`withClerkMcpAuth`](#withclerkmcpauthhandler-options), and it answers unauthenticated requests, the metadata route, and Clerk outages the same way.
+
+A request throws a `Clerk error:` asking to install `@modelcontextprotocol/server` when it can't be loaded.
 
 ### `withClerkMcpAuth(handler, options)`
 

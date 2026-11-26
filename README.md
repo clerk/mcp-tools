@@ -30,7 +30,7 @@ For detailed implementation guides and examples specific to your framework, see:
 - **[Express.js Integration](./express/README.md)** - Complete guide for building MCP servers with Express.js
 - **[Hono Integration](./hono/README.md)** - Complete guide for building MCP servers with Hono and edge runtimes
 - **[Next.js Integration](./next/README.md)** - Complete guide for building both MCP servers and clients with Next.js
-- **[Fetch (Cloudflare Workers) Integration](./fetch/README.md)** - Adding an authenticated MCP endpoint to an existing plain `fetch` Worker
+- **[Fetch (Cloudflare Workers) Integration](./fetch/README.md)** - Serving an authenticated MCP server from a plain `fetch` Worker with `createClerkMcpWorker`, or adding one to an existing Worker with `withClerkMcpAuth`
 
 Upgrading from 0.9.x? Every entry point was renamed in 1.0.0, with no deprecated aliases. The [changelog](./CHANGELOG.md) maps each old name, such as `mcpAuthClerk`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`, `verifyClerkToken`, `@clerk/mcp-tools/feedback`, and `@clerk/mcp-tools/create-browser-session`, to its replacement.
 

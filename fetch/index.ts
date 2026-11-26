@@ -6,6 +6,12 @@ export {
   type WorkerExecutionContext,
   withClerkMcpAuth,
 } from './with-clerk-mcp-auth';
+export {
+  type ClerkMcpWorker,
+  type ClerkMcpWorkerOptions,
+  type ClerkMcpServerFactory,
+  createClerkMcpWorker,
+} from './worker';
 
 // Everything in the core subpath, so a Worker imports from this subpath alone
 export * from '../server';

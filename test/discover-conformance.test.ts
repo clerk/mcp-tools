@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { describe, expect, test } from 'vitest';
 
 import * as expressAdapter from '../express';
+import * as fetchAdapter from '../fetch';
 import * as honoAdapter from '../hono';
 import type { AuthInfo } from '../mcp-types';
 import * as nextAdapter from '../next';
@@ -31,6 +32,9 @@ function verifyToken(token: string): AuthInfo | undefined {
 }
 
 const authOptions = { verifyToken, resourceUrl: MCP_URL };
+
+// The execution context a Worker's `fetch` is called with
+const workerCtx = { waitUntil: () => {}, passThroughOnException: () => {} };
 
 function createServerV2() {
   const server = new McpServer({ name: 'conformance', version: '0.0.0' });
@@ -103,6 +107,24 @@ const apps: Record<string, { sdk: 1 | 2; mount: () => App }> = {
         }),
         authOptions,
       ),
+  },
+  'fetch withClerkMcpAuth, MCP SDK 2.x createMcpHandler': {
+    sdk: 2,
+    mount: () => {
+      const handler = createMcpHandler(createServerV2);
+      const authedHandler = fetchAdapter.withClerkMcpAuth(
+        (request, { authInfo }) => handler.fetch(request, { ...(authInfo && { authInfo }) }),
+        authOptions,
+      );
+      return (request: Request) => authedHandler(request, {}, workerCtx);
+    },
+  },
+  'fetch createClerkMcpWorker': {
+    sdk: 2,
+    mount: () => {
+      const worker = fetchAdapter.createClerkMcpWorker({ ...authOptions, server: createServerV2 });
+      return (request: Request) => worker.fetch(request, {}, workerCtx);
+    },
   },
   'hono, MCP SDK 1.x streamableHttpHandler': {
     sdk: 1,

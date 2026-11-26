@@ -9,7 +9,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { AuthInfo } from '../mcp-types';
 import { mcpAuth } from '../hono/index';
 import { FAKE_PK } from '../test/mcp-harness';
-import { type McpAuthFailure, isClerkAuthInfo, withClerkMcpAuth } from './index';
+import {
+  type McpAuthFailure,
+  createClerkMcpWorker,
+  isClerkAuthInfo,
+  withClerkMcpAuth,
+} from './index';
 
 const resourceUrl = 'https://mcp.example.com/mcp';
 const RESOURCE_METADATA_URL = 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp';
@@ -374,6 +379,172 @@ describe('withClerkMcpAuth from @clerk/mcp-tools/fetch', () => {
     );
     expect(() => withClerkMcpAuth(recordingHandler(), {} as never)).toThrow(
       'Clerk error: withClerkMcpAuth from @clerk/mcp-tools/fetch needs a resourceUrl',
+    );
+  });
+});
+
+// A 2026-07-28 request, as a client on that revision sends it: the method in a header and the `_meta` envelope
+function modernRequest(
+  token: string | undefined,
+  method: string,
+  params: Record<string, unknown> = {},
+) {
+  return new Request(resourceUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': method,
+      ...(typeof params.name === 'string' && { 'mcp-name': params.name }),
+      ...(token && { authorization: `Bearer ${token}` }),
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'raw-client', version: '1.0.0' },
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    }),
+  });
+}
+
+// The one JSON-RPC message in a response, sent as JSON or as the only event of a stream
+async function rpcMessage(res: Response) {
+  const text = await res.text();
+  return JSON.parse(text.startsWith('{') ? text : /^data: (.*)$/m.exec(text)![1]!);
+}
+
+// A server whose `whoami` tool answers with the Clerk user and a binding of the Worker env it was built with
+function greetingServer({
+  authInfo,
+  env,
+}: {
+  authInfo: AuthInfo | undefined;
+  env: typeof workerEnv;
+}) {
+  const server = new McpServer({ name: 'worker', version: '1.0.0' });
+  server.registerTool('whoami', { description: 'Returns the Clerk user ID' }, async () => {
+    const user = isClerkAuthInfo(authInfo) ? authInfo.extra.userId : 'not signed in';
+    return { content: [{ type: 'text' as const, text: `${user}: ${env.GREETING}` }] };
+  });
+  return server;
+}
+
+describe('createClerkMcpWorker from @clerk/mcp-tools/fetch', () => {
+  test('answers a request without a token with the same 401 challenge as withClerkMcpAuth', async () => {
+    const options = { resourceUrl, requiredScopes: ['profile', 'email'] };
+    const server = vi.fn(greetingServer);
+    const worker = createClerkMcpWorker({ ...options, server });
+    const authedHandler = withClerkMcpAuth(recordingHandler(), options);
+
+    const [res, wrapperRes] = await Promise.all([
+      worker.fetch(mcpRequest(), workerEnv, ctx),
+      authedHandler(mcpRequest(), workerEnv, ctx),
+    ]);
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe(
+      `Bearer resource_metadata="${RESOURCE_METADATA_URL}", scope="profile email"`,
+    );
+    expect({
+      status: res.status,
+      headers: Object.fromEntries(res.headers),
+      body: await res.text(),
+    }).toEqual({
+      status: wrapperRes.status,
+      headers: Object.fromEntries(wrapperRes.headers),
+      body: await wrapperRes.text(),
+    });
+    expect(server).not.toHaveBeenCalled();
+  });
+
+  test('serves the protected resource metadata the challenge points to', async () => {
+    const worker = createClerkMcpWorker({ resourceUrl, server: greetingServer });
+
+    const res = await worker.fetch(new Request(RESOURCE_METADATA_URL), workerEnv, ctx);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      resource: resourceUrl,
+      authorization_servers: ['https://clerk.example.com'],
+    });
+  });
+
+  test('rejects a token issued for another resource with an invalid_token challenge', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const server = vi.fn(greetingServer);
+    const worker = createClerkMcpWorker({ resourceUrl, server });
+
+    const res = await worker.fetch(
+      modernRequest(accessToken({ aud: 'https://other.example.com/mcp' }), 'tools/call', {
+        name: 'whoami',
+        arguments: {},
+      }),
+      workerEnv,
+      ctx,
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe(
+      `Bearer resource_metadata="${RESOURCE_METADATA_URL}", error="invalid_token"`,
+    );
+    expect(server).not.toHaveBeenCalled();
+  });
+
+  test('answers a 2026-07-28 server/discover with a status below 400', async () => {
+    const worker = createClerkMcpWorker({ resourceUrl, server: greetingServer });
+
+    const res = await worker.fetch(modernRequest(accessToken(), 'server/discover'), workerEnv, ctx);
+
+    expect(res.status).toBeLessThan(400);
+    expect(await rpcMessage(res)).toMatchObject({
+      id: 1,
+      result: { supportedVersions: expect.arrayContaining(['2026-07-28']) },
+    });
+  });
+
+  test("calls the server factory for each request with the verified auth info and that request's Worker env", async () => {
+    const server = vi.fn(greetingServer);
+    const worker = createClerkMcpWorker({ resourceUrl, server });
+    const token = accessToken();
+    const otherEnv = { ...workerEnv, GREETING: 'hello from another binding' };
+    const call = { name: 'whoami', arguments: {} };
+
+    const first = await worker.fetch(modernRequest(token, 'tools/call', call), workerEnv, ctx);
+    const second = await worker.fetch(modernRequest(token, 'tools/call', call), otherEnv, ctx);
+
+    expect(await rpcMessage(first)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'user_123: hello from a binding' }] },
+    });
+    expect(await rpcMessage(second)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'user_123: hello from another binding' }] },
+    });
+    expect(server).toHaveBeenCalledTimes(2);
+    expect(server.mock.calls.map(([context]) => context.env)).toEqual([workerEnv, otherEnv]);
+    for (const [context] of server.mock.calls) {
+      expect(isClerkAuthInfo(context.authInfo)).toBe(true);
+      expect(context.authInfo).toMatchObject({
+        token,
+        clientId: 'client_123',
+        scopes: ['profile', 'email'],
+        extra: { userId: 'user_123' },
+      });
+    }
+  });
+
+  test('throws at setup without a server factory, or without a resourceUrl or verifyToken', () => {
+    expect(() => createClerkMcpWorker({ resourceUrl } as never)).toThrow(
+      'Clerk error: createClerkMcpWorker from @clerk/mcp-tools/fetch needs a server factory',
+    );
+    expect(() => createClerkMcpWorker({ server: greetingServer } as never)).toThrow(
+      'Clerk error: createClerkMcpWorker from @clerk/mcp-tools/fetch needs a resourceUrl',
     );
   });
 });
