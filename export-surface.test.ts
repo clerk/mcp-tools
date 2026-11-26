@@ -50,18 +50,6 @@ const SERVER: Surface = {
   ],
 };
 
-// Tool list schema compaction and measurement, in `./server` and so in every adapter
-SERVER.values.push('compactJsonSchema', 'compactToolSchemas', 'measureToolList');
-SERVER.types.push(
-  'JsonSchemaObject',
-  'MeasureToolListOptions',
-  'ToolListMeasurement',
-  'ToolMeasurement',
-  'ToolsListResult',
-);
-SERVER.values.sort();
-SERVER.types.sort();
-
 const withServer = (values: string[], types: string[]): Surface => ({
   values: [...SERVER.values, ...values].sort(),
   types: [...SERVER.types, ...types].sort(),
@@ -87,9 +75,6 @@ const ADAPTER: Surface = {
     'ServerCardHandlerOptions',
   ],
 };
-
-// The options of the Express and Hono `streamableHttpHandler`, which compacts tool schemas by default
-ADAPTER.types.push('StreamableHttpHandlerOptions');
 
 const PINNED: Record<string, Surface> = {
   './client': {

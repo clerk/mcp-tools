@@ -389,15 +389,6 @@ export function isClerkAuthInfo(authInfo: AuthInfo | undefined): authInfo is Cle
 
 export { requireAdditionalScopes } from './scope-challenge';
 
-export { type JsonSchemaObject, compactJsonSchema, compactToolSchemas } from './compact-schemas';
-export {
-  type MeasureToolListOptions,
-  type ToolListMeasurement,
-  type ToolMeasurement,
-  type ToolsListResult,
-  measureToolList,
-} from './measure-tool-list';
-
 export { type McpResourceUrl, matchResourceUrl } from './resource-url';
 
 export {

@@ -344,8 +344,6 @@ app.all(
 );
 ```
 
-### `streamableHttpHandler(createServer, Transport, options?)`
+### `streamableHttpHandler(createServer, Transport)`
 
 Handler that creates an `McpServer` and a transport for each request. Pass `WebStandardStreamableHTTPServerTransport` as `Transport`, from `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` on SDK 1.x or from `@modelcontextprotocol/server` on SDK 2.x, with `McpServer` from the same SDK: this package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class. Passes any auth info set by `mcpAuth` through to the MCP server. The factory must return a new server instance on every call so concurrent and abandoned requests remain isolated. The server is stateless, so it has no session for a `GET` to stream on or a `DELETE` to end. Any request that isn't a `POST` gets a `405` with `Allow: POST` and a JSON-RPC `Method not allowed.` error, the same answer MCP SDK 2 gives. Mount it with `app.all('/mcp', ...)` behind `mcpAuth`, so a `GET` without a token reaches `mcpAuth` and gets the `401` or, with [public access](#public-access), the `405`, rather than a Hono `404`.
-
-It [compacts the tool schemas](../README.md#compact-tool-lists) of every `tools/list` result by default. Pass `{ compactSchemas: false }` (`StreamableHttpHandlerOptions`) to list them exactly as the SDK writes them; any other option throws a `Clerk error:` when the handler is created.

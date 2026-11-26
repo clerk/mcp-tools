@@ -399,7 +399,6 @@ Express handler that processes MCP requests using the streamable HTTP transport 
 
 - `createServer: () => McpServer` - A factory that returns a new MCP server instance on every call, so concurrent and abandoned requests remain isolated. Passing an `McpServer` instance instead is a type error, and throws when the handler is created.
 - `Transport` - `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js`. This package takes the class instead of importing the SDK, so apps that don't serve MCP with this handler never need the SDK, and the types are inferred from the class.
-- `options?: StreamableHttpHandlerOptions` - `{ compactSchemas: false }` lists the tool schemas exactly as the SDK writes them. By default the handler [compacts them](../README.md#compact-tool-lists) in every `tools/list` result. Any other option throws a `Clerk error:` when the handler is created.
 
 **Example:**
 

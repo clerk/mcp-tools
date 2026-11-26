@@ -27,11 +27,6 @@ import {
 } from '../discovery-response';
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
 import {
-  type StreamableHttpHandlerOptions,
-  readStreamableHttpHandlerOptions,
-  compactTransportToolsList,
-} from '../compact-schemas';
-import {
   type ClerkOAuthClient,
   type McpAuthError,
   type McpAuthFailure,
@@ -54,7 +49,6 @@ declare module 'hono' {
 
 // Everything in the core subpath, so a Hono app imports from this subpath alone
 export * from '../server';
-export type { StreamableHttpHandlerOptions } from '../compact-schemas';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 export type { McpRegistryAuthHandlerOptions };
@@ -486,8 +480,6 @@ function requestWithBody(c: Context): Promise<Request> {
  * @param Transport - The SDK's web-standard transport class, `WebStandardStreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js`. It is taken as an argument so that this package
  * never imports the SDK, which only apps serving MCP with this handler need to install.
- * @param options - See `StreamableHttpHandlerOptions`. By default the tool schemas in `tools/list` results are
- * compacted; pass `{ compactSchemas: false }` to list them as the SDK writes them.
  * @returns The handler
  * @example
  * ```ts
@@ -507,18 +499,13 @@ function requestWithBody(c: Context): Promise<Request> {
 export function streamableHttpHandler<
   Transport extends WebStandardStreamableHttpTransport,
   Server extends McpServerLike<Transport>,
->(
-  createServer: () => Server,
-  Transport: StreamableHttpTransportClass<Transport>,
-  options: StreamableHttpHandlerOptions | undefined = undefined,
-) {
+>(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
   assertStreamableHttpArgs(
     createServer,
     Transport,
     'WebStandardStreamableHTTPServerTransport',
     'webStandardStreamableHttp.js',
   );
-  const compactSchemas = readStreamableHttpHandlerOptions('streamableHttpHandler', options);
 
   return async (c: Context) => {
     if (c.req.method !== 'POST') {
@@ -533,7 +520,6 @@ export function streamableHttpHandler<
     try {
       const server = createServer();
       await server.connect(transport);
-      if (compactSchemas) compactTransportToolsList(transport);
       const response = await transport.handleRequest(await requestWithBody(c), {
         authInfo: c.get('mcpAuth'),
       });

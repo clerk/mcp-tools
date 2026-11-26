@@ -27,11 +27,6 @@ import {
   serverCardResponder,
 } from '../discovery-response';
 import { type McpRegistryAuthHandlerOptions, mcpRegistryAuthResponder } from '../mcp-registry';
-import {
-  type StreamableHttpHandlerOptions,
-  readStreamableHttpHandlerOptions,
-  compactTransportToolsList,
-} from '../compact-schemas';
 import { type ClerkOAuthClient, type McpAuthFailure, metadataCorsHeaders } from '../server';
 
 declare global {
@@ -47,7 +42,6 @@ declare global {
 
 // Everything in the core subpath, so an Express app imports from this subpath alone
 export * from '../server';
-export type { StreamableHttpHandlerOptions } from '../compact-schemas';
 
 export type { AICatalogHandlerOptions, ServerCardHandlerOptions };
 export type { McpRegistryAuthHandlerOptions };
@@ -499,8 +493,6 @@ function getRequestUrl(req: express.Request): string | undefined {
  * @param Transport - The SDK's Node.js transport class, `StreamableHTTPServerTransport` from
  * `@modelcontextprotocol/sdk/server/streamableHttp.js`. It is taken as an argument so that this package never imports
  * the SDK, which only apps serving MCP with this handler need to install.
- * @param options - See `StreamableHttpHandlerOptions`. By default the tool schemas in `tools/list` results are
- * compacted; pass `{ compactSchemas: false }` to list them as the SDK writes them.
  * @returns The handler
  * @example
  * ```ts
@@ -528,18 +520,13 @@ function getRequestUrl(req: express.Request): string | undefined {
 export function streamableHttpHandler<
   Transport extends NodeStreamableHttpTransport,
   Server extends McpServerLike<Transport>,
->(
-  createServer: () => Server,
-  Transport: StreamableHttpTransportClass<Transport>,
-  options: StreamableHttpHandlerOptions | undefined = undefined,
-) {
+>(createServer: () => Server, Transport: StreamableHttpTransportClass<Transport>) {
   assertStreamableHttpArgs(
     createServer,
     Transport,
     'StreamableHTTPServerTransport',
     'streamableHttp.js',
   );
-  const compactSchemas = readStreamableHttpHandlerOptions('streamableHttpHandler', options);
 
   return async (req: express.Request, res: express.Response) => {
     if (req.method !== 'POST') {
@@ -558,7 +545,6 @@ export function streamableHttpHandler<
 
     try {
       await server.connect(transport);
-      if (compactSchemas) compactTransportToolsList(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       await closeTransport();
