@@ -2413,9 +2413,9 @@ describe.each(aiCatalogApps)('%s aiCatalogHandler', (_name, mount) => {
     expect(res.headers.get('etag')).toMatch(/^W\/"[!#-~]+"$/);
   });
 
-  // The same handler on both paths answers both from the one catalog it built, with the media type each path's
-  // specification gives it: application/json at ard.json, as the ARD publishing guide shows, and the AI Catalog's own
-  // type at ai-catalog.json
+  // The same handler on both paths answers both from the one catalog it built, with the media type each path is served
+  // with: application/json at ard.json, as the ARD publishing guide shows, and the AI Catalog's own type at
+  // ai-catalog.json
   test('serves byte-identical catalogs with the same caching headers at ard.json and ai-catalog.json', async () => {
     const app = mount(options);
     const fetchRaw = async (path: string, headers: Record<string, string> = {}) => {
@@ -2632,7 +2632,9 @@ describe.each(discoveryAdapters)('%s aiCatalogHandler media type', (_name, mount
       ...discoveryCors,
     });
   });
+});
 
+describe.each(discoveryAdapters)('%s aiCatalogHandler ARD terms', (_name, mount) => {
   // The ARD v0.91 discovery terms and the AI Catalog Level 2 host, served only when set
   test('serves representativeQueries and host only where they were set', async () => {
     const representativeQueries = ['What is the weather in Paris?', 'Will it rain tomorrow?'];

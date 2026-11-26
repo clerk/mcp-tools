@@ -4,8 +4,8 @@ import { registerAppView } from './app-view-registry';
 import { assertKnownKeys, type Fail, failFor, isPlainObject } from './discovery-options';
 
 /**
- * The media type MCP Apps 2026-01-26 requires of a view's `resources/read` content: "`mimeType` MUST be
- * `text/html;profile=mcp-app`".
+ * The media type MCP Apps 2026-01-26 gives a view (UIResource): its `mimeType` "SHOULD be `text/html;profile=mcp-app`
+ * for HTML-based UIs in the initial MVP".
  */
 const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
 
@@ -65,7 +65,8 @@ export type McpAppViewResourceOptions = {
    */
   description?: string | undefined;
   /**
-   * The origins the view may reach. Left out, or with every list empty, the host allows none.
+   * The origins the view may reach. Left out, or with every list empty, the host allows none. Name its type as
+   * `McpAppViewResourceOptions['csp']`.
    */
   csp?: McpAppViewCsp | undefined;
   /**

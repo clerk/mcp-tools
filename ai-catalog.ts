@@ -219,9 +219,11 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
   }
   assertKnownKeys(fail, options, {
     allowed: catalogKeys,
-    generated: generatedCatalogKeys,
-    generatedMessage: () =>
-      "cannot set specVersion: the catalog's specVersion and each entry's type are generated",
+    generated: {
+      keys: generatedCatalogKeys,
+      message: () =>
+        "cannot set specVersion: the catalog's specVersion and each entry's type are generated",
+    },
     unknownMessage: (key) =>
       `does not take ${key}. An AI Catalog here supports only host and entries, each entry linking one Server Card by identifier, displayName, and url`,
   });
@@ -243,9 +245,11 @@ export function buildAICatalog(caller: string, options: unknown): AICatalog {
     const at = `entries[${index}]`;
     assertKnownKeys(fail, entry, {
       allowed: entryKeys,
-      generated: generatedEntryKeys,
-      generatedMessage: () =>
-        `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
+      generated: {
+        keys: generatedEntryKeys,
+        message: () =>
+          `cannot set ${at}.type: every entry links a Server Card, ${SERVER_CARD_TYPE}`,
+      },
       unknownMessage: (key) =>
         `${at} does not take ${key}. An entry supports identifier, displayName, url, representativeQueries, and trustManifest only: inline documents, other artifact types, versions, AI Catalog trustManifests, and extensions are not supported`,
     });

@@ -83,8 +83,8 @@ type DiscoveryOptions =
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
        * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
-       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
-       * it reaches something protected. A request with a token is verified as usual.
+       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
+       * when it reaches something protected. A request with a token is verified as usual.
        */
       publicAccess?: PublicAccess | undefined;
     }
@@ -106,8 +106,8 @@ type DiscoveryOptions =
        * What else a request without an `Authorization` header may do. A POST passes without auth info when every
        * JSON-RPC message in its body is open: a method `discoverable` or a `methods` list opens, a `tools/call` for
        * a tool in `tools`, a `resources/read` that `resources` or `views` opens, or a `prompts/get` that `prompts`
-       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only when
-       * it reaches something protected. A request with a token is verified as usual.
+       * opens. Anything else still gets the 401 challenge, which is what makes an MCP client start authorization only
+       * when it reaches something protected. A request with a token is verified as usual.
        */
       publicAccess?: (PublicAccess & { methods?: undefined }) | undefined;
     }
@@ -387,8 +387,8 @@ function opensNamed(option: boolean | readonly string[] | undefined, value: unkn
   return typeof value === 'string' && Array.isArray(option) && option.includes(value);
 }
 
-// Whether a read of, or a subscription to, the resource at `uri` is open: `resources` opens it, or it is the exact URI of
-// a view `mcpAppViewResource` built and `views` is on
+// Whether a read of, or a subscription to, the resource at `uri` is open: `resources` opens it, or it is the exact
+// URI of a view `mcpAppViewResource` built and `views` is on
 function opensResource(publicAccess: PublicAccess, uri: unknown): boolean {
   return opensNamed(publicAccess.resources, uri) || (publicAccess.views === true && isAppView(uri));
 }

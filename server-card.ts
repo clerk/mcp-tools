@@ -207,9 +207,11 @@ export function buildServerCard(caller: string, options: unknown): ServerCard {
   }
   assertKnownKeys(fail, options, {
     allowed: optionKeys,
-    generated: generatedKeys,
-    generatedMessage: (key) =>
-      `cannot set ${key}: the card's $schema and its streamable HTTP remote at resourceUrl are generated`,
+    generated: {
+      keys: generatedKeys,
+      message: (key) =>
+        `cannot set ${key}: the card's $schema and its streamable HTTP remote at resourceUrl are generated`,
+    },
     unknownMessage: (key) =>
       `does not take ${key}. A Server Card supports name, version, description, resourceUrl, title, websiteUrl, icons, repository, and _meta`,
   });

@@ -136,7 +136,8 @@ export type McpPublicMethod =
  * What a request without an `Authorization` header may do besides what `discoverable` opens, as the `publicAccess`
  * option of `mcpAuth` and `withClerkMcpAuth`. A call is open only when it is listed here, or is a read of a view
  * `views` opens, and a request for anything else gets the 401 challenge that starts authorization, so an MCP client
- * signs in only when it reaches something protected. A request that carries a token is verified as usual, whatever it asks for.
+ * signs in only when it reaches something protected. A request that carries a token is verified as usual, whatever it
+ * asks for.
  */
 export type PublicAccess = {
   /**

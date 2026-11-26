@@ -40,6 +40,9 @@ export type ProtectedResourceMetadataOptions =
 // Everything in the core subpath, so a Next.js app imports from this subpath alone
 export * from '../server';
 
+// The keys of `withClerkMcpAuth`'s options besides the shared `mcpAuth` ones
+const nextOptionKeys: ReadonlySet<string> = new Set(['onAuthFailure']);
+
 /**
  * A Next.js route handler that serves RFC 9728 protected resource metadata for the Clerk instance named by
  * `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Export it from the route at the path `withClerkMcpAuth`'s challenge points to.
@@ -64,8 +67,7 @@ export function protectedResourceMetadataHandler(
       'Clerk error: call protectedResourceMetadataHandler({ resourceUrl }) and pass its result to the route, instead of passing protectedResourceMetadataHandler itself',
     );
   }
-  // `onAuthFailure` is the one key of `withClerkMcpAuth`'s options that the Express and Hono `mcpAuth` options do not have
-  assertProtectedResourceMetadataOptions(options, new Set(['onAuthFailure']));
+  assertProtectedResourceMetadataOptions(options, nextOptionKeys);
 
   return (req: Request): Response => {
     const answer = protectedResourceMetadataAnswer(options, {
@@ -334,7 +336,7 @@ export function withClerkMcpAuth(
     options,
     `Clerk error: withClerkMcpAuth from @clerk/mcp-tools/next needs a resourceUrl to verify tokens with Clerk. Call it as ${withClerkMcpAuthCallForm}`,
   );
-  assertMcpAuthOptions('withClerkMcpAuth', options, new Set(['onAuthFailure']));
+  assertMcpAuthOptions('withClerkMcpAuth', options, nextOptionKeys);
 
   const authenticate = createBearerAuth(
     'withClerkMcpAuth from @clerk/mcp-tools/next',

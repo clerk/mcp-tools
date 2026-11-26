@@ -48,8 +48,7 @@ export type DiscoveryRequest = {
    */
   url: string | undefined;
   /**
-   * The path the request was made to, without its query, as the app received it. Only the AI Catalog reads it, to pick
-   * its media type.
+   * The path the request was made to, without its query, as the app received it, mount path included
    */
   path: string;
   /**
@@ -90,7 +89,8 @@ const discoveryCorsHeaders = {
  * @param status - The error status
  * @param error - The error code in the JSON body
  * @param headers - More headers, such as `Allow` for a 405
- * @returns The answer
+ * @returns A `DiscoveryAnswer` with the JSON `{ error }` body, `Content-Type: application/json`, and
+ * `Cache-Control: no-store`, without CORS headers
  */
 export const jsonErrorAnswer = (
   status: 400 | 405 | 412 | 421,
